@@ -14,10 +14,6 @@ from typing import cast
 
 import numpy as np
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from scipy.integrate import quad
-from scipy.interpolate import interp1d
-import mpl_axes_aligner
 
 from . import _aerodynamics, operating_point, movements
 from . import _functions
@@ -77,33 +73,6 @@ class UnsteadyRingVortexLatticeMethodSolver:
         for airplane in first_steady_problem.airplanes:
             num_panels += airplane.num_panels
         self.num_panels = num_panels
-
-        ### ***************************** Modifications for aero-elasticity Feedback ******************************  ###
-        # Initialize variables to hold wing movement data pertaining to current time step
-        self.nchord_panels = self.steady_problems[0].airplanes[0].wings[0].num_chordwise_panels
-        self.nspan_panels = self.steady_problems[0].airplanes[0].wings[0].num_spanwise_panels
-        self.flapping_angle = np.zeros((self.num_steps))
-        self.torsion_angle = np.zeros((self.num_steps, int(self.nspan_panels/2 + 1)))
-
-        # Initialize variables to store wing movement data pertaining to last time step
-        self.last_torsion_angles = np.zeros(int(self.nspan_panels/2 + 1))
-
-        # Initialize variable to store UVLM force data pertaining to current time step
-        # These variables are needed to initialize a new wing
-        self.uvlm_current_forces = []
-        self.uvlm_current_moments = []
-
-        # Initialize variables/counters pertaining to torsion angle convergence
-        self.repeat = True  # Boolean to track steps required in convergence
-
-        # Variables for plotting
-        self.true_step = 0  # True step count
-        self.plot_current_uvlm_forces = []
-        self.plot_current_inertia_forces = []
-        self.true_torsion_angles = []  # Container to store intermediate torsion angle data until convergence
-        self.true_flapping_angle = []
-
-        ### ***************************** END - Modifications for aero-elasticity Feedback ******************************  ###
 
         # Initialize attributes to hold aerodynamic data that pertain to the
         # simulation.
@@ -191,6 +160,13 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         self.stackSeedPoints_G_Cg = None
         self.gridStreamlinePoints_G_Cg = None
+
+        ### ---- AEROELASTIC ADDITIONS ---- ###
+        self.repeat = False
+        self.aeroelastic_time_step = (
+            self.delta_time / 10
+        )  # TODO: make this rigorous and parameterized
+        self.aeroelastic_substeps = 0
 
     def run(
         self,
@@ -351,10 +327,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
             # approximate, relative computing time.
             bar.update(n=float(approx_times[0]))
 
-            # Iterate through the time steps.
+            # Iterate through the time steps. Using a while loop for aeroelastic substeps
             step = 0
-            while (step < self.num_steps) :
-                print("step", step)
+            while step < self.num_steps:
 
                 # Save attributes to hold the current step, Airplanes, and
                 # OperatingPoint, and freestream velocity (in geometry axes, observed
@@ -480,7 +455,6 @@ class UnsteadyRingVortexLatticeMethodSolver:
                     logging.info("Calculating forces and moments.")
                     self._calculate_loads()
 
-                    # Solve for aero-elastic response due to each panel on LE at current timestep
                     self.calculate_aeroelastic_response(step)
 
                 # Shed RingVortices into the wake.
@@ -491,35 +465,15 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 # approximate, relative computing time.
                 bar.update(n=float(approx_times[step + 1]))
 
-                print("repeat : ", self.repeat)
-                if (self.repeat):
-                    self.true_step = self.true_step + 1
+                if self.repeat:
+                    self.aeroelastic_substeps += 1
+                    print("Step: ", step, " Substep: ", self.aeroelastic_substeps)
                     continue
-                else :
+                else:
                     step = step + 1
 
             logging.info("Calculating averaged or final forces and moments.")
             self._finalize_loads()
-
-        ### ************************* Plotting utilities for Aeroelastic Module ************************************ ###
-        x_axis = np.linspace(self.first_results_step, self.num_steps, self.num_steps)
-        x_axis = x_axis * self.unsteady_problem.delta_time
-        fig, ax1 = plt.subplots(figsize=(5, 4))
-        ax2 = ax1.twinx()
-        ax1.axhline(0, linestyle="--", color="black")
-        ax1.plot(x_axis, np.array(self.torsion_angle[:, 2]) * 180 / np.pi,
-                 label="Inertial - Aero torsion on Spanwise Panel {}".format(3), color='blue')
-
-        ax2.plot(x_axis, np.array(self.flapping_angle)*180/np.pi, label='Flapping angle', linestyle='dashed', color='black')
-        ax1.set_xlabel("time")
-        ax1.set_ylabel("Torsion Angle (degrees)")
-        ax2.set_ylabel("Flapping Angle (degrees)")
-        fig.legend()
-        # ax2.set_ylabel("Flapping Angle (degrees)", color="purple")
-        plt.title("V = 5 m/s | f = 10 Hz | Air")
-        mpl_axes_aligner.align.yaxes(ax1, 0, ax2, 0, 0.5)
-        plt.show()
-        ### ********************** END - Plotting utilities for Aeroelastic Module ********************************* ###
 
         # Solve for the location of the streamlines coming off the Wings'
         # trailing edges, if requested.
@@ -1752,151 +1706,67 @@ class UnsteadyRingVortexLatticeMethodSolver:
                     )
                 )
 
-    def d_alpha_dy_air_static(self, y, tau_torsion, GI):
-        return (tau_torsion*y) / GI
+    def define_mass_matrix(self, M_wing, airplane):
+        """
+        Currently treats all panels as having equal mass. This will
 
-    def rotational_inertia(self, m, x, theta):
-        return (1/3)*m*(x/np.cos(theta))**3
+        :param M_wing: float
+            This parameter is the total mass of one wing in (kg).
+        :param _geometry.airplane.Airplane:
+            The current
+
+        :return numpy.ndarray
+            A 3D array of shape (num_spanwise_panels, num_chordwise_panels)
+            containing a float value for the mass of each panel
+        """
+        # yes it's bad practice to have this in both functions, but I intend to update
+        # this with more complex methods
+        num_spanwise_panels = airplane.wings[0].num_spanwise_panels 
+        num_chordwise_panels = airplane.wings[0].num_chordwise_panels
+        point_mass = M_wing / (0.5 * num_spanwise_panels * num_chordwise_panels)
+
+        return (
+            np.ones((num_spanwise_panels, num_chordwise_panels), dtype=float)
+            * point_mass
+        )
 
     def calculate_aeroelastic_response(self, step):
-        """This method calculates the aeroelastic response at current timestep
-        expressed as wing twist
-
-        :param step: int
-            This parameter is the current timestep of the unsteady problem
-        :return: None
-
-        :return: None
-        """
-
         # Obtain current airplane and operating point variables from unsteady solver
         airplane = self.current_airplanes[0]
         op = self.current_operating_point
 
         # Obtain current wing mesh collocation points from unsteady solver
-        points = np.array(self.panel_collocation_points)
+        points = np.array(self.stackCpp_G_Cg)
 
         # Mesh parameters
         # Number of chord-wise panel elements from LE to TE
         num_chordwise_panels = airplane.wings[0].num_chordwise_panels
         # Number of span-wise panel elements from tip to tip
         num_spanwise_panels = airplane.wings[0].num_spanwise_panels
-        # Right wing mesh is considered (data is reflected due to symmetry=True)
-        x_values = points.reshape((num_chordwise_panels, num_spanwise_panels, 3))[:,
-                                         int(num_spanwise_panels/2)-1:, 0]
-        z_values = points.reshape((num_chordwise_panels, num_spanwise_panels, 3))[:, 0, -1]
-        z_values_all = points.reshape((num_chordwise_panels, num_spanwise_panels, 3))[:, int(num_spanwise_panels/2)-1:, -1]
-        y_values = points[:, 1][int(num_spanwise_panels/2):num_spanwise_panels]
+        # Mass matrix currently oversimplified to equal mass at each point
+        mass_matrix = self.define_mass_matrix(0.010, airplane)
 
-        # Torsional rigidity of carbon fiber on leading edge (Pa)
-        G = 1e8
-        # Current timestep
-        dt = self.unsteady_problem.delta_time
+        # twist in x, y and z
+        torsion_matrices = np.zeros((int(num_spanwise_panels/2), num_chordwise_panels, 3))
 
-        leading_y = y_values[1]
-        leading_z = z_values[1]
-        current_flapping_angle = np.arctan2(leading_z, leading_y)
-
-        # UVLM : Force on and Acceleration of each panel of single wing.
-        # Reshaped to 3d array of dimensions (num_chordwise_panels, num_spanwise_panels, 3)
-        current_forces_halfspan = np.array(self.uvlm_current_forces).reshape(
-            num_chordwise_panels, num_spanwise_panels, 3)[:, int(num_spanwise_panels/2):, :]
-
-
-        # Polar moment of inertia of LE (m4) (spar thickness = 0.0016m, spar width = 0.007m)
-        I_area = 1e-14
-        # Wing mass (kg)
-        M_wing = 0.010
-        # mass of single panel of wing
-        point_mass = M_wing/(0.5*num_spanwise_panels*num_chordwise_panels)
-
-        ## Initialize forces on wing mesh
-        # UVLM Aerodynamic forces along Z axis on wing mesh. Z axis is oriented normal to the panel
-        force_aero_ptera = current_forces_halfspan[:, :, 2]
-        # Torsion on LE due to UVLM aerodynamic forces
-        current_torsion_aero = np.zeros(num_chordwise_panels)
-        current_torsion_inertia = np.zeros(num_chordwise_panels)
-
-        # Inertial forces along Z axis on wing mesh
-        force_inertial_ptera = self.current_point_acc[self.current_step, :,:,-1] * point_mass # Projection
-
-        # Torsion on LE due to Inertial forces
-        # Initialize variables pertaining to torsion on distinct spanwise and chordwise panels
-        span_torsion_angles = np.zeros(int(num_spanwise_panels/2))
-        chord_torsion_angles = np.zeros(int(num_spanwise_panels/2))
-        torsion_matrix = np.zeros((num_chordwise_panels, int(num_spanwise_panels/2)))
         # Iterate over spanwise and chordwise panels to find cumulative torsion due to force on each mesh element
         # Force across spanwise panel is distinct
         for span_panel in range(int(num_spanwise_panels/2)):
             # Force on each chordwise panel from LE to TE
             # from each spanwise point is added to produce torsion at LE
             for chord_panel in range(num_chordwise_panels):
-                # Torsion due to UVLM aero forces on LE
-                current_torsion_aero[chord_panel] = force_aero_ptera[chord_panel][span_panel] \
-                                                    * (x_values[chord_panel][span_panel] - x_values[0][span_panel])
-                # Torsion due to panel inertia
-                current_torsion_inertia[chord_panel] = (force_inertial_ptera[chord_panel][span_panel]) \
-                                                   * (x_values[chord_panel][span_panel] - x_values[0][span_panel])
-                # Total torsion on LE due to chordwise panel. Aero and Inertial Torsion are oriented in opposite sense
-                adjacent_y_val = 0 if span_panel < 1 else y_values[span_panel - 1]
-                ct_angle = quad(self.d_alpha_dy_air_static, 0, 0.01,
-                         args=(-(current_torsion_aero[chord_panel])
-                         + (current_torsion_inertia[chord_panel]),
-                               G * I_area))[0]
-                chord_torsion_angles[span_panel] += ct_angle
-                torsion_matrix[chord_panel][span_panel] = ct_angle
-            # Torsion on span-wise collection of panels
-            span_torsion_angles[span_panel] = span_torsion_angles[span_panel-1] + chord_torsion_angles[span_panel] if \
-                span_panel > 0 else chord_torsion_angles[span_panel]
+                torsion_matrices[span_panel][chord_panel][:] = (
+                    np.random.rand(3) * 180 / np.pi
+                )
 
-        # Inserting torsion of static span-wise collection of panels at wing root
-        span_torsion_angles = np.insert(span_torsion_angles, 0, 0)
+        self.create_new_wing(
+            self.steady_problems[self._current_step].airplanes[0].wings[0],
+            self.steady_problems[self._current_step].airplanes[0],
+            torsion_matrices,
+            op.vInf_G__E,
+        )
 
-        ### ********************** Convergence of torsion angle ***************************** ###
-        # Error in torsion angle (radians)
-        error_torsion = abs(span_torsion_angles - self.last_torsion_angles)
-
-        if step < 0.5*self.num_steps/3:
-            # Error threshold for 1st half cycle is high to account for initial spike in forces in UVLM
-            error_exceeded_air = False
-        else:
-            # Error threshold in subsequeny timesteps is set to 0.01
-            # TODO : Determine appropriate error threshold by running test cases on changing wing twist
-            error_threshold = 0.01 * np.pi / 180 #
-            # Boolean to determine if change in torsion on any panel exceeds error threshold
-            error_exceeded_air = np.any(error_torsion[1:] > error_threshold)
-
-        # If error exceeds the given threshold, the current step is re-run
-        if error_exceeded_air:
-            # Repeat this timestep
-            self.repeat = True
-        else:
-            # Move to next timestep
-            self.repeat = False
-
-        # Create new wing based on calculated aero-elastic response
-        self.create_new_wing(self.steady_problems[self.current_step].airplanes[0].wings[0],
-                             self.steady_problems[self.current_step].airplanes[0],
-                             span_torsion_angles*180/np.pi,
-                             op.calculate_freestream_velocity_geometry_axes())
-
-
-        # Update variables to keep track of flapping angle and torsion angle at every timestep
-        self.flapping_angle[step] = current_flapping_angle
-        self.torsion_angle[step] = span_torsion_angles
-
-        # Variables to keep track of flapping angle and torsion angle at every simulation step,
-        self.true_flapping_angle.append(self.flapping_angle[step])
-        self.true_torsion_angles.append(span_torsion_angles)
-        self.last_torsion_angles = span_torsion_angles
-
-        # Plotting utils : Extract forces at given span_panel and chord_panel [s_panel, c_panel]
-        s_panel = 2
-        c_panel = 4
-        self.plot_current_uvlm_forces.append(np.array(force_aero_ptera)[s_panel, c_panel])
-        self.plot_current_inertia_forces.append(np.array(force_inertial_ptera)[s_panel, c_panel])
-
-    def create_new_wing(self, wing, airplane, torsion_angle, freestream_velocity) :
+    def create_new_wing(self, wing, airplane, torsion_matrices, freestream_velocity) :
         """This method redefines the current airplane by defining :
         1. new wing cross-section objects, each cross-section's twist = calculated torsion angle
         2. new wing object
@@ -1913,174 +1783,181 @@ class UnsteadyRingVortexLatticeMethodSolver:
         these_cross_sections = []
 
         # Create new cross-section objects with calculated torsion angle as wing twist
-        for i in range(len(torsion_angle)):
-            this_wing_cross_section = geometry.WingCrossSection(
-                x_le=wing.wing_cross_sections[i].x_le,
-                y_le=wing.wing_cross_sections[i].y_le,
-                z_le=wing.wing_cross_sections[i].z_le,
-                chord=wing.wing_cross_sections[i].chord,
-                # Every cross-section's twist is due to aero-elastic response
-                twist=torsion_angle[i],
-                control_surface_type="symmetric",
-                control_surface_hinge_point=0.75,
-                control_surface_deflection=0.0,
-                num_spanwise_panels=1,
-                spanwise_spacing="cosine",
+        for i in range(int(torsion_matrices.shape[0] / 2)):
+            this_wing_cross_section = geometry.wing_cross_section.WingCrossSection(
                 # Every wing cross section has an airfoil object.
-                airfoil=geometry.Airfoil(
+                airfoil=geometry.airfoil.Airfoil(
                     name="naca0012",
-                    coordinates=None,
-                    repanel=True,
+                    outline_A_lp=None,
+                    resample=True,
                     n_points_per_side=400,
                 ),
+                num_spanwise_panels=airplane.wings[0].num_spanwise_panels,
+                chord=wing.wing_cross_sections[i].chord,
+                Lp_Wcsp_Lpp=wing.wing_cross_sections[i].Lp_Wcsp_Lpp,
+                # Every cross-section's twist is due to aero-elastic response
+                angles_Wcsp_to_Wcs_ixyz=(np.array([0.0, 0.0, 0.0]) if i == 0 
+                             else tuple(torsion_matrices[i][0])),
+                control_surface_symmetry_type="symmetric",
+                control_surface_hinge_point=0.75,
+                control_surface_deflection=0.0,
+                spanwise_spacing="cosine",
             )
             these_cross_sections.append(this_wing_cross_section)
 
+        
+        
         # Define new Wing object with determined cross-sections
-        this_wing = geometry.Wing(
-            name="Main Wing",
-            # Wing root position remains same
-            x_le=wing.x_le,
-            y_le=wing.y_le,
-            z_le=wing.z_le,
-            # Wing cross section is redefined
-            wing_cross_sections=these_cross_sections,
-            symmetric=True,
-            num_chordwise_panels=wing.num_chordwise_panels,
-            chordwise_spacing=wing.chordwise_spacing,
-        )
+        # this_wing = geometry.wing.Wing(
+        #     name="Main Wing",
+        #     # Wing root position remains same
+        #     Ler_Gs_Cgs=wing.Ler_Gs_Cgs,
+        #     angles_Gs_to_Wn_ixyz=wing.angles_Gs_to_Wn_ixyz,
+        #     # Wing cross section is redefined
+        #     wing_cross_sections=these_cross_sections,
+        #     symmetric=True,
+        #     num_chordwise_panels=wing.num_chordwise_panels,
+        #     chordwise_spacing=wing.chordwise_spacing,
+        # )
 
-        # Populate ring vortices of panels of newly defined Wing object
-        for chordwise_position in range(this_wing.num_chordwise_panels):
-            for spanwise_position in range(this_wing.num_spanwise_panels):
+        # # Populate ring vortices of panels of newly defined Wing object
+        # for chordwise_position in range(this_wing.num_chordwise_panels):
+        #     for spanwise_position in range(this_wing.num_spanwise_panels):
 
-                # Get the panel object from the wing's list of panels.
-                panel = this_wing.panels[chordwise_position, spanwise_position]
+        #         # Get the panel object from the wing's list of panels.
+        #         panel = this_wing.panels[chordwise_position, spanwise_position]
 
+        #         # Find the location of the panel's front left and right
+        #         # vortex vertices.
+        #         front_left_vortex_vertex = panel.front_left_vortex_vertex
+        #         front_right_vortex_vertex = panel.front_right_vortex_vertex
 
-                # Find the location of the panel's front left and right
-                # vortex vertices.
-                front_left_vortex_vertex = panel.front_left_vortex_vertex
-                front_right_vortex_vertex = panel.front_right_vortex_vertex
+        #         # Define the back left and right vortex vertices based on
+        #         # whether the panel is along the trailing edge or not.
+        #         if not panel.is_trailing_edge:
+        #             next_chordwise_panel = this_wing.panels[
+        #                 chordwise_position + 1, spanwise_position
+        #             ]
+        #             back_left_vortex_vertex = (
+        #                 next_chordwise_panel.front_left_vortex_vertex
+        #             )
+        #             back_right_vortex_vertex = (
+        #                 next_chordwise_panel.front_right_vortex_vertex
+        #             )
+        #         else:
+        #             # As these vertices are directly behind the trailing
+        #             # edge, they are spaced back from their panel's
+        #             # vertex by one quarter the distance traveled during
+        #             # a time step. This is to more accurately predict
+        #             # drag. More information can be found on pages 37-39
+        #             # of "Modeling of aerodynamic forces in flapping
+        #             # flight with the Unsteady Vortex Lattice Method" by
+        #             # Thomas Lambert.
+        #             back_left_vortex_vertex = (
+        #                     front_left_vortex_vertex
+        #                     + (panel.back_left_vertex - panel.front_left_vertex)
+        #                     + freestream_velocity
+        #                     * self.delta_time
+        #                     * 0.25
+        #             )
+        #             back_right_vortex_vertex = (
+        #                     front_right_vortex_vertex
+        #                     + (
+        #                             panel.back_right_vertex
+        #                             - panel.front_right_vertex
+        #                     )
+        #                     + freestream_velocity
+        #                     * self.delta_time
+        #                     * 0.25
+        #             )
 
-                # Define the back left and right vortex vertices based on
-                # whether the panel is along the trailing edge or not.
-                if not panel.is_trailing_edge:
-                    next_chordwise_panel = this_wing.panels[
-                        chordwise_position + 1, spanwise_position
-                    ]
-                    back_left_vortex_vertex = (
-                        next_chordwise_panel.front_left_vortex_vertex
-                    )
-                    back_right_vortex_vertex = (
-                        next_chordwise_panel.front_right_vortex_vertex
-                    )
-                else:
-                    # As these vertices are directly behind the trailing
-                    # edge, they are spaced back from their panel's
-                    # vertex by one quarter the distance traveled during
-                    # a time step. This is to more accurately predict
-                    # drag. More information can be found on pages 37-39
-                    # of "Modeling of aerodynamic forces in flapping
-                    # flight with the Unsteady Vortex Lattice Method" by
-                    # Thomas Lambert.
-                    back_left_vortex_vertex = (
-                            front_left_vortex_vertex
-                            + (panel.back_left_vertex - panel.front_left_vertex)
-                            + freestream_velocity
-                            * self.delta_time
-                            * 0.25
-                    )
-                    back_right_vortex_vertex = (
-                            front_right_vortex_vertex
-                            + (
-                                    panel.back_right_vertex
-                                    - panel.front_right_vertex
-                            )
-                            + freestream_velocity
-                            * self.delta_time
-                            * 0.25
-                    )
+        #         # Initialize the panel's ring vortex.
+        #         panel.ring_vortex = aerodynamics.RingVortex(
+        #             front_right_vertex=front_right_vortex_vertex,
+        #             front_left_vertex=front_left_vortex_vertex,
+        #             back_left_vertex=back_left_vortex_vertex,
+        #             back_right_vertex=back_right_vortex_vertex,
+        #             strength=None,
+        #         )
 
-                # Initialize the panel's ring vortex.
-                panel.ring_vortex = aerodynamics.RingVortex(
-                    front_right_vertex=front_right_vortex_vertex,
-                    front_left_vertex=front_left_vortex_vertex,
-                    back_left_vertex=back_left_vortex_vertex,
-                    back_right_vertex=back_right_vortex_vertex,
-                    strength=None,
-                )
+        # # Create new Airplane object from new Wing objects
+        # these_wings = [this_wing]
+        # this_airplane = geometry.Airplane(
+        #     name="Example Airplane",
+        #     x_ref=airplane.x_ref,
+        #     y_ref=airplane.y_ref,
+        #     z_ref=airplane.z_ref,
+        #     wings=these_wings
+        # )
+        # # Redefine airplane at current timestep with newly created Airplane object
+        # self.steady_problems[self.current_step].airplanes[0] = this_airplane
 
-        # Create new Airplane object from new Wing objects
-        these_wings = [this_wing]
-        this_airplane = geometry.Airplane(
-            name="Example Airplane",
-            x_ref=airplane.x_ref,
-            y_ref=airplane.y_ref,
-            z_ref=airplane.z_ref,
-            wings=these_wings
-        )
-        # Redefine airplane at current timestep with newly created Airplane object
-        self.steady_problems[self.current_step].airplanes[0] = this_airplane
+        # # To ensure continuity in wake calculations
+        # # Wake ring vortices (from previous timestep) of new wing remain same as current wing
+        # this_wing.wake_ring_vortex_vertices = wing.wake_ring_vortex_vertices
+        # this_wing.wake_ring_vortices = wing.wake_ring_vortices
 
-        # To ensure continuity in wake calculations
-        # Wake ring vortices (from previous timestep) of new wing remain same as current wing
-        this_wing.wake_ring_vortex_vertices = wing.wake_ring_vortex_vertices
-        this_wing.wake_ring_vortices = wing.wake_ring_vortices
+        # # Flatten wing geometry and redefine global panel containers
+        # self.collapse_geometry()
+        # self.panels = np.ravel(this_wing.panels)
 
-        # Flatten wing geometry and redefine global panel containers
-        self.collapse_geometry()
-        self.panels = np.ravel(this_wing.panels)
+        # global_panel_position = 0
 
-        global_panel_position = 0
+        # if self.current_step > 0:
 
-        if self.current_step > 0:
+        #     # Iterate through the 1D array of this wing's panels.
+        #     for panel in self.panels:
+        #         # Update the solver's list of attributes with this panel's
+        #         # attributes.
+        #         self.last_panel_collocation_points[
+        #         global_panel_position, :
+        #         ] = panel.collocation_point
 
-            # Iterate through the 1D array of this wing's panels.
-            for panel in self.panels:
-                # Update the solver's list of attributes with this panel's
-                # attributes.
-                self.last_panel_collocation_points[
-                global_panel_position, :
-                ] = panel.collocation_point
-                self.last_panel_vortex_strengths[
-                    global_panel_position
-                ] = panel.ring_vortex.strength
-                self.last_panel_back_right_vortex_vertices[
-                global_panel_position, :
-                ] = panel.ring_vortex.right_leg.origin
-                self.last_panel_front_right_vortex_vertices[
-                global_panel_position, :
-                ] = panel.ring_vortex.right_leg.termination
-                self.last_panel_front_left_vortex_vertices[
-                global_panel_position, :
-                ] = panel.ring_vortex.left_leg.origin
-                self.last_panel_back_left_vortex_vertices[
-                global_panel_position, :
-                ] = panel.ring_vortex.left_leg.termination
-                self.last_panel_right_vortex_centers[
-                global_panel_position, :
-                ] = panel.ring_vortex.right_leg.center
-                self.last_panel_front_vortex_centers[
-                global_panel_position, :
-                ] = panel.ring_vortex.front_leg.center
-                self.last_panel_left_vortex_centers[
-                global_panel_position, :
-                ] = panel.ring_vortex.left_leg.center
-                self.last_panel_back_vortex_centers[
-                global_panel_position, :
-                ] = panel.ring_vortex.back_leg.center
+        #         self.last_panel_vortex_strengths[
+        #             global_panel_position
+        #         ] = panel.ring_vortex.strength
 
-                # Increment the global panel position.
-                global_panel_position += 1
+        #         self.last_panel_back_right_vortex_vertices[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.right_leg.origin
 
+        #         self.last_panel_front_right_vortex_vertices[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.right_leg.termination
 
-        # Recalculate current vortex strengths
-        self.calculate_vortex_strengths()
+        #         self.last_panel_front_left_vortex_vertices[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.left_leg.origin
 
-        # Process forces and update force coefficients for each panel
-        functions.process_unsteady_solver_forces(
-            unsteady_solver=self,
-            near_field_forces_geometry_axes=self.uvlm_current_forces,
-            near_field_moments_geometry_axes=self.uvlm_current_moments
-        )
+        #         self.last_panel_back_left_vortex_vertices[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.left_leg.termination
+
+        #         self.last_panel_right_vortex_centers[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.right_leg.center
+
+        #         self.last_panel_front_vortex_centers[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.front_leg.center
+
+        #         self.last_panel_left_vortex_centers[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.left_leg.center
+
+        #         self.last_panel_back_vortex_centers[
+        #         global_panel_position, :
+        #         ] = panel.ring_vortex.back_leg.center
+
+        #         # Increment the global panel position.
+        #         global_panel_position += 1
+
+        # # Recalculate current vortex strengths
+        # self.calculate_vortex_strengths()
+
+        # # Process forces and update force coefficients for each panel
+        # _functions.process_unsteady_solver_forces(
+        #     unsteady_solver=self,
+        #     near_field_forces_geometry_axes=self.uvlm_current_forces,
+        #     near_field_moments_geometry_axes=self.uvlm_current_moments
+        # )
