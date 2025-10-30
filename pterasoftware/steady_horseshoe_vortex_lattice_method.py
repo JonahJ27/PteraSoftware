@@ -226,6 +226,7 @@ class SteadyHorseshoeVortexLatticeMethodSolver:
                     self.stackUnitNormals_G[global_panel_position, :] = (
                         panel.unitNormal_G
                     )
+
                     self._panel_areas[global_panel_position] = panel.area
                     self._stackCpp_G_Cg[global_panel_position, :] = panel.Cpp_G_Cg
                     self._stackBrhvp_G_Cg[global_panel_position, :] = (
