@@ -13,91 +13,43 @@ import pterasoftware as ps
 # needs to be. For details about each parameter, read the detailed class docstring.
 # The same caveats apply to the other classes, methods, and functions I call in this
 # script.
+
+
+# offsets for the spacing
+num_spanwise_panels = 1
+Lp_Wcsp_Lpp_Offsets = (0.1, 0.5, 0.1)
+
+# Wing cross section initialization
+cross_section_chords = [1.75, 1.75, 1.75, 1.75, 1.65, 1.55, 1.4, 1.2, 1.0]
+wing_cross_sections = []
+
+for i in range(len(cross_section_chords)):
+    wing_cross_sections.append(
+        ps.geometry.wing_cross_section.WingCrossSection(
+            num_spanwise_panels=(
+                num_spanwise_panels if i < len(cross_section_chords) - 1 else None
+            ),
+            chord=cross_section_chords[i],
+            Lp_Wcsp_Lpp=Lp_Wcsp_Lpp_Offsets if i > 0 else (0.0, 0.0, 0.0),
+            angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+            control_surface_symmetry_type="symmetric",
+            control_surface_hinge_point=0.75,
+            control_surface_deflection=0.0,
+            spanwise_spacing="cosine" if i < len(cross_section_chords) - 1 else None,
+            airfoil=ps.geometry.airfoil.Airfoil(
+                name="naca2412",
+                outline_A_lp=None,
+                resample=True,
+                n_points_per_side=400,
+            ),
+        )
+    )
+
+
 example_airplane = ps.geometry.airplane.Airplane(
     wings=[
         ps.geometry.wing.Wing(
-            wing_cross_sections=[
-                ps.geometry.wing_cross_section.WingCrossSection(
-                    num_spanwise_panels=1,
-                    chord=1.75,
-                    Lp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-                    control_surface_symmetry_type="symmetric",
-                    control_surface_hinge_point=0.75,
-                    control_surface_deflection=0.0,
-                    spanwise_spacing="cosine",
-                    airfoil=ps.geometry.airfoil.Airfoil(
-                        name="naca2412",
-                        outline_A_lp=None,
-                        resample=True,
-                        n_points_per_side=400,
-                    ),
-                ),
-                ps.geometry.wing_cross_section.WingCrossSection(
-                    num_spanwise_panels=3,
-                    chord=1.75,
-                    Lp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-                    control_surface_symmetry_type="symmetric",
-                    control_surface_hinge_point=0.75,
-                    control_surface_deflection=0.0,
-                    spanwise_spacing="cosine",
-                    airfoil=ps.geometry.airfoil.Airfoil(
-                        name="naca2412",
-                        outline_A_lp=None,
-                        resample=True,
-                        n_points_per_side=400,
-                    ),
-                ),
-                ps.geometry.wing_cross_section.WingCrossSection(
-                    num_spanwise_panels=2,
-                    chord=1.5,
-                    Lp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-                    control_surface_symmetry_type="symmetric",
-                    control_surface_hinge_point=0.75,
-                    control_surface_deflection=0.0,
-                    spanwise_spacing="cosine",
-                    airfoil=ps.geometry.airfoil.Airfoil(
-                        name="naca2412",
-                        outline_A_lp=None,
-                        resample=True,
-                        n_points_per_side=400,
-                    ),
-                ),
-                ps.geometry.wing_cross_section.WingCrossSection(
-                    num_spanwise_panels=2,
-                    chord=1.0,
-                    Lp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-                    control_surface_symmetry_type="symmetric",
-                    control_surface_hinge_point=0.75,
-                    control_surface_deflection=0.0,
-                    spanwise_spacing="cosine",
-                    airfoil=ps.geometry.airfoil.Airfoil(
-                        name="naca2412",
-                        outline_A_lp=None,
-                        resample=True,
-                        n_points_per_side=400,
-                    ),
-                ),
-                ps.geometry.wing_cross_section.WingCrossSection(
-                    num_spanwise_panels=None,
-                    chord=1.0,
-                    Lp_Wcsp_Lpp=(1.0, 6.0, 1.0),
-                    angles_Wcsp_to_Wcs_ixyz=(0.0, 5.0, 0.0),
-                    control_surface_symmetry_type="symmetric",
-                    control_surface_hinge_point=0.75,
-                    control_surface_deflection=0.0,
-                    spanwise_spacing=None,
-                    airfoil=ps.geometry.airfoil.Airfoil(
-                        name="naca2412",
-                        outline_A_lp=None,
-                        resample=True,
-                        n_points_per_side=400,
-                    ),
-                ),
-            ],
+            wing_cross_sections=wing_cross_sections,
             name="Main Wing",
             Ler_Gs_Cgs=(0.0, 0.5, 0.0),
             angles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
@@ -162,76 +114,6 @@ example_airplane = ps.geometry.airplane.Airplane(
     b_ref=None,
 )
 
-# Now define the main wing's root and tip WingCrossSections' WingCrossSectionMovements.
-main_wing_root_wing_cross_section_movement = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[0],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-    )
-)
-dephase = 0.0
-period = 1.0
-amplitude = 20
-move_1 = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[1],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(0, amplitude, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(0, period, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, dephase, 0.0),
-    )
-)
-move_2 = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-    base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[2],
-    ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-    phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    ampAngles_Wcsp_to_Wcs_ixyz=(0, amplitude, 0.0),
-    periodAngles_Wcsp_to_Wcs_ixyz=(0, period, 0.0),
-    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-    phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, dephase, 0.0),
-)
-move_3 = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-    base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[3],
-    ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-    phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-    ampAngles_Wcsp_to_Wcs_ixyz=(amplitude, amplitude, 0.0),
-    periodAngles_Wcsp_to_Wcs_ixyz=(period, period, 0.0),
-    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-    phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, dephase, 0.0),
-)
-main_wing_tip_wing_cross_section_movement = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[4],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(amplitude, amplitude, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(period, period, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, dephase, 0.0),
-    )
-)
-
-
 # The main Wing was defined to have symmetric=True, mirror_only=False, and with a
 # symmetry plane offset non-coincident with the Wing's axes yz-plane. Therefore,
 # that Wing had type 5 symmetry (see the Wing class documentation for more details on
@@ -239,45 +121,48 @@ main_wing_tip_wing_cross_section_movement = (
 # second Wing being a reflected version of the first. Therefore, we need to define a
 # WingMovement for this reflected Wing. To start, we'll first define the reflected
 # main wing's root and tip WingCrossSections' WingCrossSectionMovements.
-reflected_main_wing_root_wing_cross_section_movement = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[1].wing_cross_sections[0],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-    )
-)
-reflected_main_wing_body_wing_cross_section_movement = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[1].wing_cross_sections[1],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(amplitude, amplitude, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(period, period, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
-    )
-)
-reflected_main_wing_tip_wing_cross_section_movement = (
-    ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-        base_wing_cross_section=example_airplane.wings[1].wing_cross_sections[2],
-        ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-        phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-        ampAngles_Wcsp_to_Wcs_ixyz=(amplitude, amplitude, 0.0),
-        periodAngles_Wcsp_to_Wcs_ixyz=(period, period, 0.0),
-        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, dephase, 0.0),
-    )
-)
+
+# defintions for wing movement parameters
+dephase_x = 0.0
+period_x = 1.0
+amplitude_x = 2.0
+
+dephase_y = 90.0
+period_y = 1.0
+amplitude_y = 3.0
+
+dephase_z = 0.0
+period_z = 0.0
+amplitude_z = 0.0
+
+# A list of movements for the main wing
+main_movements_list = []
+
+# A list of movements for the reflected wing
+reflected_movements_list = []
+
+for i in range(len(example_airplane.wings[0].wing_cross_sections)):
+    if i == 0:
+        movement = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+            base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[i],
+        )
+        main_movements_list.append(movement)
+        reflected_movements_list.append(movement)
+    else:
+        movement = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+            base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[i],
+            ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+            periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+            spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
+            phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+            ampAngles_Wcsp_to_Wcs_ixyz=(amplitude_x, amplitude_y, amplitude_z),
+            periodAngles_Wcsp_to_Wcs_ixyz=(period_x, period_y, period_z),
+            spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+            phaseAngles_Wcsp_to_Wcs_ixyz=(dephase_x, dephase_y, dephase_z),
+        )
+        main_movements_list.append(movement)
+        reflected_movements_list.append(movement)
+
 
 # Now define the v-tail's root and tip WingCrossSections' WingCrossSectionMovements.
 v_tail_root_wing_cross_section_movement = (
@@ -311,11 +196,7 @@ v_tail_tip_wing_cross_section_movement = (
 # the v-tail's WingMovement.
 main_wing_movement = ps.movements.wing_movement.WingMovement(
     base_wing=example_airplane.wings[0],
-    wing_cross_section_movements=[
-        main_wing_root_wing_cross_section_movement,
-        main_wing_body_wing_cross_section_movement,
-        main_wing_tip_wing_cross_section_movement,
-    ],
+    wing_cross_section_movements=main_movements_list,
     ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
     periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
     spacingLer_Gs_Cgs=("sine", "sine", "sine"),
@@ -327,11 +208,7 @@ main_wing_movement = ps.movements.wing_movement.WingMovement(
 )
 reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
     base_wing=example_airplane.wings[1],
-    wing_cross_section_movements=[
-        reflected_main_wing_root_wing_cross_section_movement,
-        reflected_main_wing_body_wing_cross_section_movement,
-        reflected_main_wing_tip_wing_cross_section_movement,
-    ],
+    wing_cross_section_movements=reflected_movements_list,
     ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
     periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
     spacingLer_Gs_Cgs=("sine", "sine", "sine"),
@@ -360,10 +237,6 @@ v_tail_movement = ps.movements.wing_movement.WingMovement(
 # Delete the extraneous pointers to the WingCrossSectionMovements, as these are now
 # contained within the WingMovements. This is optional, but it can make debugging
 # easier.
-del main_wing_root_wing_cross_section_movement
-del main_wing_tip_wing_cross_section_movement
-del reflected_main_wing_root_wing_cross_section_movement
-del reflected_main_wing_tip_wing_cross_section_movement
 del v_tail_root_wing_cross_section_movement
 del v_tail_tip_wing_cross_section_movement
 
@@ -404,8 +277,8 @@ del example_operating_point
 movement = ps.movements.movement.Movement(
     airplane_movements=[airplane_movement],
     operating_point_movement=operating_point_movement,
-    delta_time=None,
-    num_cycles=3,
+    delta_time=0.03,
+    num_cycles=4,
     num_chords=None,
     num_steps=None,
 )

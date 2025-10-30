@@ -1736,40 +1736,49 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         # Mesh parameters
         # Number of chord-wise panel elements from LE to TE
+        wing_cross_sections = airplane.wings[0].wing_cross_sections
+
         num_chordwise_panels = airplane.wings[0].num_chordwise_panels
         # Number of span-wise panel elements from tip to tip
-        num_spanwise_panels = airplane.wings[0].num_spanwise_panels
+        
         # Mass matrix currently oversimplified to equal mass at each point
         mass_matrix = self.define_mass_matrix(0.010, airplane)
 
-        # twist in x, y and z
-        torsion_matrices = np.zeros((int(num_spanwise_panels/2), num_chordwise_panels, 3))
+        # A map from cross section to deformation matrices
+        deformation_matrices = {}
 
-        # Iterate over spanwise and chordwise panels to find cumulative torsion due to force on each mesh element
-        # Force across spanwise panel is distinct
-        for span_panel in range(int(num_spanwise_panels/2)):
-            # Force on each chordwise panel from LE to TE
-            # from each spanwise point is added to produce torsion at LE
-            for chord_panel in range(num_chordwise_panels):
-                torsion_matrices[span_panel][chord_panel][:] = (
-                    np.random.rand(3) * 180 / np.pi
-                )
+        # A counter for the total numbe of spanwise panels columns
+        spanwise_panel_count = 0
 
-        self.create_new_wing(
-            self.steady_problems[self._current_step].airplanes[0].wings[0],
-            self.steady_problems[self._current_step].airplanes[0],
-            torsion_matrices,
-            op.vInf_G__E,
-        )
+        # # Iterate over spanwise and chordwise panels to find cumulative torsion due to force on each mesh element
+        # # Force across spanwise panel is distinct
+        # for i in range(len(wing_cross_sections)):
+        #     wing_cs = wing_cross_sections[i]
+        #     if i == 0:
+        #         pass
+        #     elif wing_cs.num_spanwise_panels == None:
+        #         # tip case
+        #         deformation_matrices[i] = np.
+        #     else:
+        #         deformation_matrices[i] = 
+            
+        #     # Update panel count
+        #     spanwise_panel_count += wing_cs.num_spanwise_panels
+        # self.create_new_wing(
+        #     self.steady_problems[self._current_step].airplanes[0].wings[0],
+        #     self.steady_problems[self._current_step].airplanes[0],
+        #     deformation_matrices,
+        #     op.vInf_G__E,
+        # )
 
-    def create_new_wing(self, wing, airplane, torsion_matrices, freestream_velocity) :
+    def create_new_wing(self, wing, airplane, deformation_matrices, freestream_velocity) :
         """This method redefines the current airplane by defining :
         1. new wing cross-section objects, each cross-section's twist = calculated torsion angle
         2. new wing object
 
         :param wing: Wing object
         :param airplane : Airplane object
-        :param torsion_angle : list of torsion angles calculated due to aero-elastic response
+        :param torsion_angle : A map from wing cross section to deformations
         :param freestream_velocity : float, current freestream velocity
 
         :return: None
@@ -1778,32 +1787,32 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # Initialize variable to hold new cross-section objects
         these_cross_sections = []
 
-        # Create new cross-section objects with calculated torsion angle as wing twist
-        for i in range(int(torsion_matrices.shape[0] / 2)):
-            this_wing_cross_section = geometry.wing_cross_section.WingCrossSection(
-                # Every wing cross section has an airfoil object.
-                airfoil=geometry.airfoil.Airfoil(
-                    name="naca0012",
-                    outline_A_lp=None,
-                    resample=True,
-                    n_points_per_side=400,
-                ),
-                num_spanwise_panels=airplane.wings[0].num_spanwise_panels,
-                chord=wing.wing_cross_sections[i].chord,
-                Lp_Wcsp_Lpp=wing.wing_cross_sections[i].Lp_Wcsp_Lpp,
-                # Every cross-section's twist is due to aero-elastic response
-                angles_Wcsp_to_Wcs_ixyz=(np.array([0.0, 0.0, 0.0]) if i == 0 
-                             else tuple(torsion_matrices[i][0])),
-                control_surface_symmetry_type="symmetric",
-                control_surface_hinge_point=0.75,
-                control_surface_deflection=0.0,
-                spanwise_spacing="cosine",
-            )
-            these_cross_sections.append(this_wing_cross_section)
+        # # Create new cross-section objects with calculated torsion angle as wing twist
+        # for i in range():
+        #     this_wing_cross_section = geometry.wing_cross_section.WingCrossSection(
+        #         # Every wing cross section has an airfoil object.
+        #         airfoil=geometry.airfoil.Airfoil(
+        #             name="naca0012",
+        #             outline_A_lp=None,
+        #             resample=True,
+        #             n_points_per_side=400,
+        #         ),
+        #         num_spanwise_panels=airplane.wings[0].num_spanwise_panels,
+        #         chord=wing.wing_cross_sections[i].chord,
+        #         Lp_Wcsp_Lpp=wing.wing_cross_sections[i].Lp_Wcsp_Lpp,
+        #         # Every cross-section's twist is due to aero-elastic response
+        #         angles_Wcsp_to_Wcs_ixyz=(np.array([0.0, 0.0, 0.0]) if i == 0 
+        #                      else tuple(torsion_matrices[i][0])),
+        #         control_surface_symmetry_type="symmetric",
+        #         control_surface_hinge_point=0.75,
+        #         control_surface_deflection=0.0,
+        #         spanwise_spacing="cosine",
+        #     )
+        #     these_cross_sections.append(this_wing_cross_section)
 
         
         
-        # Define new Wing object with determined cross-sections
+        # # Define new Wing object with determined cross-sections
         # this_wing = geometry.wing.Wing(
         #     name="Main Wing",
         #     # Wing root position remains same

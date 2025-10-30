@@ -145,8 +145,8 @@ main_wing_root_wing_cross_section_movement = (
     )
 )
 dephase = 0.0
-period = 1.0
-amplitude = 20
+period = 0.0
+amplitude = 0.0
 main_wing_body_wing_cross_section_movement = (
     ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
         base_wing_cross_section=example_airplane.wings[0].wing_cross_sections[1],
