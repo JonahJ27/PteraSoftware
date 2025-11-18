@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="PYTHON_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/venv" />
+      <excludeFolder url="file://$MODULE_DIR$/venvTest" />
+      <excludeFolder url="file://$MODULE_DIR$/venvTest3.8" />
+      <excludeFolder url="file://$MODULE_DIR$/venvTest3.7" />
+      <excludeFolder url="file://$MODULE_DIR$/venv_3.8" />
+      <excludeFolder url="file://$MODULE_DIR$/.github" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/venv3.10" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv310" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv311" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv312" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv" />
+    </content>
+    <orderEntry type="jdk" jdkName="Python 3.13 (PteraSoftware)" jdkType="Python SDK" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+  <component name="PyDocumentationSettings">
+    <option name="renderExternalDocumentation" value="true" />
+  </component>
+</module>

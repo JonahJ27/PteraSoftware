@@ -1,0 +1,71 @@
+"""This module is a testing case for the output module.
+
+Note: Most of the tests in this case do not currently test against an expected
+result. Instead, they test that the functions in output.py don't throw any errors.
+"""
+
+import unittest
+
+import pterasoftware as ps
+from tests.integration.fixtures import solver_fixtures
+
+
+class TestOutput(unittest.TestCase):
+    """This is a class with functions to test the output module."""
+
+    def setUp(self):
+        """This method is automatically called before each testing method to set up
+        the fixtures.
+
+        :return: None
+        """
+
+        # Set up the constructing fixtures.
+        self.unsteady_solver = (
+            solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_static_geometry()
+        )
+
+    def test_plot_results_versus_time_does_not_throw(self):
+        """This method tests that the plot_results_versus_time method doesn't throw
+        any errors.
+
+        :return: None
+        """
+
+        # Call the plot_results_versus_time method on the solver fixture. The show
+        # flag is set to False, so the figures will not be displayed.
+        ps.output.plot_results_versus_time(
+            unsteady_solver=self.unsteady_solver, show=False
+        )
+
+    def test_animate_does_not_throw(self):
+        """This method tests that the animate function does not throw any errors.
+
+        :return: None
+        """
+
+        # Call the animate function on the unsteady solver fixture. The testing flag
+        # is true so the animation will start automatically after 1 second.
+        ps.output.animate(
+            unsteady_solver=self.unsteady_solver,
+            scalar_type=None,
+            show_wake_vortices=False,
+            save=False,
+            testing=True,
+        )
+
+    def test_draw_does_not_throw(self):
+        """This method tests that the draw function does not throw any errors.
+
+        :return: None
+        """
+
+        # Call the draw function on the unsteady solver fixture. The testing flag is
+        # set to true, so the plotter will close after 1 second.
+        ps.output.draw(
+            solver=self.unsteady_solver,
+            scalar_type=None,
+            show_wake_vortices=False,
+            show_streamlines=False,
+            testing=True,
+        )
