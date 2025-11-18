@@ -1,7 +1,10 @@
 """This module contains functions to create geometry objects for use in tests."""
 
 import numpy as np
+<<<<<<< HEAD
 
+=======
+>>>>>>> 4534f6d4 (add optitrack data integration)
 import pterasoftware as ps
 
 # noinspection PyProtectedMember
@@ -554,7 +557,12 @@ def make_basic_airplane_fixture():
     basic_airplane_fixture = ps.geometry.airplane.Airplane(
         wings=[wing],
         name="Basic Test Airplane",
+<<<<<<< HEAD
         Cg_GP1_CgP1=[1.0, 0.5, -0.2],
+=======
+        Cg_E_CgP1=[1.0, 0.5, -0.2],
+        angles_E_to_B_izyx=[10.0, -5.0, 15.0],
+>>>>>>> 4534f6d4 (add optitrack data integration)
         weight=1000.0,
     )
 
@@ -563,7 +571,11 @@ def make_basic_airplane_fixture():
 
 def make_first_airplane_fixture():
     """This method makes a fixture that is an Airplane suitable for use
+<<<<<<< HEAD
     as the first Airplane in a simulation (with Cg_GP1_CgP1 set to zeros).
+=======
+    as the first Airplane in a simulation (with Cg_E_CgP1 set to zeros).
+>>>>>>> 4534f6d4 (add optitrack data integration)
 
     :return first_airplane_fixture: Airplane
         This is the Airplane configured as the first in a simulation.
@@ -575,7 +587,12 @@ def make_first_airplane_fixture():
     first_airplane_fixture = ps.geometry.airplane.Airplane(
         wings=[wing],
         name="First Test Airplane",
+<<<<<<< HEAD
         Cg_GP1_CgP1=[0.0, 0.0, 0.0],
+=======
+        Cg_E_CgP1=[0.0, 0.0, 0.0],
+        angles_E_to_B_izyx=[0.0, 0.0, 0.0],
+>>>>>>> 4534f6d4 (add optitrack data integration)
         weight=1500.0,
     )
 
@@ -601,7 +618,12 @@ def make_multi_wing_airplane_fixture():
     multi_wing_airplane_fixture = ps.geometry.airplane.Airplane(
         wings=[main_wing, tail_wing],
         name="Multi-Wing Test Airplane",
+<<<<<<< HEAD
         Cg_GP1_CgP1=[2.0, -1.0, 0.5],
+=======
+        Cg_E_CgP1=[2.0, -1.0, 0.5],
+        angles_E_to_B_izyx=[-5.0, 2.0, -10.0],
+>>>>>>> 4534f6d4 (add optitrack data integration)
         weight=2000.0,
         s_ref=20.0,
         c_ref=1.5,
@@ -625,7 +647,12 @@ def make_type_5_wing_airplane_fixture():
     type_5_wing_airplane_fixture = ps.geometry.airplane.Airplane(
         wings=[wing],
         name="Type 5 Wing Test Airplane",
+<<<<<<< HEAD
         Cg_GP1_CgP1=[0.0, 0.0, 0.0],
+=======
+        Cg_E_CgP1=[0.0, 0.0, 0.0],
+        angles_E_to_B_izyx=[0.0, 0.0, 0.0],
+>>>>>>> 4534f6d4 (add optitrack data integration)
         weight=1200.0,
     )
 
@@ -646,7 +673,12 @@ def make_custom_reference_airplane_fixture():
     custom_reference_airplane_fixture = ps.geometry.airplane.Airplane(
         wings=[wing],
         name="Custom Reference Test Airplane",
+<<<<<<< HEAD
         Cg_GP1_CgP1=[0.5, 1.0, -0.8],
+=======
+        Cg_E_CgP1=[0.5, 1.0, -0.8],
+        angles_E_to_B_izyx=[20.0, -10.0, 5.0],
+>>>>>>> 4534f6d4 (add optitrack data integration)
         weight=800.0,
         s_ref=15.0,
         c_ref=2.0,
@@ -785,6 +817,7 @@ def make_basic_panel_fixture():
     )
 
     return basic_panel_fixture
+<<<<<<< HEAD
 
 
 def make_simple_rectangular_wing_fixture():
@@ -1241,3 +1274,5 @@ def make_dihedral_wing_fixture():
     )
 
     return dihedral_wing_fixture
+=======
+>>>>>>> 4534f6d4 (add optitrack data integration)

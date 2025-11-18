@@ -2,7 +2,6 @@
 tests."""
 
 import numpy as np
-
 import pterasoftware as ps
 
 from . import operating_point_fixtures

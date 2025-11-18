@@ -1,7 +1,6 @@
 """This module contains a class to test WingMovements."""
 
 import unittest
-
 import numpy as np
 import numpy.testing as npt
 from scipy import signal
