@@ -151,7 +151,7 @@ del reflected_main_wing_movement
 
 # Define a new OperatingPoint.
 example_operating_point = ps.operating_point.OperatingPoint(
-    rho=1.225, vCg__E=750.0, alpha=1.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
+    rho=1.225, vCg__E=1000.0, alpha=1.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
 )
 
 # Define the operating point's OperatingPointMovement.
@@ -170,7 +170,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,
     num_cycles=None,
     num_chords=None,
-    num_steps=100,
+    num_steps=300,
 )
 
 # Delete the extraneous pointers.
@@ -200,17 +200,31 @@ example_solver.run(
     logging_level="Warning",
     prescribed_wake=True,
 )
+# ps.output.plot_results_versus_time(
+#     unsteady_solver=example_solver,
+#     show=True,
+#     save=False,
+# )
 
-ps.output.export_data(
-        solver = example_solver, 
-        filename = "panel_vertices_example_airplane_5.csv")
+# ps.output.export_data(
+#         solver = example_solver, 
+#         filename = "panel_vertices_example_airplane_5.csv")
 
 # Call the animate function on the solver. This produces a GIF of the wake being
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
-ps.output.animate(
-    unsteady_solver=example_solver,
-    scalar_type="lift",
-    show_wake_vortices=True,
-    save=True,
-)
+
+analysis = ps.differential_measures.Analysis(example_solver,3)
+
+# ps.output.animate(
+#     unsteady_solver=analysis.fake_solver,
+#     scalar_type="lift",
+#     show_wake_vortices=True,
+#     save=True,
+#     track_point=(0, 0.3, 0.7)
+# )
+
+analysis.plot_section(4, compare_fake=False)
+
+
+
