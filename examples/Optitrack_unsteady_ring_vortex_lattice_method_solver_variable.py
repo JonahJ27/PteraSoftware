@@ -7,7 +7,7 @@ import pterasoftware as ps
 # Define all the necessary parameters for loading the OptiTrack data.
 
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\Travail\Optitrack\Test_2\trois_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
 
 # Don't forget to add the Z1 and Z2 trackers, which are virtual trackers defining the wing root chord line. 
 # Their definition is in airfoil_creation.py adapted for our robot, you may need to change the position according to your setup.
@@ -65,7 +65,7 @@ example_airplane = ps.geometry.airplane.Airplane(
             ],
             name="Main Wing",
             Ler_Gs_Cgs=(0.0, 0.0005, 0.0),
-            angles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+            angles_Gs_to_Wn_ixyz=(0, 0.0, 0.0),
             symmetric=True,
             mirror_only=False,
             symmetryNormal_G=(0.0, 0.0001, 0.0),
@@ -165,7 +165,7 @@ airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
 
 # Define a new OperatingPoint.
 example_operating_point = ps.operating_point.OperatingPoint(
-    rho=1.225, vCg__E=1.0, alpha=1.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
+    rho=1.225, vCg__E=6.0, alpha=20.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
 )
 
 # Define the operating point's OperatingPointMovement.
@@ -226,10 +226,12 @@ example_solver.run(
 #     save=True,
 # )
 
+# ps.output.print_results(example_solver)
+
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
-# analysis = ps.differential_measures.Analysis(example_solver,3)
-
+analysis = ps.differential_measures.Analysis(example_solver,4)
+analysis.plot_trajectory_3d(0.8,0.8)
 
 
