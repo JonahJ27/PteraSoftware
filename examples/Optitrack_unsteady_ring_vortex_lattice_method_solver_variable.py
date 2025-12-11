@@ -180,7 +180,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=100,
+    num_steps=300,
 )
 
 
@@ -226,12 +226,20 @@ example_solver.run(
 #     save=True,
 # )
 
-# ps.output.print_results(example_solver)
 
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
 analysis = ps.differential_measures.Analysis(example_solver,4)
-analysis.plot_trajectory_3d(0.8,0.8)
 
+analysis.plot_difference_position_versus_time()
+
+# ps.output.animate(
+#     unsteady_solver=example_solver,
+#     scalar_type="difference position",     
+#     show_wake_vortices=True,
+#     fake_solver = analysis.fake_solver,
+#     save=True,
+#     track_point=(0,0.8,0.8)
+#  )
 
