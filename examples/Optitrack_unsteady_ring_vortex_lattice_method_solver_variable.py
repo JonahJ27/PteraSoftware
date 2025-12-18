@@ -7,7 +7,7 @@ import pterasoftware as ps
 # Define all the necessary parameters for loading the OptiTrack data.
 
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
 
 # Don't forget to add the Z1 and Z2 trackers, which are virtual trackers defining the wing root chord line. 
 # Their definition is in airfoil_creation.py adapted for our robot, you may need to change the position according to your setup.
@@ -64,8 +64,8 @@ example_airplane = ps.geometry.airplane.Airplane(
                 for column in columns
             ],
             name="Main Wing",
-            Ler_Gs_Cgs=(0.0, 0.0005, 0.0),
-            angles_Gs_to_Wn_ixyz=(0, 0.0, 0.0),
+            Ler_Gs_Cgs=(0.0, 0.01, 0.0),
+            angles_Gs_to_Wn_ixyz=(4, 0.0, 0.0),
             symmetric=True,
             mirror_only=False,
             symmetryNormal_G=(0.0, 0.0001, 0.0),
@@ -207,32 +207,40 @@ example_solver.run(
     prescribed_wake=True,
 )
 
-
+# ps.output.print_results(example_solver)
 # ps.output.plot_results_versus_time(
 #     unsteady_solver=example_solver,
 #     show=True,
 #     save=False,
 # )
 
+# ps.output.plot_wing_loads_versus_time(
+#     unsteady_solver=example_solver,
+#     show=True,
+#     save=False,
+# )
 
 # Call the animate function on the solver. This produces a GIF of the wake being
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-# ps.output.animate(
-#     unsteady_solver=example_solver,
-#     scalar_type="lift",
-#     show_wake_vortices=True,
-#     save=True,
-# )
+ps.output.animate(
+    unsteady_solver=example_solver,
+    scalar_type="lift",
+    show_wake_vortices=True,
+    save=False,
+)
 
 
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
-analysis = ps.differential_measures.Analysis(example_solver,4)
+# analysis = ps.differential_measures.Analysis(example_solver,5)
 
-analysis.plot_difference_position_versus_time()
+
+# analysis.plot_difference_position_versus_time()  #5 is the number of your section
+
+
 
 # ps.output.animate(
 #     unsteady_solver=example_solver,
