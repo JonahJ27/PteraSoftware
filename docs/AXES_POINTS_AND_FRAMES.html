@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Axes&comma; Points&comma; and Frames</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <h1 id="axes-points-and-frames">Axes, Points, and Frames</h1>
+<p>In simulating flapping-wing dynamics and aerodynamics, Ptera Software uses several vector-valued quantities. To avoid ambiguity, these vectors often require additional details about their interpretation, such as axis systems, reference points, and reference frames. While generally simpler to denote, some scalar quantities can also require additional details to avoid ambiguity.</p>
+<p>This document lays out Ptera Software's notation for defining vectors and scalars using these constructs. The notation and terminology I use is an extended version of that introduced in &quot;Flight Vehicle Aerodynamics&quot; by Mark Drela.</p>
+<h2 id="axis-systems-vs-reference-points-vs-reference-frames">Axis Systems vs. Reference Points vs. Reference Frames</h2>
+<p>An axis system, also called &quot;axes,&quot; contains information about three directions. In Ptera Software, all axes are Cartesian, meaning their three basis directions are linear, not angular.</p>
+<p>Reference points, also called &quot;points,&quot; contain information about the location of a particular point in space.</p>
+<p>Lastly, a reference frame, also called a &quot;frame,&quot; contains information about the location of an &quot;observer,&quot; and their motion relative to what is observed.</p>
+<p>Consider the arbitrary vector <strong>r</strong>, which exists in 3D space. For now, let's say that <strong>r</strong> is a force vector. In order to express <strong>r</strong> using components (x, y, z), we must, at a minimum, pick an axis system. If instead <strong>r</strong> is a position vector, we need both axes and a reference point to serve as an origin, so we must pick both before writing down <strong>r</strong>'s three components. The same is true if <strong>r</strong> is a moment, but now the reference point no longer serves as an origin, but instead the point about which the moment acts. Lastly, if <strong>r</strong> is some time derivative of position, such as a velocity or acceleration vector, then we no longer need a reference point, but we do require both an axis system and a reference frame. Finally, some scalar quantities, such as speed, also depend on an observer's reference frame.</p>
+<p>Due to the nested structure of Ptera Software's geometry objects, in practice, many vector-valued quantities like positions and moments, use reference points and axes that are defined locally within a given object. An example of this next structure for an unsteady vortex lattice method simulation is shown below.</p>
+<img src="file:///c:\Users\henri\Documents\MIT\PteraSoftware\docs\ObjectHierarchy.jpg" alt="Object Hierarchy" width="400"/>
+<p>For information on how axes are defined relative to one another, and how vectors can be transformed within an axis system, read through <a href="https://raw.githubusercontent.com/camUrban/PteraSoftware/feature/improved_geometry_definitions/docs/ANGLE_VECTORS_AND_TRANSFORMATIONS.html">Angle Vectors and Transformations</a></p>
+<h1 id="specifying-axes-points-and-frames">Specifying Axes, Points, and Frames</h1>
+<p>Given the varied requirements for vector-valued quantities, it is important that we are very specific when assigning them variable names or referencing them in text. Also, due to the hierarchical structure of Ptera Software's objects, additional specificity may be required depending on the context. For example, if we use a force vector within the Wing class that references wing axes, we still need to specify that this vector is given in wind axes, but we don't (and can't) specify which of the parent Airplane's Wing's axes we mean. In contrast, if we declare a variable inside the Wing class that references wing cross section axes, we must specify which of the Wing's WingCrossSections's axes we are referring to.</p>
+<h2 id="patterns">Patterns</h2>
+<p>There are four useful combinations of axes, points, and frames. For variables that fall into each of these three cases, we denote them by appending information to their variable names using <strong>IDs</strong>. When referencing the variables in comments and docstrings, we add this additional information parenthetically using <strong>names</strong>:</p>
+<ol>
+<li>Axes without a point and without a frame<br>
+[variable name]_[axes ID]<br>
+&quot;[variable name] (in [axes name])&quot;</li>
+<li>Axes without a point and with a frame<br>
+[variable name]_[axes ID]__[frame ID]<br>
+&quot;[variable name] (in [axes name], observed from the [frame name])&quot;</li>
+<li>Axes with a point and without a frame<br>
+[variable name]_[axes ID]_[point ID]<br>
+&quot;[variable name] (in [axes name], relative to the [point name])&quot;</li>
+<li>Only a frame (for scalar values like speed)
+[variable name]__[frame ID]<br>
+&quot;[variable name] (observed from the [frame name])&quot;</li>
+</ol>
+<p>The correct name and ID for a particular axis system, point, or frame depends on the level of context. However, in all cases IDs consist of a series of abbreviations, moving in scope from most specific to least specific. By contrast, names move from least specific to most specific. Also, in contrast with IDs, the exact syntax for names is slightly flexible to allow for the description to sound correct in plain English.</p>
+<p>The standard abbreviations and names are given below for reference. See the section for a particular axis system, point, or frame for examples of the correct IDs and names in various contexts.</p>
+<h2 id="id-abbreviations-and-names">ID Abbreviations and Names</h2>
+<ul>
+<li>E: Earth</li>
+<li>B: body</li>
+<li>P: airplane</li>
+<li>W: wind</li>
+<li>Pr: problem</li>
+<li>G: geometry</li>
+<li>Gs: geometry axes (after accounting for symmetry)</li>
+<li>Wn: wing</li>
+<li>Wcs…: wing cross section
+<ul>
+<li>…i: inner</li>
+<li>…o: outer</li>
+</ul>
+</li>
+<li>Wcsp: wing cross section parent</li>
+<li>A…: airfoil
+<ul>
+<li>…i: inner</li>
+<li>…o: outer</li>
+</ul>
+</li>
+<li>Cg: center of gravity (CG)</li>
+<li>Cgs: CG (after accounting for symmetry)</li>
+<li>Ler: leading edge root point</li>
+<li>Lp: leading point</li>
+<li>Lpp: leading point parent</li>
+<li>…pp…: panel point
+<ul>
+<li>Fr…: front right</li>
+<li>Fo…: forward outer</li>
+<li>Fl…: front left</li>
+<li>Fi…: forward inner</li>
+<li>Bl…: back left</li>
+<li>Bi…: backward inner</li>
+<li>Br…: back right</li>
+<li>Bo…: backward outer</li>
+<li>C…: collocation</li>
+<li>…r[m]c[n]: (m, n)</li>
+</ul>
+</li>
+<li>…hvp…: horseshoe vortex point
+<ul>
+<li>Fr…: front right</li>
+<li>Fl…: front left</li>
+<li>Bl…: back left</li>
+<li>Br…: back right</li>
+<li>…b…: bound</li>
+<li>…w…: wake</li>
+<li>…r[m]c[n]: (m, n)</li>
+<li>…[n]: n</li>
+</ul>
+</li>
+<li>…rvp…: ring vortex point
+<ul>
+<li>Fr…: front right</li>
+<li>Fl…: front left</li>
+<li>Bl…: back left</li>
+<li>Br…: back right</li>
+<li>C…: centroid</li>
+<li>…b…: bound</li>
+<li>…w…: wake</li>
+<li>…r[m]c[n]: (m, n)</li>
+</ul>
+</li>
+<li>…lvp…: line vortex point
+<ul>
+<li>S…: start</li>
+<li>E…: end</li>
+<li>C…: center</li>
+<li>…f: front leg</li>
+<li>…l: left leg</li>
+<li>…b: back leg</li>
+<li>…r: right leg</li>
+</ul>
+</li>
+</ul>
+<h1 id="axis-systems">Axis Systems</h1>
+<h2 id="1-the-earth-axis-system">1. The Earth axis system</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: North</li>
+<li>+y: East</li>
+<li>+z: Down</li>
+</ol>
+</li>
+<li>Right-handed</li>
+<li>Ownership: None</li>
+<li>References
+<ul>
+<li>Text: …in Earth axes…</li>
+<li>Variables: …_E…</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-body-axes">2. Body axes</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: Towards the front of the Airplane</li>
+<li>+y: Towards the right of the Airplane</li>
+<li>+z: Towards the bottom of the Airplane</li>
+</ol>
+</li>
+<li>Right-handed</li>
+<li>Ownership: Airplane</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in body axes…</li>
+<li>Variables: …_B…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's body axes…</li>
+<li>Variables: …_BP1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-wind-axes">3. Wind axes</h2>
+<ul>
+<li>Caveat: We assume a still airmass, so the freestream velocity observed from the body frame is solely due to the Airplane's velocity observed from the Earth frame.</li>
+<li>Basis directions
+<ol>
+<li>+x: In line with (parallel, not anti-parallel, to) Airplane's velocity observed from the Earth frame</li>
+<li>+y: In the direction perpendicular to first and third components*</li>
+<li>+z: In the direction perpendicular to first and second components*</li>
+</ol>
+</li>
+<li>*There are infinite options for the second and third components that satisfy the perpendicularity requirement. Therefore, we define them using a thought experiment: Imagine three unit vectors pointing along the body axes' basis directions. There is exactly one pair of angles, which we'll call -α (note the negative sign) and β, that we can use to perform a y-z extrinsic series (or, equivalently, a z-y' intrinsic series) of rotations to construct wind axes from body axes that will exactly align the x-axis with Airplane's velocity observed from the Earth frame. This series of rotations also constructs the wind axes +y and +z basis directions.<br>
+The two angles α and β are known as the angle of attack and the angle of sideslip. Wind axes are commonly defined using these angles. This is because they are intuitively understood by many aerodynamicists: in the simplest scenarios, a positive α corresponds to the Airplane's nose pointing above its direction of travel (relative wind coming from below the aircraft), and a positive β to its nose pointing to the left of its direction of travel (relative wind coming from the right of the aircraft). However, this can seem a bit cyclical, and it obscures some subtlety in their definition: defining α and β using the convention described previously allows us to define lift as the aerodynamic force's component in the wind axes' -z basis direction, thereby making lift independent of sideslip.</li>
+<li>Alternative way to think about basis directions (for small |α| and |β|):
+<ol>
+<li>+x: Approximately towards the front of the Airplane</li>
+<li>+y: Approximately towards the right of the Airplane</li>
+<li>+z: Approximately towards the bottom of the Airplane</li>
+</ol>
+</li>
+<li>Right-handed</li>
+<li>Ownership: SteadyProblem or UnsteadyProblem</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in wind axes…</li>
+<li>Variables: …_W…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Problem's wind axes…</li>
+<li>Variables: …_WPr1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-geometry-axes">4. Geometry axes</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: Towards the back of the Airplane (aft)</li>
+<li>+y: Towards the right of the Airplane</li>
+<li>+z: Towards the top of Airplane</li>
+</ol>
+</li>
+<li>Right-handed</li>
+<li>Ownership: Airplane</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in geometry axes…</li>
+<li>Variables: …_G…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's geometry axes…</li>
+<li>Variables: …_GP1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-geometry-axes-after-accounting-for-symmetry">5. Geometry axes (after accounting for symmetry)</h2>
+<ul>
+<li>Basis directions: For a given Wing, the basis directions are identical to that Wing's Airplane's geometry axes if the Wing is non-symmetric or symmetric-continuous. For mirror-only Wings, the basis directions are that Wing's Airplane's geometry axes reflected about that Wing's symmetry plane.</li>
+<li>Right-handed for non-symmetric and symmetric-continuous Wings. Left-handed for mirror-only Wings.</li>
+<li>Ownership: Wing</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in geometry axes (after accounting for symmetry)…</li>
+<li>Variables: …_Gs…</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …in geometry axes (after accounting for the first Wing's symmetry)…</li>
+<li>Variables: …_Gs1…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's geometry axes (after accounting for its second Wing's symmetry)…</li>
+<li>Variables: …_Gs2P1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-wing-axes">6. Wing axes</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: Towards the back of the Wing at its root</li>
+<li>+y: From a Wing's root towards its second WingCrossSection's plane</li>
+<li>+z: Towards the top surface of the Wing</li>
+</ol>
+</li>
+<li>Right-handed for non-symmetric and symmetric-continuous Wings. Left-handed for mirror-only Wings.</li>
+<li>Ownership: Wing</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in wing axes…</li>
+<li>Variables: …_Wn…</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …in the first Wing's axes…</li>
+<li>Variables: …_Wn1…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's second Wing's axes…</li>
+<li>Variables: …_Wn2P1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-wing-cross-section-axes">7. Wing cross section axes</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: Towards the trailing edge in the WingCrossSection's plane</li>
+<li>+y: Normal to the WingCrossSection's plane in the direction of the next WingCrossSection</li>
+<li>+z: Towards the top surface of the Wing</li>
+</ol>
+</li>
+<li>Right-handed for WingCrossSections of non-symmetric and symmetric-continuous Wings. Left-handed for WingCrossSections of mirror-only Wings.</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in wing cross section axes…</li>
+<li>Variables: …_Wcs…</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …in the first WingCrossSection's axes…</li>
+<li>Variables: …_Wcs1…</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …in the second Wing's third WingCrossSection's axes…</li>
+<li>Variables: …_Wcs3Wn2…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's second Wing's first WingCrossSection's axes…</li>
+<li>Variables: …_Wcs1Wn2P1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-wing-cross-section-parent-axes">8. Wing cross section parent axes</h2>
+<ul>
+<li>Basis directions: Identical to Wing axes for a Wing's first WingCrossSection, and identical to the previous WingCrossSection's axes for subsequent ones.</li>
+<li>Right-handed for WingCrossSections of non-symmetric and symmetric-continuous Wings. Left-handed for WingCrossSections of mirror-only Wings.</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in wing cross section parent axes…</li>
+<li>Variables: …_Wcsp…</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …in the second WingCrossSection's parent axes…</li>
+<li>Variables: …_Wcsp1…</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …in the second Wing's third WingCrossSection's parent axes…</li>
+<li>Variables: …_Wcsp3Wn2…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's second Wing's first WingCrossSection's parent axes…</li>
+<li>Variables: …_Wcsp1Wn2P1…</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-airfoil-axes">9. Airfoil axes</h2>
+<ul>
+<li>Basis directions
+<ol>
+<li>+x: Chordwise towards the Airfoil's trailing point</li>
+<li>+y: Normal to the chord towards the Airfoil's upper line</li>
+</ol>
+</li>
+<li>Two-dimensional</li>
+<li>Ownership: Airfoil</li>
+<li>Local reference examples
+<ul>
+<li>Text: …in airfoil axes…</li>
+<li>Variables: …_A…</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …in the second WingCrossSection's Airfoil's axes…</li>
+<li>Variables: …_AWcs2…</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …in the second Wing's third WingCrossSection's Airfoil's axes…</li>
+<li>Variables: …_AWcs3Wn2…</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …in the first Airplane's second Wing's first WingCrossSection's Airfoil's axes…</li>
+<li>Variables: …_AWcs1Wn2P1…</li>
+</ul>
+</li>
+</ul>
+<h1 id="reference-points">Reference Points</h1>
+<h2 id="1-cg">1. CG</h2>
+<ul>
+<li>Position of the Airplane's CG</li>
+<li>Ownership: Airplane</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the CG…</li>
+<li>Variables: …_Cg</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's CG…</li>
+<li>Variables: …_CgP1</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-cg-after-accounting-for-symmetry">2. CG (after accounting for symmetry)</h2>
+<ul>
+<li>For a non-symmetric or symmetric-continuous Wing, this identical to its Airplane's CG. For mirror-only Wings, it is their Airplane's CG reflected across that Wing's symmetry plane.</li>
+<li>Ownership: Wing</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the CG (after accounting for symmetry)…</li>
+<li>Variables: …_Cgs</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the CG (after accounting for the first Wing's symmetry)…</li>
+<li>Variables: …_Cgs1</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's CG (after accounting for its second Wing's symmetry)…</li>
+<li>Variables: …_Cgs2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-leading-edge-root-point">3. Leading edge root point</h2>
+<ul>
+<li>Root point of the Wing's leading edge</li>
+<li>Ownership: Wing</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the leading edge root point…</li>
+<li>Variables: …_Ler</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the first Wing's leading edge root point…</li>
+<li>Variables: …_Ler1</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's leading edge root point…</li>
+<li>Variables: …_Ler2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-leading-point">4. Leading point</h2>
+<ul>
+<li>The leading point of the WingCrossSection</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the leading point…</li>
+<li>Variables: …_Lp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the first WingCrossSection's leading point…</li>
+<li>Variables: …_Lp1</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's first WingCrossSection's leading point…</li>
+<li>Variables: …_Lp1Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's first WingCrossSection's leading point…</li>
+<li>Variables: …_Lp1Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-leading-point-parent">5. Leading point parent</h2>
+<ul>
+<li>For a Wing's first WingCrossSection, this is the Wing's leading edge root point. For subsequent WingCrossSections, this is the previous WingCrossSection's leading point.</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the leading point parent)</li>
+<li>Variables: …_Lpp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the first WingCrossSection's leading point parent)</li>
+<li>Variables: …_Lpp1</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's first WingCrossSection's leading point parent)</li>
+<li>Variables: …_Lpp1Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's first WingCrossSection's leading parent point…</li>
+<li>Variables: …_Lpp1Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-panel-points">6. Panel points</h2>
+<ul>
+<li>The front right, front left, back left, back right, and collocation points of a Panel</li>
+<li>Ownership: Panel</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the panel front right point…</li>
+<li>Variables: …_Frpp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the (3, 2) Panel's front right point…</li>
+<li>Variables: …_Frppr3c2</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's (3, 2) Panel's front right point…</li>
+<li>Variables: …_Frppr3c2Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's (3, 2) Panel's front right point…</li>
+<li>Variables: …_Frppr3c2Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-bound-horseshoe-vortex-points">7. Bound horseshoe vortex points</h2>
+<ul>
+<li>Only relevant in steady horseshoe vortex lattice method simulations</li>
+<li>The front right, front left, back left, and back right points of a bound HorseshoeVortex</li>
+<li>Ownership: HorseshoeVortex</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the bound horseshoe vortex front right point…</li>
+<li>Variables: …_Frbhvp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the (3, 2) Panel's bound HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frbhvpr3c2</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's (3, 2) Panel's bound HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frbhvpr3c2Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's (3, 2) Panel's bound HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frbhvpr3c2Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-bound-ring-vortex-points">8. Bound ring vortex points</h2>
+<ul>
+<li>The front right, front left, back left, and back right points of a bound RingVortex</li>
+<li>Ownership: RingVortex</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the bound ring vortex front right point…</li>
+<li>Variables: …_Frbrvp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the (3, 2) Panel's bound RingVortex's front right point…</li>
+<li>Variables: …_Frbrvpr3c2</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's (3, 2) Panel's bound RingVortex's front right point…</li>
+<li>Variables: …_Frbrvpr3c2Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's (3, 2) Panel's bound RingVortex's front right point…</li>
+<li>Variables: …_Frbrvpr3c2Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-wake-horseshoe-vortex-points">9. Wake horseshoe vortex points</h2>
+<ul>
+<li>Only relevant in steady horseshoe and steady ring vortex lattice method simulations</li>
+<li>The front right, front left, back left, and back right points of a wake HorseshoeVortex</li>
+<li>Ownership: HorseshoeVortex</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the wake horseshoe vortex front right point…</li>
+<li>Variables: …_Frwhvp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the third wake HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frwhvp3</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's third wake HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frwhvp3Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's third wake HorseshoeVortex's front right point…</li>
+<li>Variables: …_Frwhvp3Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-wake-ring-vortex-points">10. Wake ring vortex points</h2>
+<ul>
+<li>Only relevant in unsteady ring vortex lattice method simulations</li>
+<li>The front right, front left, back left, and back right points of a wake RingVortex</li>
+<li>Ownership: RingVortex</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the wake ring vortex front right point…</li>
+<li>Variables: …_Frwrvp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the (3, 2) wake RingVortex's front right point…</li>
+<li>Variables: …_Frwrvpr3c2</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's (3, 2) wake RingVortex's front right point…</li>
+<li>Variables: …_Frwrvpr3c2Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's (3, 2) wake RingVortex's front right point…</li>
+<li>Variables: …_Frwrvpr3c2Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-line-vortex-points">11. Line vortex points</h2>
+<ul>
+<li>The start, end, and center points of a LineVortex</li>
+<li>Ownership: LineVortex</li>
+<li>Local reference examples
+<ul>
+<li>Text: …relative to the LineVortex start point…</li>
+<li>Variables: …_Slvp</li>
+</ul>
+</li>
+<li>Parent-vortex-local reference examples
+<ul>
+<li>Text: …relative to the bound HorseshoeVortex's front LineVortex's center point…</li>
+<li>Variables: …_Clvpf</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …relative to the (3, 2) bound HorseshoeVortex's front LineVortex's center point…</li>
+<li>Variables: …_ClvpfBhvr3c2</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …relative to the second Wing's (3, 2) bound HorseshoeVortex's front LineVortex's center point…</li>
+<li>Variables: …_ClvpfBhvr3c2Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …relative to the first Airplane's second Wing's (3, 2) bound HorseshoeVortex's front LineVortex's center point…</li>
+<li>Variables: …_ClvpfBhvr3c2Wn2P1</li>
+</ul>
+</li>
+</ul>
+<h1 id="reference-frames">Reference Frames</h1>
+<h2 id="1-earth-reference-frame">1. Earth reference frame</h2>
+<ul>
+<li>Inertial</li>
+<li>Attached rigidly to the Earth</li>
+<li>Ownership: None</li>
+<li>References
+<ul>
+<li>Text: …observed from the Earth frame…</li>
+<li>Variables: …__E</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-body-reference-frame">2. Body reference frame</h2>
+<ul>
+<li>Non-inertial</li>
+<li>Attached rigidly to the Airplane's body</li>
+<li>Ownership: Airplane</li>
+<li>Local reference examples
+<ul>
+<li>Text: …observed from the body frame…</li>
+<li>Variables …__B</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …observed from the second Airplane's body frame…</li>
+<li>Variables …__BP2</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-wing-reference-frame">3. Wing reference frame</h2>
+<ul>
+<li>Non-inertial</li>
+<li>Attached rigidly to the root of a Wing's leading edge</li>
+<li>Ownership: Wing</li>
+<li>Local reference examples
+<ul>
+<li>Text: …observed from the wing frame…</li>
+<li>Variables …__Wn</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …observed from the second Wing's frame…</li>
+<li>Variables …__Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …observed from the fourth Airplane's second Wing's frame…</li>
+<li>Variables …__Wn2P4</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-wing-cross-section-reference-frame">4. Wing cross section reference frame</h2>
+<ul>
+<li>Non-inertial</li>
+<li>Attached rigidly to the leading point of a WingCrossSection</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …observed from the wing cross section frame…</li>
+<li>Variables …__Wcs</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …observed from the third WingCrossSection's frame…</li>
+<li>Variables …__Wcs3</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …observed from the second Wing's third WingCrossSection's frame…</li>
+<li>Variables …__Wcs3Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …observed from the fourth Airplane's second Wing's third WingCrossSection's frame…</li>
+<li>Variables …__Wcs3Wn2P4</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-wing-cross-section-parent-reference-frame">5. Wing cross section parent reference frame</h2>
+<ul>
+<li>Non-inertial</li>
+<li>Attached rigidly to the leading parent point of a WingCrossSection</li>
+<li>Ownership: WingCrossSection</li>
+<li>Local reference examples
+<ul>
+<li>Text: …observed from the wing cross section parent frame…</li>
+<li>Variables …__Wcsp</li>
+</ul>
+</li>
+<li>Wing-local reference examples
+<ul>
+<li>Text: …observed from the third WingCrossSection's parent frame…</li>
+<li>Variables …__Wcsp3</li>
+</ul>
+</li>
+<li>Airplane-local reference examples
+<ul>
+<li>Text: …observed from the second Wing's third WingCrossSection's parent frame…</li>
+<li>Variables …__Wcsp3Wn2</li>
+</ul>
+</li>
+<li>Non-local reference examples
+<ul>
+<li>Text: …observed from the fourth Airplane's second Wing's third WingCrossSection's parent frame…</li>
+<li>Variables …__Wcsp3Wn2P4</li>
+</ul>
+</li>
+</ul>
+
+            
+            
+        </body>
+        </html>

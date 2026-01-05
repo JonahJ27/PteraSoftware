@@ -3,16 +3,16 @@ This example shows how to use the UnsteadyRingVortexLatticeMethodSolver withOpti
 """
 
 import pterasoftware as ps
+import numpy as np
 
 # Define all the necessary parameters for loading the OptiTrack data.
 
 
 optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
 
-# Don't forget to add the Z1 and Z2 trackers, which are virtual trackers defining the wing root chord line. 
-# Their definition is in airfoil_creation.py adapted for our robot, you may need to change the position according to your setup.
+# This list is adapted for our robot, you may need to change the list according to your setup.
 list_trackers = [
-    "Z1", "Z2", "A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5",
+    "A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5",
     "C1", "C2", "C3", "C4", "C5", "D1", "D2", "D3", "D4", "D5",
     "E1", "E2", "E3", "E4", "E5", "F1", "F2", "F3", "F4", "F5", 
     "G1", "G2", "G3", "G4", "G5", "H1", "H2", "H3", "H4",
@@ -45,8 +45,8 @@ example_airplane = ps.geometry.airplane.Airplane(
                 ps.geometry.wing_cross_section.WingCrossSection(
                     num_spanwise_panels = None if column == columns[-1] else 1, # Last wing cross-section has no panels 
                     chord=airfoils_0[column].get_chord_length(), 
-                    Lp_Wcsp_Lpp=airfoils_0[column].get_position()[0],
-                    angles_Wcsp_to_Wcs_ixyz=airfoils_0[column].get_position()[1],
+                    Lp_Wcsp_Lpp=(0,0,0) if column == 'A' else airfoils_0[column].get_relative_transform()[0],
+                    angles_Wcsp_to_Wcs_ixyz=(0,0,0) if column == 'A' else airfoils_0[column].get_relative_transform()[1],
                     control_surface_symmetry_type="symmetric",
                     control_surface_hinge_point=0.75,
                     control_surface_deflection=0.0,
@@ -64,8 +64,8 @@ example_airplane = ps.geometry.airplane.Airplane(
                 for column in columns
             ],
             name="Main Wing",
-            Ler_Gs_Cgs=(0.0, 0.01, 0.0),
-            angles_Gs_to_Wn_ixyz=(4, 0.0, 0.0),
+            Ler_Gs_Cgs= np.array([0.0, 0.025, 0.0]),
+            angles_Gs_to_Wn_ixyz= np.array([4, 0.0, 0.0]),
             symmetric=True,
             mirror_only=False,
             symmetryNormal_G=(0.0, 0.0001, 0.0),
@@ -133,6 +133,7 @@ main_wing_movement = ps.movements.wing_movement.WingMovement(
     periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0), 
     spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
     phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+    optitrack = True  # Put to True to use OptiTrack data. The other parameters will be ignored except for base_wing
 )
 reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
     base_wing=example_airplane.wings[1],
@@ -145,6 +146,7 @@ reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
     periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0), 
     spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
     phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+    optitrack = True  # Put to True to use OptiTrack data. The other parameters will be ignored except for base_wing
 )
 
 # Now define the example airplane's AirplaneMovement. For now, no movement of the airplane is possible.  
@@ -165,7 +167,7 @@ airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
 
 # Define a new OperatingPoint.
 example_operating_point = ps.operating_point.OperatingPoint(
-    rho=1.225, vCg__E=6.0, alpha=20.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
+    rho=1.225, vCg__E=4.0, alpha=10.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
 )
 
 # Define the operating point's OperatingPointMovement.
@@ -224,20 +226,20 @@ example_solver.run(
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-ps.output.animate(
-    unsteady_solver=example_solver,
-    scalar_type="lift",
-    show_wake_vortices=True,
-    save=False,
-)
+# ps.output.animate(
+#     unsteady_solver=example_solver,
+#     scalar_type="lift",
+#     show_wake_vortices=True,
+#     save=False,
+# )
 
 
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
-# analysis = ps.differential_measures.Analysis(example_solver,5)
+analysis = ps.differential_measures.Analysis(example_solver,5)
 
-
+analysis.plot_difference_position_versus_time()
 # analysis.plot_difference_position_versus_time()  #5 is the number of your section
 
 
