@@ -73,6 +73,7 @@ class WingMovement:
             "sine",
         ),
         phaseAngles_Gs_to_Wn_ixyz: np.ndarray | Sequence[float | int] = (0.0, 0.0, 0.0),
+        optitrack = None,
     ) -> None:
         """The initialization method.
 
@@ -276,6 +277,8 @@ class WingMovement:
                 )
         self.phaseAngles_Gs_to_Wn_ixyz = phaseAngles_Gs_to_Wn_ixyz
 
+        self.optitrack = optitrack
+
     @property
     def all_periods(self) -> list[float]:
         """All unique non zero periods from this WingMovement and its
@@ -321,140 +324,207 @@ class WingMovement:
             delta_time, "delta_time", min_val=0.0, min_inclusive=False
         )
 
-        # Generate oscillating values for each dimension of Ler_Gs_Cgs.
-        listLer_Gs_Cgs = np.zeros((3, num_steps), dtype=float)
-        for dim in range(3):
-            spacing = self.spacingLer_Gs_Cgs[dim]
-            if spacing == "sine":
-                listLer_Gs_Cgs[dim, :] = _functions.oscillating_sinspaces(
-                    amps=self.ampLer_Gs_Cgs[dim],
-                    periods=self.periodLer_Gs_Cgs[dim],
-                    phases=self.phaseLer_Gs_Cgs[dim],
-                    bases=self.base_wing.Ler_Gs_Cgs[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                )
-            elif spacing == "uniform":
-                listLer_Gs_Cgs[dim, :] = _functions.oscillating_linspaces(
-                    amps=self.ampLer_Gs_Cgs[dim],
-                    periods=self.periodLer_Gs_Cgs[dim],
-                    phases=self.phaseLer_Gs_Cgs[dim],
-                    bases=self.base_wing.Ler_Gs_Cgs[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                )
-            elif callable(spacing):
-                listLer_Gs_Cgs[dim, :] = _functions.oscillating_customspaces(
-                    amps=self.ampLer_Gs_Cgs[dim],
-                    periods=self.periodLer_Gs_Cgs[dim],
-                    phases=self.phaseLer_Gs_Cgs[dim],
-                    bases=self.base_wing.Ler_Gs_Cgs[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                    custom_function=spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {spacing}")
+        if self.optitrack is None:
+            # Generate oscillating values for each dimension of Ler_Gs_Cgs.
+            listLer_Gs_Cgs = np.zeros((3, num_steps), dtype=float)
+            for dim in range(3):
+                spacing = self.spacingLer_Gs_Cgs[dim]
+                if spacing == "sine":
+                    listLer_Gs_Cgs[dim, :] = _functions.oscillating_sinspaces(
+                        amps=self.ampLer_Gs_Cgs[dim],
+                        periods=self.periodLer_Gs_Cgs[dim],
+                        phases=self.phaseLer_Gs_Cgs[dim],
+                        bases=self.base_wing.Ler_Gs_Cgs[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                    )
+                elif spacing == "uniform":
+                    listLer_Gs_Cgs[dim, :] = _functions.oscillating_linspaces(
+                        amps=self.ampLer_Gs_Cgs[dim],
+                        periods=self.periodLer_Gs_Cgs[dim],
+                        phases=self.phaseLer_Gs_Cgs[dim],
+                        bases=self.base_wing.Ler_Gs_Cgs[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                    )
+                elif callable(spacing):
+                    listLer_Gs_Cgs[dim, :] = _functions.oscillating_customspaces(
+                        amps=self.ampLer_Gs_Cgs[dim],
+                        periods=self.periodLer_Gs_Cgs[dim],
+                        phases=self.phaseLer_Gs_Cgs[dim],
+                        bases=self.base_wing.Ler_Gs_Cgs[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                        custom_function=spacing,
+                    )
+                else:
+                    raise ValueError(f"Invalid spacing value: {spacing}")
 
-        # Generate oscillating values for each dimension of angles_Gs_to_Wn_ixyz.
-        listAngles_Gs_to_Wn_ixyz = np.zeros((3, num_steps), dtype=float)
-        for dim in range(3):
-            spacing = self.spacingAngles_Gs_to_Wn_ixyz[dim]
-            if spacing == "sine":
-                listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_sinspaces(
-                    amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
-                    periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
-                    phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
-                    bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                )
-            elif spacing == "uniform":
-                listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_linspaces(
-                    amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
-                    periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
-                    phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
-                    bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                )
-            elif callable(spacing):
-                listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_customspaces(
-                    amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
-                    periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
-                    phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
-                    bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
-                    num_steps=num_steps,
-                    delta_time=delta_time,
-                    custom_function=spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {spacing}")
+            # Generate oscillating values for each dimension of angles_Gs_to_Wn_ixyz.
+            listAngles_Gs_to_Wn_ixyz = np.zeros((3, num_steps), dtype=float)
+            for dim in range(3):
+                spacing = self.spacingAngles_Gs_to_Wn_ixyz[dim]
+                if spacing == "sine":
+                    listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_sinspaces(
+                        amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
+                        periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
+                        phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
+                        bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                    )
+                elif spacing == "uniform":
+                    listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_linspaces(
+                        amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
+                        periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
+                        phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
+                        bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                    )
+                elif callable(spacing):
+                    listAngles_Gs_to_Wn_ixyz[dim, :] = _functions.oscillating_customspaces(
+                        amps=self.ampAngles_Gs_to_Wn_ixyz[dim],
+                        periods=self.periodAngles_Gs_to_Wn_ixyz[dim],
+                        phases=self.phaseAngles_Gs_to_Wn_ixyz[dim],
+                        bases=self.base_wing.angles_Gs_to_Wn_ixyz[dim],
+                        num_steps=num_steps,
+                        delta_time=delta_time,
+                        custom_function=spacing,
+                    )
+                else:
+                    raise ValueError(f"Invalid spacing value: {spacing}")
 
-        # Create an empty 2D ndarray that will hold each of the Wings's
-        # WingCrossSection's vector of WingCrossSections representing its changing
-        # state at each time step. The first index denotes a particular base
-        # WingCrossSection, and the second index denotes the time step.
-        wing_cross_sections = np.empty(
-            (len(self.wing_cross_section_movements), num_steps), dtype=object
-        )
-
-        # Iterate through the WingCrossSectionMovements.
-        for (
-            wing_cross_section_movement_id,
-            wing_cross_section_movement,
-        ) in enumerate(self.wing_cross_section_movements):
-
-            # Generate this WingCrossSection's vector of WingCrossSections
-            # representing its changing state at each time step.
-            this_wing_cross_sections_list_of_wing_cross_sections = np.array(
-                wing_cross_section_movement.generate_wing_cross_sections(
-                    num_steps=num_steps, delta_time=delta_time
-                )
+            # Create an empty 2D ndarray that will hold each of the Wings's
+            # WingCrossSection's vector of WingCrossSections representing its changing
+            # state at each time step. The first index denotes a particular base
+            # WingCrossSection, and the second index denotes the time step.
+            wing_cross_sections = np.empty(
+                (len(self.wing_cross_section_movements), num_steps), dtype=object
             )
 
-            # Add this vector the Wing's 2D ndarray of WingCrossSections'
-            # WingCrossSections.
-            wing_cross_sections[wing_cross_section_movement_id, :] = (
-                this_wing_cross_sections_list_of_wing_cross_sections
+            # Iterate through the WingCrossSectionMovements.
+            for (
+                wing_cross_section_movement_id,
+                wing_cross_section_movement,
+            ) in enumerate(self.wing_cross_section_movements):
+
+                # Generate this WingCrossSection's vector of WingCrossSections
+                # representing its changing state at each time step.
+                this_wing_cross_sections_list_of_wing_cross_sections = np.array(
+                    wing_cross_section_movement.generate_wing_cross_sections(
+                        num_steps=num_steps, delta_time=delta_time
+                    )
+                )
+
+                # Add this vector the Wing's 2D ndarray of WingCrossSections'
+                # WingCrossSections.
+                wing_cross_sections[wing_cross_section_movement_id, :] = (
+                    this_wing_cross_sections_list_of_wing_cross_sections
+                )
+
+            # Create an empty list to hold each time step's Wing.
+            wings = []
+
+            # Get the non-changing Wing attributes.
+            this_name = self.base_wing.name
+            this_symmetric = self.base_wing.symmetric
+            this_mirror_only = self.base_wing.mirror_only
+            this_symmetryNormal_G = self.base_wing.symmetryNormal_G
+            this_symmetryPoint_G_Cg = self.base_wing.symmetryPoint_G_Cg
+            this_num_chordwise_panels = self.base_wing.num_chordwise_panels
+            this_chordwise_spacing = self.base_wing.chordwise_spacing
+
+            # Iterate through the time steps.
+            for step in range(num_steps):
+                thisLer_Gs_Cgs = listLer_Gs_Cgs[:, step]
+                theseAngles_Gs_to_Wn_ixyz = listAngles_Gs_to_Wn_ixyz[:, step]
+                these_wing_cross_sections = list(wing_cross_sections[:, step])
+
+                # Make a new Wing for this time step.
+                this_wing = geometry.wing.Wing(
+                    wing_cross_sections=these_wing_cross_sections,
+                    name=this_name,
+                    Ler_Gs_Cgs=thisLer_Gs_Cgs,
+                    angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
+                    symmetric=this_symmetric,
+                    mirror_only=this_mirror_only,
+                    symmetryNormal_G=this_symmetryNormal_G,
+                    symmetryPoint_G_Cg=this_symmetryPoint_G_Cg,
+                    num_chordwise_panels=this_num_chordwise_panels,
+                    chordwise_spacing=this_chordwise_spacing,
+                )
+
+                # Add this new Wing to the list of Wings.
+                wings.append(this_wing)
+
+            return wings
+
+        else :
+            wing_cross_sections = np.empty(
+                (len(self.wing_cross_section_movements), num_steps), dtype=object
             )
 
-        # Create an empty list to hold each time step's Wing.
-        wings = []
+            # Iterate through the WingCrossSectionMovements.
+            for (
+                wing_cross_section_movement_id,
+                wing_cross_section_movement,
+            ) in enumerate(self.wing_cross_section_movements):
 
-        # Get the non changing Wing attributes.
-        this_name = self.base_wing.name
-        this_symmetric = self.base_wing.symmetric
-        this_mirror_only = self.base_wing.mirror_only
-        this_symmetryNormal_G = self.base_wing.symmetryNormal_G
-        this_symmetryPoint_G_Cg = self.base_wing.symmetryPoint_G_Cg
-        this_num_chordwise_panels = self.base_wing.num_chordwise_panels
-        this_chordwise_spacing = self.base_wing.chordwise_spacing
+                # Generate this WingCrossSection's vector of WingCrossSections
+                # representing its changing state at each time step.
+                this_wing_cross_sections_list_of_wing_cross_sections = np.array(
+                    wing_cross_section_movement.generate_wing_cross_sections(
+                        num_steps=num_steps, delta_time=delta_time
+                    )
+                )
 
-        # Iterate through the time steps.
-        for step in range(num_steps):
-            thisLer_Gs_Cgs = listLer_Gs_Cgs[:, step]
-            theseAngles_Gs_to_Wn_ixyz = listAngles_Gs_to_Wn_ixyz[:, step]
-            these_wing_cross_sections = list(wing_cross_sections[:, step])
+                # Add this vector the Wing's 2D ndarray of WingCrossSections'
+                # WingCrossSections.
+                wing_cross_sections[wing_cross_section_movement_id, :] = (
+                    this_wing_cross_sections_list_of_wing_cross_sections
+                )
 
-            # Make a new Wing for this time step.
-            this_wing = geometry.wing.Wing(
-                wing_cross_sections=these_wing_cross_sections,
-                name=this_name,
-                Ler_Gs_Cgs=thisLer_Gs_Cgs,
-                angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
-                symmetric=this_symmetric,
-                mirror_only=this_mirror_only,
-                symmetryNormal_G=this_symmetryNormal_G,
-                symmetryPoint_G_Cg=this_symmetryPoint_G_Cg,
-                num_chordwise_panels=this_num_chordwise_panels,
-                chordwise_spacing=this_chordwise_spacing,
-            )
+            # Create an empty list to hold each time step's Wing.
+            wings = []
 
-            # Add this new Wing to the list of Wings.
-            wings.append(this_wing)
+            # Get the non-changing Wing attributes.
+            this_name = self.base_wing.name
+            this_symmetric = self.base_wing.symmetric
+            this_mirror_only = self.base_wing.mirror_only
+            this_symmetryNormal_G = self.base_wing.symmetryNormal_G
+            this_symmetryPoint_G_Cg = self.base_wing.symmetryPoint_G_Cg
+            this_num_chordwise_panels = self.base_wing.num_chordwise_panels
+            this_chordwise_spacing = self.base_wing.chordwise_spacing
+            data = self.base_wing.wing_cross_sections[0].airfoil.data
+            list_trackers = self.base_wing.wing_cross_sections[0].airfoil.list_trackers
 
-        return wings
+            # Iterate through the time steps.
+            for step in range(num_steps):
+                A_airfoil = geometry.airfoil_creation.Real_Airfoil(data, step, "A", list_trackers)
+                thisLer_Gs_Cgs = self.base_wing.Ler_Gs_Cgs + np.array(A_airfoil.get_relative_transform()[0])
+                theseAngles_Gs_to_Wn_ixyz = self.base_wing.angles_Gs_to_Wn_ixyz + np.array(A_airfoil.get_relative_transform()[1])
+                these_wing_cross_sections = list(wing_cross_sections[:, step])
+
+
+                # Make a new Wing for this time step.
+                this_wing = geometry.wing.Wing(
+                    wing_cross_sections=these_wing_cross_sections,
+                    name=this_name,
+                    Ler_Gs_Cgs=thisLer_Gs_Cgs,
+                    angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
+                    symmetric=this_symmetric,
+                    mirror_only=this_mirror_only,
+                    symmetryNormal_G=this_symmetryNormal_G,
+                    symmetryPoint_G_Cg=this_symmetryPoint_G_Cg,
+                    num_chordwise_panels=this_num_chordwise_panels,
+                    chordwise_spacing=this_chordwise_spacing,
+                )
+
+                # Add this new Wing to the list of Wings.
+                wings.append(this_wing)
+
+            return wings
 
     @property
     def max_period(self) -> float:

@@ -59,6 +59,9 @@ class Airfoil:
         resample: bool | np.bool_ = True,
         n_points_per_side: int = 400,
         _trust: object | None = None,
+        data=None,
+        column=None,
+        list_trackers=None
     ) -> None:
         """The initialization method.
 
@@ -85,6 +88,13 @@ class Airfoil:
             outline will have a total number of points equal to (2 * n_points_per_side)
             - 1. I highly recommend setting this to at least 100. The default value is
             400.
+        :param data: array
+            Data of Optitrack.
+        :param column: str
+            Column index in the OptiTrack data file that contains the airfoil shape
+            data.
+        :param list_trackers: list of str
+            List of tracker names to extract the airfoil shape.
         :return: None
         """
         self.name = _parameter_validation.str_return_str(name, "name")
@@ -113,6 +123,9 @@ class Airfoil:
         # axes, relative to the leading point). It will be set by _populate_mcl.
         self.mcl_A_lp: np.ndarray | None = None
         self._populate_mcl()
+        self.data = data
+        self.column = column
+        self.list_trackers = list_trackers
 
     # TODO: In the future, if adding control surfaces becomes more important,
     #  we may want to rework this method. Using this method we need to artificially

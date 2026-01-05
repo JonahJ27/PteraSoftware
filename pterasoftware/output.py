@@ -91,7 +91,6 @@ _marker_size = 8
 # Calculate the normalized spacing between the markers for the results plots.
 _marker_spacing = 1.0 / _num_markers
 
-
 # TEST: Consider adding unit tests for this function.
 # TEST: Assess how comprehensive this function's integration tests are and update or
 #  extend them if needed.
@@ -106,6 +105,7 @@ def draw(
     show_wake_vortices: bool | np.bool_ = False,
     save: bool | np.bool_ = False,
     testing: bool | np.bool_ = False,
+    track_point=None
 ) -> None:
     """Draws a solver's Airplane(s).
 
@@ -357,15 +357,18 @@ def animate(
     show_wake_vortices: bool | np.bool_ = False,
     save: bool | np.bool_ = False,
     testing: bool | np.bool_ = False,
+    fake_solver=None,
+    track_point=None
 ) -> None:
     """Animates an UnsteadyRingVortexLatticeMethodSolver's Airplane(s).
 
     :param unsteady_solver: The UnsteadyRingVortexLatticeMethodSolver whose Airplane(s)
         will be animated.
     :param scalar_type: Determines how to color the Panels. Setting this to None colors
-        the Panels uniformly. If the solver has been run, it can also be "induced drag",
-        "side force", or "lift", which respectively use each Panel's induced drag, side
-        force, and lift coefficient. The default is None.
+        the Panels uniformly. If the solver has been run, it can also be "induced drag", 
+        "side force","lift", "difference position", "difference lift", "difference induced drag" or "difference side force",
+        which respectively use each Panel's induced drag, side force, and lift
+        coefficient and their difference with respect to the first Airplane The default is None.
     :param show_wake_vortices: Set this to True to show any wake RingVortices. If True,
         the solver must have already been run. Can be a bool or a numpy bool and will be
         converted internally to a bool. The default is False.
@@ -392,9 +395,9 @@ def animate(
             )
 
         scalar_type = _parameter_validation.str_return_str(scalar_type, "scalar_type")
-        if scalar_type not in ("induced drag", "side force", "lift"):
+        if scalar_type not in ("induced drag", "side force", "lift", "difference position", "difference lift", "difference induced drag", "difference side force"):
             raise ValueError(
-                'scalar_type must be None, "induced drag", "side force", or "lift".'
+                'scalar_type must be None, "induced drag", "side force", "difference position", "difference lift", "difference induced drag", "difference side force", or "lift".'
             )
 
     show_wake_vortices = _parameter_validation.boolLike_return_bool(
@@ -450,6 +453,9 @@ def animate(
     min_scalar = 0.0
     max_scalar = 0.0
 
+    if scalar_type in ("difference position", "difference lift", "difference induced drag", "difference side force") and fake_solver is None:
+        raise ValueError("scalar_type='difference' requires fake_solver=...")
+
     # If coloring the Panels based on scalars, gather all the scalars across all the
     # time steps and Airplanes. These will be used to set the color map limits.
     if scalar_type is not None:
@@ -458,6 +464,8 @@ def animate(
                 airplanes,
                 scalar_type,
                 unsteady_solver.steady_problems[step_id].operating_point.qInf__E,
+                step_id,
+                fake_solver
             )
             all_scalars = np.hstack((all_scalars, scalars_to_add))
 
@@ -494,6 +502,8 @@ def animate(
             step_airplanes[0],
             scalar_type,
             unsteady_solver.steady_problems[0].operating_point.qInf__E,
+            0,
+            fake_solver
         )
 
         _plot_scalars(
@@ -516,7 +526,7 @@ def animate(
         )
 
     # Set the Plotter's background color.
-    plotter.set_background(color=_plotter_background_color)  # type: ignore[call-arg]
+    plotter.set_background(color=_plotter_background_color)
 
     # If not testing, show the Plotter with the first time step, and print a message
     # to the console on how to adjust the view and start the animation. If testing,
@@ -597,6 +607,8 @@ def animate(
                 airplanes,
                 scalar_type,
                 unsteady_solver.steady_problems[current_step].operating_point.qInf__E,
+                current_step,
+                fake_solver
             )
 
             _plot_scalars(
@@ -618,17 +630,24 @@ def animate(
                 smooth_shading=False,
             )
 
-        # If saving, append a WebP Image of this frame to the list of Images. To do
-        # so, take a screenshot, convert it to a ndarray, and convert that to an Image.
+        if track_point is not None:
+            wing_index, x_norm, y_norm = track_point
+            _add_tracking_point(
+                plotter,
+                airplanes[0],   # avion à ce step
+                wing_index,
+                x_norm,
+                y_norm
+            )
+
+        # If saving, append a WebP Image of this frame to the list of Images.
         if save:
             images.append(
                 webp.Image.fromarray(
-                    np.array(
-                        plotter.screenshot(
-                            filename=None,
-                            transparent_background=True,
-                            return_img=True,
-                        )
+                    plotter.screenshot(
+                        filename=None,
+                        transparent_background=True,
+                        return_img=True,
                     )
                 )
             )
@@ -1345,6 +1364,8 @@ def _get_scalars(
     airplanes: list[geometry.airplane.Airplane],
     scalar_type: str,
     qInf__E: float,
+    step = None,
+    fake_solver=None,
 ) -> np.ndarray:
     """Returns the load coefficient values from a SteadyProblem's Airplanes' Wings'
     Panels.
@@ -1391,8 +1412,67 @@ def _get_scalars(
                     )
 
                     scalars = np.hstack((scalars, this_lift_coefficient))
+                
+    if scalar_type in ("difference position", "difference lift", "difference side force", "difference induced drag") :
 
-    # Return the resulting ndarray of scalars.
+        if fake_solver is None:
+            raise ValueError("scalar_type='difference' requires fake_solver=...")
+
+
+        airplanes_fake = fake_solver.steady_problems[step].airplanes
+
+        for airplane_r, airplane_f in zip(airplanes, airplanes_fake):
+            for wing_r, wing_f in zip(airplane_r.wings, airplane_f.wings):
+                for pR, pF in zip(np.ravel(wing_r.panels), np.ravel(wing_f.panels)):
+
+                    if scalar_type == "difference lift":
+                        d = -(
+                                -pR.forces_W[2] / qInf__E / pR.area
+                            ) - (
+                                -pF.forces_W[2] / qInf__E / pF.area
+                            )
+                        
+                        scalars = np.hstack((scalars, d))
+
+                    if scalar_type == "difference side force":
+                        d = -(
+                                pR.forces_W[1] / qInf__E / pR.area
+                            ) - (
+                                pF.forces_W[1] / qInf__E / pF.area
+                            )
+                        scalars = np.hstack((scalars, d))
+
+                    if scalar_type == "difference induced drag":
+                        d = -(
+                                -pR.forces_W[0] / qInf__E / pR.area
+                            ) - (
+                                -pF.forces_W[0] / qInf__E / pF.area
+                            )
+                    
+                        scalars = np.hstack((scalars, d))
+     
+
+                    if scalar_type == "difference position":
+
+                        R00 = np.asarray(pR.Flpp_GP1_CgP1)
+                        R10 = np.asarray(pR.Frpp_GP1_CgP1)
+                        R01 = np.asarray(pR.Blpp_GP1_CgP1)
+                        R11 = np.asarray(pR.Brpp_GP1_CgP1)
+
+                        F00 = np.asarray(pF.Flpp_GP1_CgP1)
+                        F10 = np.asarray(pF.Frpp_GP1_CgP1)
+                        F01 = np.asarray(pF.Blpp_GP1_CgP1)
+                        F11 = np.asarray(pF.Brpp_GP1_CgP1)
+
+                        d = np.mean([
+                            np.linalg.norm(R00 - F00),
+                            np.linalg.norm(R10 - F10),
+                            np.linalg.norm(R01 - F01),
+                            np.linalg.norm(R11 - F11),
+                        ]) * 10**3
+
+
+                        scalars = np.hstack((scalars, d))
     return scalars
 
 
@@ -1426,7 +1506,7 @@ def _plot_scalars(
     :return: None
     """
     scalar_bar_args = dict(
-        title=scalar_type.title() + " Coefficient",
+        title=scalar_type.title() + "(mm)" if scalar_type=="difference position" else scalar_type.title() + " Coefficient",
         title_font_size=_bar_title_font_size,
         label_font_size=_bar_label_font_size,
         width=_bar_width,
@@ -1459,3 +1539,178 @@ def _plot_scalars(
         viewport=True,
         color=_text_color,
     )
+
+def _add_tracking_point(plotter, airplane, wing_index, x_norm, y_norm):
+    """
+    Ajoute un petit point rouge sur l’aile, à la position normalisée donnée.
+    Utilise une interpolation bilinéaire des sommets du panneau.
+    """
+    wing = airplane.wings[wing_index]
+
+    # Localiser panneau + interpolation
+    Nx = wing.num_chordwise_panels
+    Ny = wing.num_spanwise_panels
+
+    i = int(x_norm * Nx)
+    j = int(y_norm * Ny)
+    if i == Nx: i -= 1
+    if j == Ny: j -= 1
+
+    u = x_norm * Nx - i
+    v = y_norm * Ny - j
+
+    panel = wing.panels[i, j]
+
+    p00 = panel.Flpp_GP1_CgP1
+    p10 = panel.Frpp_GP1_CgP1
+    p01 = panel.Blpp_GP1_CgP1
+    p11 = panel.Brpp_GP1_CgP1
+
+    point = ((1 - u) * (1 - v) * p00
+            + u * (1 - v) * p10
+            + (1 - u) * v * p01
+            + u * v * p11)
+
+    sphere = pv.Sphere(radius=5, center=point)
+    plotter.add_mesh(sphere, color="red")
+
+
+def plot_wing_loads_versus_time(
+    unsteady_solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    airplane_index: int = 0,
+    wing_index: int = 0,
+    show: bool = True,
+    save: bool = False,
+):
+
+
+    """
+    This function plots the forces and moments of a wing as a function of time.
+
+    :param unsteady_solver: UnsteadyRingVortexLatticeMethodSolver
+
+        The UnsteadyRingVortexLatticeMethodSolver from which to retrieve the wing loads.
+
+    :param airplane_index: int, optional
+
+        The index of the airplane in the list of airplanes of the UnsteadySolver.
+
+    :param wing_index: int, optional
+
+        The index of the wing in the list of wings of the airplane.
+
+    :param show: bool, optional
+
+        Set this to True to show the plots. It can be a boolean or a NumPy boolean
+        and will be converted internally to a boolean. The default is True.
+
+    :param save: bool, optional
+
+        Set this to True to save the plots as PNGs. It can be a boolean or a
+        NumPy boolean and will be converted internally to a boolean. The default is
+        True.
+
+    :return: None
+    """
+    if not isinstance(
+        unsteady_solver,
+        unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    ):
+        raise TypeError("unsteady_solver must be an UnsteadyRingVortexLatticeMethodSolver.")
+
+    first_results_step = unsteady_solver.first_results_step
+    num_steps = unsteady_solver.num_steps
+    delta_time = unsteady_solver.delta_time
+
+    num_steps_to_average = num_steps - first_results_step
+    times = np.linspace(
+        first_results_step * delta_time,
+        (num_steps - 1) * delta_time,
+        num_steps_to_average,
+    )
+
+    # Storage arrays
+    forces_W = np.zeros((3, num_steps_to_average))
+    moments_W_CgP1 = np.zeros((3, num_steps_to_average))
+
+    result_id = 0
+
+    for step in range(first_results_step, num_steps):
+        airplane = unsteady_solver.steady_problems[step].airplanes[airplane_index]
+        wing = airplane.wings[wing_index]
+
+        F = np.zeros(3)
+        M = np.zeros(3)
+
+        for panel in np.ravel(wing.panels):
+            F += panel.forces_W
+            M += panel.moments_W_CgP1
+
+        forces_W[:, result_id] = F
+        moments_W_CgP1[:, result_id] = M
+        result_id += 1
+
+    # === PLOTTING ===
+    fig_f, ax_f = plt.subplots()
+    fig_m, ax_m = plt.subplots()
+
+    ax_f.plot(times, -forces_W[0], label="Drag")
+    ax_f.plot(times,  forces_W[1], label="Side Force")
+    ax_f.plot(times, -forces_W[2], label="Lift")
+
+    ax_m.plot(times, moments_W_CgP1[0], label="Roll")
+    ax_m.plot(times, moments_W_CgP1[1], label="Pitch")
+    ax_m.plot(times, moments_W_CgP1[2], label="Yaw")
+
+    ax_f.set_xlabel("Time (s)")
+    ax_f.set_ylabel("Force (N)")
+    ax_f.set_title(f"Wing {wing_index} – Forces vs Time")
+    ax_f.legend()
+
+    ax_m.set_xlabel("Time (s)")
+    ax_m.set_ylabel("Moment (N·m)")
+    ax_m.set_title(f"Wing {wing_index} – Moments vs Time")
+    ax_m.legend()
+
+    if save:
+        fig_f.savefig(f"Wing_{wing_index}_Forces.png", dpi=300)
+        fig_m.savefig(f"Wing_{wing_index}_Moments.png", dpi=300)
+
+    if show:
+        plt.show()
+    else:
+        plt.close("all")
+        
+import csv
+
+def export_data(solver, filename='data.csv', i=0, wing_index=0):
+    """Exporte les coordonnées des sommets de panneaux à chaque step dans un fichier CSV.
+
+    :param solver: 
+        Le solveur unsteady déjà exécuté (après un .run()).
+    :param filename: str, optional
+        Nom du fichier CSV de sortie.
+    :param i: int, optional
+        Index de l'avion à exporter (par défaut 0 pour le premier avion).
+    :param wing_index: int, optional
+        Index de l'aile à exporter (par défaut 0 pour la première aile).
+    """
+    movement = solver.unsteady_problem.movement
+
+    with open(filename, "w", newline="") as file:
+        writer = csv.writer(file)
+   
+        writer.writerow(["step", "airplane", "wing", "panel_id", "vertex_name", "x", "y", "z"])
+
+        for step in range (movement.num_steps):
+            airplane = movement.airplanes[i][step]
+            for wing in airplane.wings[wing_index: wing_index + 2]:
+                panels = np.ravel(wing.panels)
+                for panel_id, panel in enumerate(panels):
+                    for vertex_name in ["Flpp_GP1_CgP1", "Frpp_GP1_CgP1",
+                                        "Brpp_GP1_CgP1", "Blpp_GP1_CgP1"]:
+                        vertex = getattr(panel, vertex_name)
+                        writer.writerow([
+                            step, airplane.name, wing.name, panel_id,
+                            vertex_name, vertex[0], vertex[1], vertex[2]
+                        ])
