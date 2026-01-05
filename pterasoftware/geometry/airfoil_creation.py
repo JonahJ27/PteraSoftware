@@ -237,6 +237,7 @@ class Real_Airfoil:
 
             Lp_Wcsp_Lpp = self.get_Lp() 
         
+        
         elif idx == len(extract_columns(self.list_trackers)) - 1:
             parent_col = sections[idx - 1]
 
