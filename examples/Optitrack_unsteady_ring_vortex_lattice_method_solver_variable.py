@@ -75,8 +75,7 @@ example_airplane = ps.geometry.airplane.Airplane(
         )
     ],
     name="Example Airplane",
-    Cg_E_CgP1=(0.0, 0.0, 0.0),
-    angles_E_to_B_izyx=(0.0, 0.0, 0.0),
+    Cg_GP1_CgP1=(0.0, 0.0, 0.0),
     weight=5,
     s_ref=None,
     c_ref=None,
@@ -153,14 +152,10 @@ reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
 airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
     base_airplane=example_airplane,
     wing_movements=[main_wing_movement, reflected_main_wing_movement],
-    ampCg_E_CgP1=(0.0, 0.0, 0.0),
-    periodCg_E_CgP1=(0.0, 0.0, 0.0),
-    spacingCg_E_CgP1=("sine", "sine", "sine"),
-    phaseCg_E_CgP1=(0.0, 0.0, 0.0),
-    ampAngles_E_to_B_izyx=(0.0, 0.0, 0.0),
-    periodAngles_E_to_B_izyx=(0.0, 0.0, 0.0),
-    spacingAngles_E_to_B_izyx=("sine", "sine", "sine"),
-    phaseAngles_E_to_B_izyx=(0.0, 0.0, 0.0),
+    ampCg_GP1_CgP1=(0.0, 0.0, 0.0),
+    periodCg_GP1_CgP1=(0.0, 0.0, 0.0),
+    spacingCg_GP1_CgP1=("sine", "sine", "sine"),
+    phaseCg_GP1_CgP1=(0.0, 0.0, 0.0),
 )
 
 

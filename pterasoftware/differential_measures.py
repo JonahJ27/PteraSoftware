@@ -175,7 +175,7 @@ class Analysis:
         return ps.geometry.airplane.Airplane(
             wings=[simulated_wing],
             name="simulatedAirplane",
-            Cg_E_CgP1=(0.0, 0.0, 0.0),
+            Cg_GP1_CgP1=(0.0, 0.0, 0.0),
             angles_E_to_B_izyx=self.base_airplane.angles_E_to_B_izyx,
             weight=self.base_airplane.weight,
             s_ref=self.base_airplane.s_ref,
@@ -368,15 +368,10 @@ class Analysis:
         airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
             base_airplane=simulated_airplane,
             wing_movements=[maine_wing_movement, reflected_main_wing_movement],
-            ampCg_E_CgP1=(0.0, 0.0, 0.0),
-            periodCg_E_CgP1=(0.0, 0.0, 0.0),
-            spacingCg_E_CgP1=("sine", "sine", "sine"),
-            phaseCg_E_CgP1=(0.0, 0.0, 0.0),
-
-            ampAngles_E_to_B_izyx=(0.0, 0.0, 0.0),
-            periodAngles_E_to_B_izyx=(0.0, 0.0, 0.0),
-            spacingAngles_E_to_B_izyx=("sine", "sine", "sine"),
-            phaseAngles_E_to_B_izyx=(0.0, 0.0, 0.0)
+            ampCg_GP1_CgP1=(0.0, 0.0, 0.0),
+            periodCg_GP1_CgP1=(0.0, 0.0, 0.0),
+            spacingCg_GP1_CgP1=("sine", "sine", "sine"),
+            phaseCg_GP1_CgP1=(0.0, 0.0, 0.0),
         )
 
         return airplane_movement

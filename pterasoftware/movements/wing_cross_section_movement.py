@@ -698,32 +698,27 @@ class WingCrossSectionMovement:
 
     def generate_wing_cross_sections(
         self,
-        num_steps,
-        delta_time,
-    ):
+        num_steps: int,
+        delta_time: float | int,
+    ) -> list[geometry.wing_cross_section.WingCrossSection]:
         """Creates the WingCrossSection at each time step, and returns them in a list.
 
-        :param num_steps: int
-
-            This is the number of time steps in this movement. It must be a positive
-            int.
-
-        :param delta_time: number
-
-            This is the time between each time step. It must be a positive number (
-            int or float), and will be converted internally to a float. The units are
+        :param num_steps: The number of time steps in this movement. It must be a
+            positive int.
+        :param delta_time: The time between each time step. It must be a positive number
+            (int or float), and will be converted internally to a float. The units are
             in seconds.
-
-        :return: list of WingCrossSections
-
-            This is the list of WingCrossSections associated with this
+        :return: The list of WingCrossSections associated with this
             WingCrossSectionMovement.
         """
-        num_steps = _parameter_validation.positive_int_return_int(
-            num_steps, "num_steps"
+        num_steps = _parameter_validation.int_in_range_return_int(
+            num_steps,
+            "num_steps",
+            min_val=1,
+            min_inclusive=True,
         )
-        delta_time = _parameter_validation.positive_number_return_float(
-            delta_time, "delta_time"
+        delta_time = _parameter_validation.number_in_range_return_float(
+            delta_time, "delta_time", min_val=0.0, min_inclusive=False
         )
 
         # If optitrack is not None, then use the optitrack data to generate the
