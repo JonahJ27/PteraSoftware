@@ -182,7 +182,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=300,
+    num_steps=10,
 )
 
 
@@ -226,20 +226,20 @@ example_solver.run(
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-# ps.output.animate(
-#     unsteady_solver=example_solver,
-#     scalar_type="lift",
-#     show_wake_vortices=True,
-#     save=False,
-# )
+ps.output.animate(
+    unsteady_solver=example_solver,
+    scalar_type="lift",
+    show_wake_vortices=True,
+    save=False,
+)
 
 
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
-analysis = ps.differential_measures.Analysis(example_solver,5)
+# analysis = ps.differential_measures.Analysis(example_solver,5)
 
-analysis.plot_difference_position_versus_time()
+# analysis.plot_difference_position_versus_time()
 # analysis.plot_difference_position_versus_time()  #5 is the number of your section
 
 
