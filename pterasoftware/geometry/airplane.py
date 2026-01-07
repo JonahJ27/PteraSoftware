@@ -715,6 +715,9 @@ class Airplane:
                     outline_A_lp=np.copy(airfoil.outline_A_lp),
                     resample=airfoil.resample,
                     n_points_per_side=airfoil.n_points_per_side,
+                    data=airfoil.data,   
+                    column=airfoil.column,       
+                    list_trackers=airfoil.list_trackers
                 )
 
                 if wing_cross_section.control_surface_symmetry_type == "asymmetric":

@@ -200,10 +200,9 @@ example_solver = (
 
 # Run the solver.
 example_solver.run(
-    logging_level="Warning",
     prescribed_wake=True,
+    show_progress=True,
 )
-
 # ps.output.print_results(example_solver)
 # ps.output.plot_results_versus_time(
 #     unsteady_solver=example_solver,
@@ -211,11 +210,10 @@ example_solver.run(
 #     save=False,
 # )
 
-# ps.output.plot_wing_loads_versus_time(
-#     unsteady_solver=example_solver,
-#     show=True,
-#     save=False,
-# )
+ps.output.plot_wing_loads_versus_time(
+    unsteady_solver=example_solver,
+    save=False,
+)
 
 # Call the animate function on the solver. This produces a GIF of the wake being
 # shed. The GIF is saved in the same directory as this script. Press "q",
@@ -225,7 +223,7 @@ ps.output.animate(
     unsteady_solver=example_solver,
     scalar_type="lift",
     show_wake_vortices=True,
-    save=False,
+    save=True,
 )
 
 
@@ -237,8 +235,6 @@ ps.output.animate(
 
 # analysis.plot_difference_position_versus_time()
 # analysis.plot_difference_position_versus_time()  #5 is the number of your section
-
-
 
 # ps.output.animate(
 #     unsteady_solver=example_solver,

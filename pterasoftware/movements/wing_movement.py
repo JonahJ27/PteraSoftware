@@ -73,7 +73,7 @@ class WingMovement:
             "sine",
         ),
         phaseAngles_Gs_to_Wn_ixyz: np.ndarray | Sequence[float | int] = (0.0, 0.0, 0.0),
-        optitrack = None,
+        optitrack=False,
     ) -> None:
         """The initialization method.
 
@@ -146,6 +146,8 @@ class WingMovement:
             internally. Each element must be 0.0 if the corresponding element in
             ampAngles_Gs_to_Wn_ixyz is 0.0 and non zero if not. The units are in
             degrees. The default is (0.0, 0.0, 0.0).
+        :param optitrack: A boolean to specify whether to use OptiTrack data for the wing movement. 
+            If set to True, the other parameters related to motion will be ignored except for base_wing.
         """
         if not isinstance(base_wing, geometry.wing.Wing):
             raise TypeError("base_wing must be a Wing.")
@@ -323,8 +325,9 @@ class WingMovement:
         delta_time = _parameter_validation.number_in_range_return_float(
             delta_time, "delta_time", min_val=0.0, min_inclusive=False
         )
-
-        if self.optitrack is None:
+        
+        # If optitrack is False, then use the oscillating functions to generate the movement of the Wing
+        if self.optitrack is False:
             # Generate oscillating values for each dimension of Ler_Gs_Cgs.
             listLer_Gs_Cgs = np.zeros((3, num_steps), dtype=float)
             for dim in range(3):
@@ -460,6 +463,8 @@ class WingMovement:
 
             return wings
 
+        # If optitrack is True, then use the optitrack data to generate the movement of the Wing. The movement corresponds to the movement of the root WingCrossSection. 
+        # This allows the root WingCrossSection to be defined motionless (as it needs to be).
         else :
             wing_cross_sections = np.empty(
                 (len(self.wing_cross_section_movements), num_steps), dtype=object

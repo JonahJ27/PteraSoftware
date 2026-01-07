@@ -1,26 +1,22 @@
-"""This module contains the functions for creating airfoils.
+"""Contains functions for creating airfoils.
 
-This module contains the following classes:
-    Real_Airfoil: A class to handle airfoil shape creation and analysis from OptiTrack data.
+**Contains the following classes:**
 
-This module contains the following functions:
-    
-    load_data: Load and preprocess the OptiTrack data.
+Real_Airfoil: A class to handle airfoil shape creation and analysis from OptiTrack data.
 
-    extract_column: Extract the airfoil columns.
-        
-    get_airfoil_shape: Create the airfoil shape from OptiTrack data.
-    
-    get_chord_length: Get the length of the chord of the airfoil.
-    
-    get_chord_unit: Get the chord unit vector for this airfoil section.
-    
-    get_Lp: Get the coordinates Lp, Wcsp, Lpp of the airfoil.
-    
-    parent_axes: Give the relative position and orientation [angleX, angleY, angleZ] in degrees,
+**Contains the following functions:**
 
-    get_position: Give the relative position and orientation [angleX, angleY, angleZ] in degrees,
-    
+load_data: Load and preprocess the OptiTrack data from an OptiTrack CSV file.
+
+extract_columns: Extract the column identifiers corresponding to the airfoil sections.
+
+Real_Airfoil.get_airfoil_shape: Create the normalized airfoil shape from OptiTrack tracker points.
+
+Real_Airfoil.get_chord_length: Get the chord length of the current airfoil section.
+
+Real_Airfoil.get_chord_unit: Get the unit vector along the chord direction.
+
+Real_Airfoil.get_relative_transform: Get the relative position and orientation [angleX, angleY, angleZ] (in degrees) of this airfoil section relative to its parent or neighbor section.
 """
 
 import numpy as np
@@ -28,35 +24,37 @@ import pandas as pd
 
 
 def load_data(optitrack_file, list_trackers, right=True):
-    
 
-    """
-    Load and preprocess the OptiTrack data.
+    """Loads and preprocesses OptiTrack 3D marker data from a CSV file. It returns a
+    (n_frames, n_trackers, 3) array containing the cleaned and reoriented tracker
+    coordinates, expressed in a consistent right-handed reference frame aligned with
+    the airfoil longitudinal axis.
 
-    Parameters
-    ----------
-    optitrack_file : str
-        The path to the OptiTrack CSV file.
+    The function performs several steps: (1) reading and converting OptiTrack CSV
+    numeric columns, (2) reshaping the raw data into a tracker-by-frame structure,
+    (3) computing a local reference frame based on the A1 and Af markers to define the
+    chord direction, (4) constructing an orthonormal basis (X,Y,Z) depending on the
+    `right` flag, (5) rotating all coordinates into this frame, and (6) recentering the
+    system so that marker A1 corresponds to the origin. The output is a consistent,
+    time-resolved dataset suitable for airfoil reconstruction.
 
-    list_trackers : list of str
-        The list of trackers in the OptiTrack file.
-
-    right : bool, optional
-        Whether to define the positive x-axis direction as right or left. The default is True.
-
-    Returns
-    -------
-    data : numpy.ndarray of shape (n_frames, n_trackers, 3)
-        The preprocessed OptiTrack data.
+    :param optitrack_file: The path to the OptiTrack CSV file. Only numerical
+        marker columns are used; headers and units rows are ignored.
+    :param list_trackers: A list of tracker names describing the order of
+        markers in the file (e.g., ["A1","A2","B1",...]). Must match the column
+        structure of the CSV file.
+    :param right: Boolean flag indicating if the wing is the right wing (True) or
+        the left wing (False). 
+    :return: A (n_frames, n_trackers, 3) ndarray of floats containing the processed
+        tracker coordinates expressed in the normalized right-handed reference frame.
 
     Notes
     -----
-    The data is preprocessed by subtracting the mean of the A1 and Af trackers from the data, and then by applying a rotation matrix to align the positive x-axis direction to the right or left. The data is then shifted so that the mean of the A1 tracker is at (0, 0, 0) and the mean of the Af tracker is at (d, 0, 0), where d is the distance between the mean of the A1 and Af trackers. Finally, the data is shifted so that the Z1 tracker is at (0, 0, 0) and the Z2 tracker is at (d, 0, 0).
-
-    The list of trackers should include all the real trackers (A1, A2, ..., An, B1, B2, ..., Bn, ..., 1, 2, ..., n). 
-
-    The right parameter is used to define the positive x-axis direction. If right is True, the positive x-axis direction is defined as right. If right is False, the positive x-axis direction is defined as left. The default is True.
-   
+    - The A1 → Af vector defines the local X axis (chord direction).
+    - The Y axis is constructed using the relative positions of the last tracked
+      section markers and optionally flipped depending on `right`.
+    - The Z axis is computed as the cross product ensuring orthonormality.
+    - All coordinates are finally shifted so that A1 lies at the origin for all frames.
     """
     
     data = pd.read_csv(optitrack_file, skiprows=8).iloc[:, 2:].apply(pd.to_numeric, errors='coerce')
@@ -103,18 +101,12 @@ def load_data(optitrack_file, list_trackers, right=True):
     return data
 
 def extract_columns(list_trackers):
-    """
-    Extract the columns from the list of trackers.
+    """Extracts the distinct airfoil section identifiers (A, B, C, …) from the tracker
+    names and returns them in the order they appear.
 
-    Parameters
-    ----------
-    list_trackers : list
-        A list of the trackers used in the airfoil.
+    :param list_trackers: List of tracker names used in the experiment.
 
-    Returns
-    -------
-    list
-        A list of the columns used in the airfoil.
+    :return: A list of unique section letters.
     """
     columns = []
     for tracker in list_trackers:
@@ -127,17 +119,15 @@ class Real_Airfoil:
     """A class to handle airfoil shape creation and analysis from OptiTrack data."""
 
     def __init__(self, data, step, column, list_trackers):
-        """
-        Initialize the Airfoil object.
+        """Initializes an airfoil section by gathering all tracker points belonging to the
+        specified column and computing its chord geometry at the selected time step.
 
-        :param data: array
-            Data of Optitrack.
-        :param step: int
-            Time step index to extract the airfoil shape.
-        :param column: str
-            Column index in the OptiTrack data file that contains the airfoil shape data.
-        :param list_trackers: list of str
-            List of tracker names to extract the airfoil shape.
+        :param data: Processed OptiTrack array shaped (n_frames, n_trackers, 3).
+        :param step: Time index from which to extract the airfoil geometry.
+        :param column: Section identifier selecting which group of trackers to use.
+        :param list_trackers: List of all tracker names in the dataset.
+
+        :return: None.
         """
         self.data = data
         self.step = step
@@ -157,14 +147,12 @@ class Real_Airfoil:
 
     def get_airfoil_shape(self):
 
-        """
-        Get the airfoil shape coordinates in the normalized frame.
+        """Generates the 2D normalized airfoil shape for this section using the measured
+        tracker coordinates, producing a closed profile scaled by chord length.
 
-        Returns
-        -------
-        numpy.ndarray of shape (n_points, 2)
-            The coordinates of the airfoil shape in the normalized frame.
+        :return: A (n_points, 2) ndarray containing the normalized airfoil contour.
         """
+
 
         trackers = self.points / self.chord_length
         origin = trackers[0]
@@ -182,27 +170,36 @@ class Real_Airfoil:
         return np.vstack((prof, profil_sym, [prof[0, 0], prof[0, 1]-1e-5]))
 
     def get_chord_length(self):
-        """Get the length of the chord of the airfoil."""
+        """Returns the chord length of the current airfoil section.
 
+        :return: A float representing the chord length.
+        """
         return self.chord_length
 
     def get_chord_unit(self):
-        """ Get the chord unit vector for this airfoil section. """
+        """Returns the unit vector pointing along the chord direction of this airfoil
+        section.
 
+        :return: A (3,) ndarray containing the chord unit vector.
+        """
         return self.chord_unit
 
     def get_Lp(self):
-        """Get the coordinates Lp, Wcsp, Lpp of the airfoil."""
+        """Returns the 3D coordinates of the reference leading-point tracker for this
+        section.
 
+        :return: A (3,) ndarray giving the leading point position.
+        """
         idx = self.list_trackers.index(self.column + "1")
         return self.data[self.step, idx]
 
     def get_relative_transform(self):
-        """
-        Give the relative position and orientation [angleX, angleY, angleZ] in degrees,
-        following the x-y'-z" convention, with values in the range [-90, 90].
-        """
+        """Computes the relative translation and orientation of this airfoil section with
+        respect to its adjacent section in the wing structure.
 
+        :return: A tuple (translation, angles) containing the relative position and the
+        Euler rotation angles in degrees.
+        """
         sections = ["A", "B", "C", "D", "E", "F", "G",
             "H", "I", "J", "K", "L", "M", "N",
             "O", "P", "Q", "R", "S", "T", "U",

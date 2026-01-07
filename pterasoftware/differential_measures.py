@@ -1,50 +1,61 @@
-"""
-This module provides a full analysis toolbox for comparing real wing kinematics
-(with tracked markers) to a simulated reconstruction using the
-Unsteady Ring Vortex Lattice Method (URVLM) from Ptera Software.
+"""Contains functions for analyzing real wing kinematics from OptiTrack trackers and
+comparing them to a simulated reconstruction using the Unsteady Ring Vortex
+Lattice Method (URVLM) from Ptera Software.
 
-The module contains the following classes:
-    - Analysis: A complete analysis pipeline for extracting real wing movement
-      from tracker data, reconstructing an equivalent periodic motion, building
-      a simulated airplane/movement/problem/solver, and comparing the real and
-      simulated trajectories and aerodynamics.
+**Contains the following classes:**
 
-This module contains the following main functionalities:
+Analysis: A class for extracting real wing motion, reconstructing an equivalent
+simulated motion, and comparing real and simulated aerodynamic behavior.
 
-    Extraction of movement characteristics from tracker data:
-        - amplitude_max, amplitude_min
-        - phase_shift, status_phase
-        - geometric offset (delta)
+**Contains the following functions:**
 
-    Construction of a simulated (“simulated”) airplane and its associated movement
-    designed to mimic the real measured kinematics.
+Analysis.__init__: Initializes the analysis pipeline and builds simulated equivalents.
 
-    Automatic building and execution of a simulated unsteady solver for comparison.
+Analysis.extract_movement_data: Extracts flapping amplitudes and phases from tracker data.
 
-    Trajectory analysis tools:
-        - get_coordinates: Returns 3D coordinates of any normalized point.
-        - get_full_trajectory: Returns time evolution of a point.
-        - compare_trajectories: Real vs simulated difference.
-        - plot_trajectory_3d: Visual comparison in 3D.
-        - plot_difference_position_versus_time: Mean tracking error over time.
+Analysis.build_simulated_airplane: Builds a simulated Airplane identical to the real one.
 
-    Wing section extraction & visualization:
-        - get_section_by_column: Extracts a vertical section of the wing.
-        - plot_section: Down-stroke / Up-stroke comparison of real vs simulated.
+Analysis.build_simulated_movement: Reconstructs a periodic wing movement from extracted parameters.
 
-    Panel force analysis:
-        - get_forces: Returns lift, side-force, or induced drag for one panel.
-        - get_full_forces: Time series of these forces.
-        - compare_forces: Real vs simulated force differences.
-        - plot_panel_forces: Time-series plot for lift, side force and drag.
+Analysis.build_simulated_problem: Builds the simulated UnsteadyProblem.
 
-    Global aerodynamic forces and moments:
-        - compute_forces_over_time: Extracts forces, moments and coefficients
-          at every time step for real or simulated solver.
+Analysis.build_simulated_solver: Builds and runs the simulated unsteady solver.
 
-This module integrates geometry, movement reconstruction, solver execution,
-and multi-level comparison tools for in-depth validation of flapping wing
-kinematics and their aerodynamic signatures.
+Analysis._track_point: Locates a normalized point inside the wing panel grid.
+
+Analysis.get_coordinates: Returns the 3D coordinates of a wing point at a given time step.
+
+Analysis.get_full_trajectory: Returns the full trajectory of a wing point.
+
+Analysis.compare_trajectories: Computes real–simulated trajectory differences.
+
+Analysis.plot_trajectory_3d: Plots real and simulated 3D trajectories.
+
+Analysis.plot_difference_position_versus_time: Plots the mean position error over time.
+
+Analysis.get_section_by_column: Extracts a wing section along a panel column.
+
+Analysis.plot_section: Plots a real and simulated wing section through one flapping cycle.
+
+Analysis.get_forces: Returns aerodynamic scalar forces at a given point.
+
+Analysis.get_full_forces: Returns scalar forces over all time steps.
+
+Analysis.compare_forces: Computes real–simulated force differences.
+
+Analysis.plot_panel_forces: Plots real and simulated lift, side force, and induced drag.
+
+Analysis.compute_forces_over_time: Returns forces, coefficients, moments, and moment coefficients.
+
+Analysis.plot_forces: Plots forces, force coefficients, moments, and moment coefficients.
+
+Analysis.get_wing_data: Returns wing vertex coordinates for all time steps.
+
+Analysis.max_edge_len: Computes the maximum edge length of a triangle.
+
+Analysis.plot_wing: Builds a filtered bisector mesh using Delaunay triangulation.
+
+Analysis.dynamic_wing: Animates real and simulated wing deformation over time.
 """
 
 
@@ -57,55 +68,15 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 class Analysis:
    
     def __init__(self, unsteady_solver,f):
+        """Initializes the Analysis object by extracting the real movement data from an
+        unsteady solver, retrieving the airfoil tracking data, computing motion-related
+        quantities, and preparing all elements required to build a simulated airplane,
+        movement, problem, and solver.
 
+        :param unsteady_solver: The unsteady solver containing the real movement data.
+        :param f: The oscillation frequency of the movement in Hz.
 
-        """
-        Initialization method for the Analysis class.
-
-        Parameters
-        ----------
-        unsteady_solver : UnsteadyRingVortexLatticeMethodSolver
-            The solver object that will be used to extract the real movement data.
-        f : float
-            The frequency of the movement in Hz.
-
-        Attributes
-        ----------
-        solver : UnsteadyRingVortexLatticeMethodSolver
-            The solver object that was used to extract the real movement data.
-        problem : UnsteadyProblem
-            The unsteady problem object that was used to extract the real movement data.
-        movement : Movement
-            The movement object that was used to extract the real movement data.
-        airplane_movements : AirplaneMovement
-            The AirplaneMovement object that was used to extract the real movement data.
-        num_steps : int
-            The number of steps in the movement.
-        delta_time : float
-            The time step of the movement in seconds.
-        base_airplane : Airplane
-            The Airplane object that was used to extract the real movement data.
-        data : dict
-            A dictionary containing the data of the airfoil used in the
-            Airplane object.
-        list_trackers : list
-            A list of the trackers used in the airfoil.
-        f : float
-            The frequency of the movement in Hz.
-        periode : float
-            The period of the movement in seconds.
-        simulated_airplane : Airplane
-            A simulated Airplane object that was used to generate the simulated
-            movement data.
-        simulated_movement : Movement
-            A simulated Movement object that was used to generate the simulated
-            movement data.
-        simulated_problem : UnsteadyProblem
-            A simulated UnsteadyProblem object that was used to generate the simulated
-            movement data.
-        simulated_solver : UnsteadyRingVortexLatticeMethodSolver
-            A simulated UnsteadyRingVortexLatticeMethodSolver object that was used to generate
-            the simulated movement data.
+        :return: None.
         """
         self.solver = unsteady_solver
         self.problem = self.solver.unsteady_problem
@@ -131,19 +102,14 @@ class Analysis:
 
 
     def build_simulated_airplane(self):
-        """
-        Build a simulated Airplane object that is identical to the real Airplane.
+        """Builds a simulated Airplane object that reproduces the geometry and structure of
+        the real airplane while allowing controlled simulated motion.
 
-        Attributes
-        ----------
-        simulated_airplane : Airplane
-            The simulated Airplane object that was built.
+        :param None:
 
-        Returns
-        -------
-        Airplane
-            The simulated Airplane object that was built.
+        :return: A simulated Airplane object with identical geometry to the real model.
         """
+
         real_wing = self.base_airplane.wings
         
 
@@ -184,45 +150,13 @@ class Analysis:
         )
 
     def extract_movement_data(self):
-
-        """
-        Extracts movement data from the given data.
-
-        This method takes the data collected from the trackers and extracts the
-        maximum and minimum amplitudes, dephasage, and status phase.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        This method assumes that the data is collected in the following format:
-        tracker_1: (x, y, z)
-        tracker_2: (x, y, z)
-        ...
-        tracker_n: (x, y, z)
-        where (x, y, z) are the coordinates of the tracker at each time step.
-
-        The method will calculate the maximum and minimum amplitudes, dephasage,
-        and status phase for each tracker, and then calculate the mean of
-        the maximum and minimum amplitudes, dephasage, and status phase for all
+        """Extracts motion parameters (max amplitude, min amplitude, phase shift, status
+        phase) from the tracked airfoil markers and computes their mean values over all
         trackers.
 
-        The results are stored in the following attributes of the class:
+        :param None:
 
-        amplitude_max: float
-            The mean of the maximum amplitudes for all trackers.
-        amplitude_min: float
-            The mean of the minimum amplitudes for all trackers.
-        dephasage: float
-            The mean of the dephasages for all trackers.
-        status_phase: float
-            The mean of the status phases for all trackers.
+        :return: None.
         """
         trackers_1 = [t for t in self.list_trackers if t.endswith("1")]
 
@@ -259,18 +193,12 @@ class Analysis:
 
 
     def build_simulated_movement(self):
+        """Reconstructs a synthetic, periodic movement model from the extracted motion
+        parameters, generating a simulated wing oscillation compatible with PteraSoftware.
 
-        """
-        Reconstruct a simulated movement from the tracked data points.
+        :param None:
 
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        airplane_movement : AirplaneMovement
-            The simulated movement is represented by an AirplaneMovement object.
+        :return: An AirplaneMovement object representing the simulated periodic motion.
         """
         simulated_airplane = self.simulated_airplane
 
@@ -292,7 +220,6 @@ class Analysis:
         phi = np.degrees(phi)
         A = np.degrees(A)
 
-
         main_wing_cross_section_movement = []
         reflected_wing_cross_section_movement = []
 
@@ -304,7 +231,6 @@ class Analysis:
                 periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
                 spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
                 phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-
                 ampAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
                 periodAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
                 spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
@@ -322,7 +248,6 @@ class Analysis:
                     periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
                     spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
                     phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-
                     ampAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),  
                     periodAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
                     spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
@@ -342,7 +267,6 @@ class Analysis:
                 periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 spacingLer_Gs_Cgs=("sine", "sine", "sine"),
                 phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
-
                 ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
                 periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
                 spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
@@ -377,16 +301,12 @@ class Analysis:
         return airplane_movement
     
     def build_simulated_problem(self):
+        """Builds a simulated unsteady aerodynamic problem using the same operating-point
+        movement as the real case but using the simulated Movement created previously.
 
-        """
-        Builds a simulated UnsteadyProblem based on the self.movement attribute.
+        :param None:
 
-        The simulated UnsteadyProblem is based on the same operating point movement as
-        the original, but uses the simulated movement generated by the
-        build_simulated_movement method.
-
-        Returns:
-            UnsteadyProblem: The simulated UnsteadyProblem.
+        :return: A simulated UnsteadyProblem object.
         """
         real_op_mov = self.movement.operating_point_movement
 
@@ -407,14 +327,12 @@ class Analysis:
 
 
     def build_simulated_solver(self):
-        """
-        Builds a simulated UnsteadyRingVortexLatticeMethodSolver based on the self.simulated_problem attribute.
+        """Creates and runs a simulated unsteady vortex-lattice solver corresponding to the
+        previously defined simulated problem.
 
-        The simulated solver is based on the same UnsteadyProblem as the original, but uses
-        the simulated UnsteadyProblem generated by the build_simulated_problem method.
+        :param None:
 
-        Returns:
-            UnsteadyRingVortexLatticeMethodSolver: The simulated UnsteadyRingVortexLatticeMethodSolver.
+        :return: A simulated UnsteadyRingVortexLatticeMethodSolver object.
         """
         solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
             unsteady_problem=self.simulated_problem
@@ -423,30 +341,15 @@ class Analysis:
         return solver
 
     def _track_point(self, airplane, wing_index, x_norm, y_norm):
-        """
-        Private method to track the position of a point on the wing.
+        """Determines which aerodynamic panel contains a normalized point (x_norm, y_norm)
+        on a wing and returns the panel indices and local interpolation coordinates.
 
-        Parameters
-        ----------
-        airplane : Airplane
-            The Airplane object to track the point on.
-        wing_index : int
-            The index of the wing to track the point on.
-        x_norm : float
-            The normalized x-coordinate of the point to track (0 <= x_norm <= 1).
-        y_norm : float
-            The normalized y-coordinate of the point to track (0 <= y_norm <= 1).
+        :param airplane: The Airplane object to track the point on.
+        :param wing_index: Index of the wing.
+        :param x_norm: Normalized chordwise coordinate (0–1).
+        :param y_norm: Normalized spanwise coordinate (0–1).
 
-        Returns
-        -------
-        i : int
-            The index of the chordwise panel containing the point.
-        j : int
-            The index of the spanwise panel containing the point.
-        u : float
-            The normalized x-coordinate of the point within the panel (0 <= u <= 1).
-        v : float
-            The normalized y-coordinate of the point within the panel (0 <= v <= 1).
+        :return: (i, j, u, v) giving panel indices and local coordinates.
         """
         wing = airplane.wings[wing_index]
 
@@ -464,14 +367,19 @@ class Analysis:
 
         return i, j, u, v
     
-
     # spacial coordinates -------------------------------------------------------------------------------------------------------------------------------------------------
 
     def get_coordinates(self, step, x_norm, y_norm, real=True):
-        """
-        Retrieve a clean (3,) coordinate for a point on the wing.
-        """
+        """Retrieves the 3D position of a normalized point (x_norm, y_norm) on the wing at a
+        given time step using bilinear interpolation.
 
+        :param step: Time-step index.
+        :param x_norm: Normalized chordwise position.
+        :param y_norm: Normalized spanwise position.
+        :param real: If True, use real data; otherwise use simulated data.
+
+        :return: A (3,) array with the interpolated 3D coordinate.
+        """
         airplane = (
             self.movement.airplanes[0][step]
             if real
@@ -486,13 +394,11 @@ class Analysis:
         p01 = np.asarray(panel.Blpp_G_Cg).reshape(-1)
         p11 = np.asarray(panel.Brpp_G_Cg).reshape(-1)
 
-        # Keep only first 3 components if more are present
         p00 = p00[:3]
         p10 = p10[:3]
         p01 = p01[:3]
         p11 = p11[:3]
 
-        # Bilinear interpolation
         P = (
             (1 - u) * (1 - v) * p00 +
             u       * (1 - v) * p10 +
@@ -503,19 +409,14 @@ class Analysis:
         return np.asarray(P).reshape(3,)
 
     def get_full_trajectory(self, x_norm, y_norm, real=True):
-        """
-        Retrieve the full trajectory of a point on the wing.
+        """Returns the full time history of the 3D coordinates of a point on the wing,
+        evaluated at every time step.
 
-        :param x_norm: float
-            Normalized x coordinate of the point.
-        :param y_norm: float
-            Normalized y coordinate of the point.
-        :param real: bool, optional
-            If True, use the real movement data. If False, use the simulated
-            solver data. Default is True.
+        :param x_norm: Normalized chordwise position.
+        :param y_norm: Normalized spanwise position.
+        :param real: Whether to use real or simulated movement.
 
-        :return: numpy array
-            The full trajectory of the point, with shape (num_steps, 3).
+        :return: (num_steps, 3) array of coordinates over time.
         """
         return np.array([
             self.get_coordinates(k, x_norm, y_norm, real=real)
@@ -523,38 +424,26 @@ class Analysis:
         ])
     
     def compare_trajectories(self, x_norm, y_norm):
-        
-        """
-        Compare the full trajectory of a point on the wing between the real and simulated
-        movement data.
+        """Computes the difference between real and simulated trajectories for a point on
+        the wing, evaluated at all time steps.
 
-        :param x_norm: float
-            Normalized x coordinate of the point.
-        :param y_norm: float
-            Normalized y coordinate of the point.
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
 
-        :return: numpy array
-            The difference between the real and simulated trajectories, with shape (num_steps, 3).
+        :return: (num_steps, 3) array of trajectory differences.
         """
         real = self.get_full_trajectory(x_norm, y_norm, real=True)
         simulated = self.get_full_trajectory(x_norm, y_norm, real=False)
         return real - simulated
 
     def plot_trajectory_3d(self, x_norm, y_norm):
-        
-        """
-        Plot the 3D trajectory of a point on the wing, comparing the real and simulated movement data.
+        """Plots the 3D trajectory of a point on the wing, comparing real vs simulated
+        movement over time.
 
-        Parameters
-        ----------
-        x_norm : float
-            Normalized x coordinate of the point.
-        y_norm : float
-            Normalized y coordinate of the point.
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
 
-        Returns
-        -------
-        None
+        :return: None.
         """
         traj_real = self.get_full_trajectory(x_norm, y_norm, real=True)
         traj_simulated = self.get_full_trajectory(x_norm, y_norm, real=False)
@@ -596,23 +485,13 @@ class Analysis:
         plt.show()
 
     def plot_difference_position_versus_time(self):
+        """Computes and plots the mean positional error between real and simulated movement
+        by sampling many points across the wing surface.
 
+        :param None:
+
+        :return: None.
         """
-        Plot the mean difference between the actual and simulated trajectories as a function of time.
-
-        The mean difference is calculated by sampling the wing at 100x100 points and calculating the
-        difference between the actual and simulated trajectories at each point. The mean of these
-        differences is then plotted as a function of time.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        None
-        """
-
         sum_dif = np.zeros(self.num_steps)
 
         x_values = np.linspace(0, 1, 100)
@@ -633,23 +512,16 @@ class Analysis:
         plt.title("Mean error between actual and simulated trajectories")
         plt.show()
 
+    #sections ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-
-    
-#sections ------------------------------------------------------------------------------------------------------------------------------------------------------------
     def get_section_by_column(self, col_index, real=True):
+        """Retrieves the coordinates of all panel vertices belonging to a vertical section
+        (column of panels) across all time steps.
 
-        """
-        Retrieve the coordinates of a section of the wing by column index.
+        :param col_index: Index of the panel column.
+        :param real: Whether to use real or simulated data.
 
-        :param col_index: int
-            The index of the column of panels to retrieve.
-        :param real: bool, optional
-            If True, use the real movement data. If False, use the simulated
-            solver data. Default is True.
-
-        :return: list
-            A list of coordinates of the section, with shape (num_steps, num_panels, 2, 2).
+        :return: List of section coordinates for each time-step.
         """
         movement = (
             self.movement
@@ -683,17 +555,14 @@ class Analysis:
 
         return coords_by_step
 
-
     def plot_section(self, col_index, compare_simulated=True):
+        """Plots the flapping motion of a wing section over half a period (upstroke and
+        downstroke), and optionally compares real and simulated data.
 
-        """
-        Plot the trajectory of a section of the wing.
+        :param col_index: Column index of the wing panels to plot.
+        :param compare_simulated: Whether to also plot simulated data.
 
-        :param col_index: int
-            The index of the column of panels to plot.
-        :param compare_simulated: bool, optional
-            If True, compare the real movement data with the simulated
-            solver data. Default is True.
+        :return: None.
         """
         section_real = self.get_section_by_column(col_index, real=True)
 
@@ -770,7 +639,6 @@ class Analysis:
         ax_down.set_xlabel("X"); ax_down.set_ylabel("Z")
         ax_down.legend()
 
-        # --- Plot UP ---
         for i in range(len(up_real)//3):
             x_r = [p[0] for p in up_real[i*3]]
             z_r = [p[1] for p in up_real[i*3]]
@@ -793,37 +661,16 @@ class Analysis:
     #panel forces ------------------------------------------------------------------------------------------------------------------------------------------------
      
     def get_forces(self, step, x_norm, y_norm, scalar_type, real=True):
-        """
-        Return the scalar force of type scalar_type at the given step and point (x_norm, y_norm)
-        on the wing of the given airplane.
+        """Returns the aerodynamic scalar force (lift, side force, or induced drag) at a
+        specific point and time step.
 
-        Parameters:
-        step : int
+        :param step: Time-step index.
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
+        :param scalar_type: Type of force ("lift", "side force", "induced drag").
+        :param real: Whether to use real or simulated data.
 
-            The step in time.
-
-        x_norm : float
-
-            The normalized x-coordinate of the point.
-
-        y_norm : float
-
-            The normalized y-coordinate of the point.
-
-        scalar_type : str
-
-            The type of the scalar force to return. Possible values are "lift", "side force", and "induced drag".
-
-        real : bool, optional
-
-            If True, the function will return the scalar force of the real solver.
-            If False, the function will return the scalar force of the simulated solver. Default is True.
-
-        Returns:
-        scalar : float
-
-            The scalar force of the given type at the given step and point.
-
+        :return: The scalar force value at that location and time.
         """
         if real == True:
             airplane = self.solver.steady_problems[step].airplanes
@@ -841,81 +688,40 @@ class Analysis:
         return this_scalar
     
     def get_full_forces(self, x_norm, y_norm, scalar_type, real=True):
-        """
-        Returns the scalar forces of a given type at a given point for all time steps.
+        """Computes the full time history of a scalar aerodynamic force at a specific point
+        on the wing.
 
-        Parameters:
-        x_norm : float
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
+        :param scalar_type: Type of aerodynamic force.
+        :param real: Whether to use real or simulated forces.
 
-            The normalized x-coordinate of the point.
-
-        y_norm : float
-
-            The normalized y-coordinate of the point.
-
-        scalar_type : str
-
-            The type of the scalar force to return. Possible values are "lift", "side force", and "induced drag".
-
-        real : bool, optional
-
-            If True, the function will return the scalar force of the real solver.
-            If False, the function will return the scalar force of the simulated solver. Default is True.
-
-        Returns:
-        scalar_forces : ndarray of shape (num_steps,) and dtype float
-
-            The scalar forces of the given type at the given point for all time steps.
+        :return: (num_steps,) array of force values.
         """
         return np.array([self.get_forces(k, x_norm, y_norm, real=real, scalar_type=scalar_type) for k in range(self.num_steps)])
     
     def compare_forces(self, x_norm, y_norm, scalar_type):
-        """
-        Returns the difference between the scalar forces of the real solver and the simulated solver
-        at a given point for all time steps.
+        """Returns the difference between real and simulated scalar forces at a given point
+        for all time steps.
 
-        Parameters:
-        x_norm : float
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
+        :param scalar_type: Type of aerodynamic force.
 
-            The normalized x-coordinate of the point.
-
-        y_norm : float
-
-            The normalized y-coordinate of the point.
-
-        scalar_type : str
-
-            The type of the scalar force to return. Possible values are "lift", "side force", and "induced drag".
-
-        Returns:
-        scalar_force_difference : ndarray of shape (num_steps,) and dtype float
-
-            The difference between the scalar forces of the real solver and the simulated solver
-            at the given point for all time steps.
+        :return: (num_steps,) array of force differences.
         """
         real = self.get_full_forces(x_norm, y_norm, scalar_type, real=True)
         simulated = self.get_full_forces(x_norm, y_norm, scalar_type, real=False)
         return real - simulated
     
     def plot_panel_forces(self, x_norm, y_norm):
+        """Plots the real and simulated scalar aerodynamic forces (lift, side force, induced
+        drag) at a specific point on the wing.
 
+        :param x_norm: Normalized chordwise coordinate.
+        :param y_norm: Normalized spanwise coordinate.
 
-        """
-        Plots the comparison between the real and simulated scalar forces for a given point (x_norm, y_norm)
-        on the wing of the given airplane.
-
-        Parameters:
-        x_norm : float
-
-            The normalized x-coordinate of the point.
-
-        y_norm : float
-
-            The normalized y-coordinate of the point.
-
-        Returns:
-        None
-
+        :return: None.
         """
         scalar_types = ["lift", "side force", "induced drag"]
 
@@ -940,24 +746,12 @@ class Analysis:
 
     #general forces ------------------------------------------------------------------------------------------------------------------------------------------------
     def compute_forces_over_time(self, real=True):
+        """Retrieves the full time evolution of total forces, force coefficients, moments,
+        and moment coefficients from either the real or simulated solver.
 
-        """
-        Returns the forces, force coefficients, moments, and moment coefficients for all time steps.
+        :param real: Whether to use real or simulated forces.
 
-        Parameters:
-        real : bool, optional
-
-            If True, the function will return the forces, force coefficients, moments, and moment coefficients of the real solver.
-            If False, the function will return the forces, force coefficients, moments, and moment coefficients of the simulated solver. Default is True.
-
-        Returns:
-        dict
-
-            A dictionary containing the following keys and values:
-                - "forces": A (num_steps,3) array of forces in the geometry axes.
-                - "forces_coeff": A (num_steps,3) array of force coefficients in the geometry axes.
-                - "moments": A (num_steps,3) array of moments in the geometry axes, relative to the CG.
-                - "moments_coeff": A (num_steps,3) array of moment coefficients in the geometry axes, relative to the CG.
+        :return: Dictionary containing arrays of forces and moments over time.
         """
         solver = self.solver if real else self.simulated_solver
         num_steps = solver.num_steps
@@ -981,14 +775,14 @@ class Analysis:
             "moments_coeff": np.array(moments_coeff),
         }
 
-
     def plot_forces(self):
-        """
-        Plots the forces, force coefficients, moments, and moment coefficients 
-        of a RealSolver versus a simulatedSolver on 4 separate pages with 3 graphs per page.
-        All figures open at the same time.
-        """
+        """Plots time histories of forces, force coefficients, moments, and moment
+        coefficients for both real and simulated solvers, grouped on multiple figures.
 
+        :param None:
+
+        :return: None.
+        """
         _prism = [
             "#5F4690", "#1D6996", "#38A6A5", "#0F8554", "#73AF48",
             "#EDAD08", "#E17C05", "#CC503E", "#94346E", "#6F4070",
@@ -1076,23 +870,15 @@ class Analysis:
 
         plt.show()
 
-# Animation des ailes ------------------------------------------------------------------------------------------------------------------------------------------------
+    # Wing animation------------------------------------------------------------------------------------------------------------------------------------------------
     def get_wing_data(self, real=True, wing_index=0):
+        """Extracts and returns the coordinates of all wing panels at each time step for
+        either the real or simulated wing.
 
-        """
-        Get the coordinates of the ailes at each time step.
+        :param real: Whether to extract real or simulated wing geometry.
+        :param wing_index: Index of the wing.
 
-        Parameters
-        ----------
-        real : bool, optional
-            Whether to get the real or simulated data. Defaults to True.
-        wing_index : int, optional
-            The index of the wing from which to get the coordinates. Defaults to 0.
-
-        Returns
-        -------
-        coords : dict
-            A dictionary where the keys are the time steps and the values are the coordinates of the ailes at each time step.
+        :return: Dictionary mapping each time step to an array of panel vertex coordinates.
         """
         movement = (
             self.movement
@@ -1119,46 +905,25 @@ class Analysis:
 
 
     def max_edge_len(self, triangle, points):
+        """Computes the maximum edge length of a triangular face defined by three point
+        indices.
+
+        :param triangle: Indices of the triangle's three vertices.
+        :param points: Array of 3D point coordinates.
+
+        :return: Longest edge length of the triangle.
         """
-        Compute the length of the longest edge of a triangle.
-
-        Parameters
-        ----------
-        triangle : array of 3 ints
-            The indices of the triangle's vertices in the points array.
-        points : array of shape (n,3)
-            The array of points.
-
-        Returns
-        -------
-        float
-            The length of the longest edge of the triangle.
-
-        """
-
         verts = points[triangle]
         edges = [np.linalg.norm(verts[i] - verts[j]) for i in range(3) for j in range(i + 1, 3)]
         return max(edges)
 
-
     def plot_wing(self, points):
-        """
-        Compute the triangles of a bisector mesh, filtered by the length of its edges.
+        """Generates a filtered triangle mesh (Delaunay-based) representing the wing
+        surface, removing triangles with excessively long edges.
 
-        Parameters
-        ----------
-        points : array of shape (n,3)
-            The array of points.
+        :param points: (N,3) array of surface points.
 
-        Returns
-        -------
-        array of shape (m,3)
-            The filtered triangles.
-
-        Notes
-        -----
-        The filtering is done by the 60th percentile of the distances between points, to
-        avoid having too long edges in the bisector mesh.
+        :return: (M,3) array of triangle indices.
         """
         proj2 = points[:, :2] 
         delaunay = Delaunay(proj2)
@@ -1175,25 +940,13 @@ class Analysis:
 
         return np.array(filtered)
 
-
     def dynamic_wing(self, wing_index=0):
-        """
-        Plot the bisector mesh of the real and simulated wings at every time step.
+        """Creates an animated visualization comparing the 3D bisector mesh of the real
+        wing and the simulated wing over time.
 
-        Parameters
-        ----------
-        wing_index : int, optional
-            The index of the wing for which to generate the bisector mesh.
+        :param wing_index: Index of the wing to animate.
 
-        Returns
-        -------
-        matplotlib.animation.FuncAnimation
-            The animation of the bisector mesh.
-
-        Notes
-        -----
-        The bisector mesh of the real wing is plotted in cyan and blue, and the bisector mesh of the simulated wing is plotted in orange and red.
-        The simulated wing is mirrored in Y.
+        :return: A matplotlib FuncAnimation object containing the animation.
         """
         points_real_dict = self.get_wing_data(real=True, wing_index=wing_index)
         steps = sorted(points_real_dict.keys())

@@ -6,14 +6,15 @@ None
 
 **Contains the following functions:**
 
-draw: Draws a solver's Airplane(s).
+draw: Draws a solver's Airplane(s) with optional streamlines and wake vortices.
 
-animate: Animates an UnsteadyRingVortexLatticeMethodSolver's Airplane(s).
+animate: Animates an UnsteadyRingVortexLatticeMethodSolver's Airplane(s) over time.
 
-plot_results_versus_time: Plots an UnsteadyRingVortexLatticeMethodSolver's loads and
-load coefficients as a function of time.
+plot_results_versus_time: Plots loads and load coefficients versus time.
 
-print_results: Prints a solver's load and load coefficients.
+print_results: Prints a solver's loads and load coefficients.
+
+plot_wing_loads_versus_time: Plots a wing’s resultant forces and moments over time.
 """
 
 from __future__ import annotations
@@ -105,7 +106,6 @@ def draw(
     show_wake_vortices: bool | np.bool_ = False,
     save: bool | np.bool_ = False,
     testing: bool | np.bool_ = False,
-    track_point=None
 ) -> None:
     """Draws a solver's Airplane(s).
 
@@ -357,7 +357,7 @@ def animate(
     show_wake_vortices: bool | np.bool_ = False,
     save: bool | np.bool_ = False,
     testing: bool | np.bool_ = False,
-    fake_solver=None,
+    simulated_solver=None,
     track_point=None
 ) -> None:
     """Animates an UnsteadyRingVortexLatticeMethodSolver's Airplane(s).
@@ -377,6 +377,8 @@ def animate(
     :param testing: Set this to True to start the animation after one second, which is
         useful for running test suites. It can be a bool or a numpy bool and will be
         converted internally to a bool. The default is False.
+    :param simulated_solver: An optional simulated solver to compare to the optitrack based solver.
+    :param track_point: An optional tuple (wing_index, x_norm, y_norm) to track a point on the wing.
     :return: None
     """
     if not isinstance(
@@ -453,8 +455,8 @@ def animate(
     min_scalar = 0.0
     max_scalar = 0.0
 
-    if scalar_type in ("difference position", "difference lift", "difference induced drag", "difference side force") and fake_solver is None:
-        raise ValueError("scalar_type='difference' requires fake_solver=...")
+    if scalar_type in ("difference position", "difference lift", "difference induced drag", "difference side force") and simulated_solver is None:
+        raise ValueError("scalar_type='difference' requires simulated_solver=...")
 
     # If coloring the Panels based on scalars, gather all the scalars across all the
     # time steps and Airplanes. These will be used to set the color map limits.
@@ -465,7 +467,7 @@ def animate(
                 scalar_type,
                 unsteady_solver.steady_problems[step_id].operating_point.qInf__E,
                 step_id,
-                fake_solver
+                simulated_solver
             )
             all_scalars = np.hstack((all_scalars, scalars_to_add))
 
@@ -503,7 +505,7 @@ def animate(
             scalar_type,
             unsteady_solver.steady_problems[0].operating_point.qInf__E,
             0,
-            fake_solver
+            simulated_solver
         )
 
         _plot_scalars(
@@ -608,7 +610,7 @@ def animate(
                 scalar_type,
                 unsteady_solver.steady_problems[current_step].operating_point.qInf__E,
                 current_step,
-                fake_solver
+                simulated_solver
             )
 
             _plot_scalars(
@@ -1365,7 +1367,7 @@ def _get_scalars(
     scalar_type: str,
     qInf__E: float,
     step = None,
-    fake_solver=None,
+    simulated_solver=None,
 ) -> np.ndarray:
     """Returns the load coefficient values from a SteadyProblem's Airplanes' Wings'
     Panels.
@@ -1377,6 +1379,11 @@ def _get_scalars(
     :param qInf__E: The current freestream dynamic pressure experienced by this
         SteadyProblem's Airplane(s) (observed in the Earth frame). The units are in
         Pascals.
+    :param step: The time step at which to get the scalars. Required if
+        scalar_type is a "difference ..." type.
+    :param simulated_solver: The SteadyRingVortexLatticeMethodSolver representing the
+        simulated condition to compare against optitrack data. Required if scalar_type is a
+        "difference ..." type.
     :return: A (N,) ndarray of floats representing the N Panels' load coefficients.
     """
     scalars = np.empty(0, dtype=float)
@@ -1415,38 +1422,38 @@ def _get_scalars(
                 
     if scalar_type in ("difference position", "difference lift", "difference side force", "difference induced drag") :
 
-        if fake_solver is None:
-            raise ValueError("scalar_type='difference' requires fake_solver=...")
+        if simulated_solver is None:
+            raise ValueError("scalar_type='difference' requires simulated_solver=...")
 
 
-        airplanes_fake = fake_solver.steady_problems[step].airplanes
+        airplanes_simulated = simulated_solver.steady_problems[step].airplanes
 
-        for airplane_r, airplane_f in zip(airplanes, airplanes_fake):
+        for airplane_r, airplane_f in zip(airplanes, airplanes_simulated):
             for wing_r, wing_f in zip(airplane_r.wings, airplane_f.wings):
                 for pR, pF in zip(np.ravel(wing_r.panels), np.ravel(wing_f.panels)):
 
                     if scalar_type == "difference lift":
                         d = -(
-                                -pR.forces_W[2] / qInf__E / pR.area
+                                -pR.forces_W[2]
                             ) - (
-                                -pF.forces_W[2] / qInf__E / pF.area
+                                -pF.forces_W[2]
                             )
                         
                         scalars = np.hstack((scalars, d))
 
                     if scalar_type == "difference side force":
                         d = -(
-                                pR.forces_W[1] / qInf__E / pR.area
+                                pR.forces_W[1]
                             ) - (
-                                pF.forces_W[1] / qInf__E / pF.area
+                                pF.forces_W[1]
                             )
                         scalars = np.hstack((scalars, d))
 
                     if scalar_type == "difference induced drag":
                         d = -(
-                                -pR.forces_W[0] / qInf__E / pR.area
+                                -pR.forces_W[0]
                             ) - (
-                                -pF.forces_W[0] / qInf__E / pF.area
+                                -pF.forces_W[0]
                             )
                     
                         scalars = np.hstack((scalars, d))
@@ -1541,9 +1548,19 @@ def _plot_scalars(
     )
 
 def _add_tracking_point(plotter, airplane, wing_index, x_norm, y_norm):
-    """
-    Ajoute un petit point rouge sur l’aile, à la position normalisée donnée.
-    Utilise une interpolation bilinéaire des sommets du panneau.
+    """Adds a visual tracking marker to a specific location on a wing surface.
+
+    This function takes a wing identified by its index, locates the panel
+    corresponding to the normalized chordwise and spanwise coordinates, and
+    computes the interpolated 3D point on the wing surface. It then plots a small
+    sphere at this position in the visualization.
+
+    :param plotter: The PyVista Plotter used to draw the tracking point.
+    :param airplane: The Airplane whose wing contains the tracked point.
+    :param wing_index: The index of the wing on which the point is located.
+    :param x_norm: The normalized chordwise coordinate (0 → leading edge, 1 → trailing edge).
+    :param y_norm: The normalized spanwise coordinate (0 → root, 1 → tip).
+    :return: None
     """
     wing = airplane.wings[wing_index]
 
@@ -1579,37 +1596,21 @@ def plot_wing_loads_versus_time(
     unsteady_solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
     airplane_index: int = 0,
     wing_index: int = 0,
-    show: bool = True,
     save: bool = False,
-):
+    ):
+    """Plots the resultant aerodynamic forces and moments of a wing as a function of time.
 
+    This function extracts the time history of the forces and moments produced by a
+    chosen wing in an unsteady simulation. For each time step where results exist,
+    it sums all panel-level loads to obtain the total drag, side force, lift,
+    and the corresponding roll, pitch, and yaw moments. It then plots these
+    quantities versus time, with optional saving of the figures.
 
-    """
-    This function plots the forces and moments of a wing as a function of time.
-
-    :param unsteady_solver: UnsteadyRingVortexLatticeMethodSolver
-
-        The UnsteadyRingVortexLatticeMethodSolver from which to retrieve the wing loads.
-
-    :param airplane_index: int, optional
-
-        The index of the airplane in the list of airplanes of the UnsteadySolver.
-
-    :param wing_index: int, optional
-
-        The index of the wing in the list of wings of the airplane.
-
-    :param show: bool, optional
-
-        Set this to True to show the plots. It can be a boolean or a NumPy boolean
-        and will be converted internally to a boolean. The default is True.
-
-    :param save: bool, optional
-
-        Set this to True to save the plots as PNGs. It can be a boolean or a
-        NumPy boolean and will be converted internally to a boolean. The default is
-        True.
-
+    :param unsteady_solver: The UnsteadyRingVortexLatticeMethodSolver providing the
+        wing loads at each time step.
+    :param airplane_index: Index of the airplane whose wing loads should be plotted.
+    :param wing_index: Index of the wing whose loads should be plotted.
+    :param save: Set to True to save the generated force and moment plots as PNG files.
     :return: None
     """
     if not isinstance(
@@ -1650,7 +1651,7 @@ def plot_wing_loads_versus_time(
         moments_W_CgP1[:, result_id] = M
         result_id += 1
 
-    # === PLOTTING ===
+   
     fig_f, ax_f = plt.subplots()
     fig_m, ax_m = plt.subplots()
 
@@ -1676,41 +1677,5 @@ def plot_wing_loads_versus_time(
         fig_f.savefig(f"Wing_{wing_index}_Forces.png", dpi=300)
         fig_m.savefig(f"Wing_{wing_index}_Moments.png", dpi=300)
 
-    if show:
-        plt.show()
-    else:
-        plt.close("all")
-        
-import csv
-
-def export_data(solver, filename='data.csv', i=0, wing_index=0):
-    """Exporte les coordonnées des sommets de panneaux à chaque step dans un fichier CSV.
-
-    :param solver: 
-        Le solveur unsteady déjà exécuté (après un .run()).
-    :param filename: str, optional
-        Nom du fichier CSV de sortie.
-    :param i: int, optional
-        Index de l'avion à exporter (par défaut 0 pour le premier avion).
-    :param wing_index: int, optional
-        Index de l'aile à exporter (par défaut 0 pour la première aile).
-    """
-    movement = solver.unsteady_problem.movement
-
-    with open(filename, "w", newline="") as file:
-        writer = csv.writer(file)
-   
-        writer.writerow(["step", "airplane", "wing", "panel_id", "vertex_name", "x", "y", "z"])
-
-        for step in range (movement.num_steps):
-            airplane = movement.airplanes[i][step]
-            for wing in airplane.wings[wing_index: wing_index + 2]:
-                panels = np.ravel(wing.panels)
-                for panel_id, panel in enumerate(panels):
-                    for vertex_name in ["Flpp_GP1_CgP1", "Frpp_GP1_CgP1",
-                                        "Brpp_GP1_CgP1", "Blpp_GP1_CgP1"]:
-                        vertex = getattr(panel, vertex_name)
-                        writer.writerow([
-                            step, airplane.name, wing.name, panel_id,
-                            vertex_name, vertex[0], vertex[1], vertex[2]
-                        ])
+    
+    plt.show()
