@@ -61,7 +61,8 @@ class Airfoil:
         _trust: object | None = None,
         data=None,
         column=None,
-        list_trackers=None
+        list_trackers=None,
+        frequency=None,
     ) -> None:
         """The initialization method.
 
@@ -95,6 +96,8 @@ class Airfoil:
             data.
         :param list_trackers: list of str
             List of tracker names to extract the airfoil shape.
+        :param frequency: float
+            Frequency of the flap cycle.
         :return: None
         """
         self.name = _parameter_validation.str_return_str(name, "name")
@@ -126,6 +129,7 @@ class Airfoil:
         self.data = data
         self.column = column
         self.list_trackers = list_trackers
+        self.frequency = frequency
 
     # TODO: In the future, if adding control surfaces becomes more important,
     #  we may want to rework this method. Using this method we need to artificially

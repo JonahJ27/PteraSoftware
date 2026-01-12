@@ -1,5 +1,5 @@
 """
-This example shows how to use the UnsteadyRingVortexLatticeMethodSolver withOptiTrack data
+This example shows how to use the UnsteadyRingVortexLatticeMethodSolver with OptiTrack data
 """
 
 import pterasoftware as ps
@@ -8,7 +8,7 @@ import numpy as np
 # Define all the necessary parameters for loading the OptiTrack data.
 
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
 
 # This list is adapted for our robot, you may need to change the list according to your setup.
 list_trackers = [
@@ -59,6 +59,7 @@ example_airplane = ps.geometry.airplane.Airplane(
                         data=data,    # Pass the data to the Airfoil
                         column=column,        # Pass the column to the Airfoil
                         list_trackers=list_trackers,       # Pass the list of trackers to the Airfoil
+                        frequency=4.0,      # Pass the flapping-cycle frequency. This is required if you want to use "output_print_result"
                     ),
                 )
                 for column in columns
@@ -68,7 +69,7 @@ example_airplane = ps.geometry.airplane.Airplane(
             angles_Gs_to_Wn_ixyz= np.array([4, 0.0, 0.0]),
             symmetric=True,
             mirror_only=False,
-            symmetryNormal_G=(0.0, 0.0001, 0.0),
+            symmetryNormal_G=(0.0, 1.0, 0.0),
             symmetryPoint_G_Cg=(0.0, 0.0, 0.0),
             num_chordwise_panels=6,
             chordwise_spacing="uniform",
@@ -162,7 +163,7 @@ airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
 
 # Define a new OperatingPoint.
 example_operating_point = ps.operating_point.OperatingPoint(
-    rho=1.225, vCg__E=4.0, alpha=10.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
+    rho=1.225, vCg__E=6.0, alpha=10.0, beta=0.0, externalFX_W=0.0, nu=15.06e-6
 )
 
 # Define the operating point's OperatingPointMovement.
@@ -177,7 +178,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=10,
+    num_steps=9,
 )
 
 
@@ -203,45 +204,34 @@ example_solver.run(
     prescribed_wake=True,
     show_progress=True,
 )
-# ps.output.print_results(example_solver)
-# ps.output.plot_results_versus_time(
-#     unsteady_solver=example_solver,
-#     show=True,
-#     save=False,
-# )
-
-ps.output.plot_wing_loads_versus_time(
-    unsteady_solver=example_solver,
-    save=False,
-)
 
 # Call the animate function on the solver. This produces a GIF of the wake being
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-ps.output.animate(
-    unsteady_solver=example_solver,
-    scalar_type="lift",
-    show_wake_vortices=True,
-    save=True,
-)
+# ps.output.animate(
+#     unsteady_solver=example_solver,
+#     scalar_type="lift",
+#     show_wake_vortices=True,
+#     save=True,
+# )
 
+# ps.output.print_results(example_solver)
+# print(movement.static)
 
 
 # You can creat a simulated airplane with the same geometry by calling differential_measures.Analysis. 
 # You will be able to use output for this new simulation and compare the results with the OptiTrack based simulation.
 
-# analysis = ps.differential_measures.Analysis(example_solver,5)
+analysis = ps.differential_measures.Analysis(example_solver)
 
 # analysis.plot_difference_position_versus_time()
 # analysis.plot_difference_position_versus_time()  #5 is the number of your section
 
-# ps.output.animate(
-#     unsteady_solver=example_solver,
-#     scalar_type="difference position",     
-#     show_wake_vortices=True,
-#     fake_solver = analysis.fake_solver,
-#     save=True,
-#     track_point=(0,0.8,0.8)
-#  )
+ps.output.animate(
+    unsteady_solver=analysis.simulated_solver,
+    scalar_type="lift",     
+    show_wake_vortices=True,
+    save=True,
+ )
 

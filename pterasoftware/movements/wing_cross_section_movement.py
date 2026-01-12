@@ -221,6 +221,7 @@ class WingCrossSectionMovement:
                 periodAngles_Wcsp_to_Wcs_ixyz, "periodAngles_Wcsp_to_Wcs_ixyz"
             )
         )
+            
         if not np.all(periodAngles_Wcsp_to_Wcs_ixyz >= 0.0):
             raise ValueError(
                 "All elements in periodAngles_Wcsp_to_Wcs_ixyz must be non negative."
@@ -234,6 +235,10 @@ class WingCrossSectionMovement:
                     "be also be 0.0."
                 )
         self.periodAngles_Wcsp_to_Wcs_ixyz = periodAngles_Wcsp_to_Wcs_ixyz
+        
+        if self.base_wing_cross_section.airfoil.frequency is not None and optitrack:
+            frequency = self.base_wing_cross_section.airfoil.frequency
+            self.periodAngles_Wcsp_to_Wcs_ixyz = (1/frequency, 0,0)
 
         spacingAngles_Wcsp_to_Wcs_ixyz = (
             _parameter_validation.threeD_spacing_vectorLike_return_tuple(

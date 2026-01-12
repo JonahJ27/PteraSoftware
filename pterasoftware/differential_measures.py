@@ -67,14 +67,14 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 class Analysis:
    
-    def __init__(self, unsteady_solver,f):
+    def __init__(self, unsteady_solver, frequency = None):
         """Initializes the Analysis object by extracting the real movement data from an
         unsteady solver, retrieving the airfoil tracking data, computing motion-related
         quantities, and preparing all elements required to build a simulated airplane,
         movement, problem, and solver.
 
         :param unsteady_solver: The unsteady solver containing the real movement data.
-        :param f: The oscillation frequency of the movement in Hz.
+        :param frequency: The oscillation frequency of the movement in Hz.
 
         :return: None.
         """
@@ -89,8 +89,15 @@ class Analysis:
 
         self.data = airfoil.data
         self.list_trackers = airfoil.list_trackers
-        self.f=f
-        self.period=1/self.f
+
+        if frequency is not None:
+            self.frequency = frequency
+        elif airfoil.frequency is not None:
+            self.frequency = airfoil.frequency
+        else:
+            raise ValueError("Frequency must be provided either in the Analysis constructor or in the Airfoil object.")
+        
+        self.period=1/self.frequency
       
 
         self.extract_movement_data()
@@ -110,7 +117,7 @@ class Analysis:
         :return: A simulated Airplane object with identical geometry to the real model.
         """
 
-        real_wing = self.base_airplane.wings
+        real_wing = self.base_airplane.wings[0]
         
 
         simulated_wing = ps.geometry.wing.Wing(
@@ -125,24 +132,23 @@ class Analysis:
                     control_surface_deflection=0.0,
                     airfoil=cs.airfoil,
                 )
-                for cs in real_wing[0].wing_cross_sections
+                for cs in real_wing.wing_cross_sections
             ],
             name="simulatedWing",
-            Ler_Gs_Cgs=real_wing[0].Ler_Gs_Cgs,
-            angles_Gs_to_Wn_ixyz=(4, 0.0, 0.0),
-            symmetric=True,
-            mirror_only=False,
-            symmetryNormal_G=(0.0, 1.0, 0.0),
-            symmetryPoint_G_Cg=(0.0, 0.0, 0.0),
-            num_chordwise_panels=real_wing[0].num_chordwise_panels,
-            chordwise_spacing=real_wing[0].chordwise_spacing,
+            Ler_Gs_Cgs=real_wing.Ler_Gs_Cgs,
+            angles_Gs_to_Wn_ixyz=real_wing.angles_Gs_to_Wn_ixyz,
+            symmetric=True if len(self.base_airplane.wings) > 1 else False,    # We can't use real_wing.symmetric because after the creation of the reflected wing it becomes False (geometry.airplane, line 763)
+            mirror_only=False,     # We can't use real_wing.mirror_only because after the creation of the reflected wing it becomes False (geometry.airplane, line 764)
+            symmetryNormal_G=(0.0, 1.0, 0.0) if len(self.base_airplane.wings) > 1 else None,    # We can't use real_wing.symmetryNormal_G because after the creation of the reflected wing it becomes None (geometry.airplane, line 765)
+            symmetryPoint_G_Cg=(0.0, 0.0, 0.0) if len(self.base_airplane.wings) > 1 else None,      # We can't use real_wing.symmetryPoint_G_Cg because after the creation of the reflected wing it becomes None (geometry.airplane, line 766)
+            num_chordwise_panels=real_wing.num_chordwise_panels,
+            chordwise_spacing=real_wing.chordwise_spacing,
         )
 
         return ps.geometry.airplane.Airplane(
             wings=[simulated_wing],
             name="simulatedAirplane",
             Cg_GP1_CgP1=(0.0, 0.0, 0.0),
-            angles_E_to_B_izyx=self.base_airplane.angles_E_to_B_izyx,
             weight=self.base_airplane.weight,
             s_ref=self.base_airplane.s_ref,
             c_ref=self.base_airplane.c_ref,
@@ -189,9 +195,6 @@ class Analysis:
         self.phase_shift = float(np.mean(phase_shift))
         self.status_phase = float(np.mean(status_phases))
 
-        print(self.amplitude_max,self.amplitude_min,self.phase_shift,self.status_phase)
-
-
     def build_simulated_movement(self):
         """Reconstructs a synthetic, periodic movement model from the extracted motion
         parameters, generating a simulated wing oscillation compatible with PteraSoftware.
@@ -210,7 +213,7 @@ class Analysis:
         s = np.clip(theta0/ A, -1.0, 1.0)
 
         dt = self.delta_time
-        omega = 2*np.pi*self.f 
+        omega = 2*np.pi*self.frequency
 
         dtheta = (theta1 - theta0) / dt
         c = np.clip(dtheta / (A * omega), -1.0, 1.0)
@@ -291,7 +294,7 @@ class Analysis:
 
         airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
             base_airplane=simulated_airplane,
-            wing_movements=[maine_wing_movement, reflected_main_wing_movement],
+            wing_movements=[maine_wing_movement, reflected_main_wing_movement] if reflected_wing_cross_section_movement != [] else [maine_wing_movement],
             ampCg_GP1_CgP1=(0.0, 0.0, 0.0),
             periodCg_GP1_CgP1=(0.0, 0.0, 0.0),
             spacingCg_GP1_CgP1=("sine", "sine", "sine"),

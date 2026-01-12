@@ -1602,7 +1602,7 @@ def plot_wing_loads_versus_time(
 
     This function extracts the time history of the forces and moments produced by a
     chosen wing in an unsteady simulation. For each time step where results exist,
-    it sums all panel-level loads to obtain the total drag, side force, lift,
+    it sums all panel loads to obtain the total drag, side force, lift,
     and the corresponding roll, pitch, and yaw moments. It then plots these
     quantities versus time, with optional saving of the figures.
 
@@ -1630,7 +1630,6 @@ def plot_wing_loads_versus_time(
         num_steps_to_average,
     )
 
-    # Storage arrays
     forces_W = np.zeros((3, num_steps_to_average))
     moments_W_CgP1 = np.zeros((3, num_steps_to_average))
 
