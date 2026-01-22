@@ -53,7 +53,7 @@ _LAZY_MODULES = {
     "steady_ring_vortex_lattice_method": "pterasoftware.steady_ring_vortex_lattice_method",
     "trim": "pterasoftware.trim",
     "unsteady_ring_vortex_lattice_method": "pterasoftware.unsteady_ring_vortex_lattice_method",
-    "differential_measures": "pterasoftware.differential_measures",
+    "optitrack_validation": "pterasoftware.optitrack_validation",
 }
 
 # Lazy callable imports: functions that need special handling.

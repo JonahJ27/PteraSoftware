@@ -325,7 +325,8 @@ del example_problem
 
 # Run the solver.
 example_solver.run(
-    prescribed_wake=True,
+    prescribed_wake=False,
+    calculate_streamlines=True,
     show_progress=True,
 )
 

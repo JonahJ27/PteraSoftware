@@ -10,6 +10,12 @@ load_data: Load and preprocess the OptiTrack data from an OptiTrack CSV file.
 
 extract_columns: Extract the column identifiers corresponding to the airfoil sections.
 
+creation_airfoils: Create airfoil sections at step 0 using the Real_Airfoil class.
+
+creation_wing_cross_sections: Create wing cross-sections using the Real_Airfoil class.
+
+wing_cross_sections_movement: Create wing cross-section movements using the Real_Airfoil class.
+
 Real_Airfoil.get_airfoil_shape: Create the normalized airfoil shape from OptiTrack tracker points.
 
 Real_Airfoil.get_chord_length: Get the chord length of the current airfoil section.
@@ -21,6 +27,8 @@ Real_Airfoil.get_relative_transform: Get the relative position and orientation [
 
 import numpy as np
 import pandas as pd
+import pterasoftware as ps
+
 
 
 def load_data(optitrack_file, list_trackers, right=True):
@@ -114,6 +122,99 @@ def extract_columns(list_trackers):
         if letter not in columns:
             columns.append(letter)
     return columns
+
+def creation_airfoils(data, list_trackers, columns):
+    """Creates airfoil sections at step 0 using the Real_Airfoil class and defines the
+    airplane geometry using these airfoils.
+
+    :param data: A (n_frames, n_trackers, 3) ndarray of floats containing the processed
+        tracker coordinates expressed in the normalized right-handed reference frame.
+    :param list_trackers: A list of tracker names describing the order of markers in the file.
+    :param columns: A list of unique section letters.
+    :return: An Airplane object representing the airplane geometry.
+    """
+    # Create the airfoils at step 0.
+    airfoils_0 = {}
+
+    for column in columns:
+        airfoils_0[column] = Real_Airfoil(
+            data=data,
+            step=0,
+            column=column,
+            list_trackers=list_trackers,
+        )
+    
+    return airfoils_0
+
+def creation_wing_cross_sections(data, list_trackers, columns, frequency):
+    """Creates wing cross-sections using the Real_Airfoil class and defines the
+    airplane geometry using these airfoils.
+
+    :param data: A (n_frames, n_trackers, 3) ndarray of floats containing the processed
+        tracker coordinates expressed in the normalized right-handed reference frame.
+    :param list_trackers: A list of tracker names describing the order of markers in the file.
+    :param columns: A list of unique section letters.
+    :param frequency: The frequency of the flapping-cycle in Hz.
+    :return: A list of WingCrossSection objects representing the wing cross-sections.
+    """
+    airfoils_0 = creation_airfoils(data, list_trackers, columns)
+    wing_cross_sections = []
+    for column in columns: 
+        wing_cross_sections.append(
+            ps.geometry.wing_cross_section.WingCrossSection(
+                num_spanwise_panels = None if column == columns[-1] else 1, # Last wing cross-section has no panels 
+                chord=airfoils_0[column].get_chord_length(), 
+                Lp_Wcsp_Lpp=(0,0,0) if column == 'A' else airfoils_0[column].get_relative_transform()[0],
+                angles_Wcsp_to_Wcs_ixyz=(0,0,0) if column == 'A' else airfoils_0[column].get_relative_transform()[1],
+                control_surface_symmetry_type="symmetric",
+                control_surface_hinge_point=0.75,
+                control_surface_deflection=0.0,
+                spanwise_spacing=None if column == columns[-1] else "uniform", # Last wing cross-section has no panels
+                airfoil=ps.geometry.airfoil.Airfoil(
+                    name=f"column_{column}_airfoil",  
+                    outline_A_lp=airfoils_0[column].get_airfoil_shape(),
+                    resample=True,
+                    n_points_per_side=400,
+                    data=data,    # Pass the data to the Airfoil
+                    column=column,        # Pass the column to the Airfoil
+                    list_trackers=list_trackers,       # Pass the list of trackers to the Airfoil
+                    frequency=frequency,      # Pass the flapping-cycle frequency. This is required if you want to use "output_print_result"
+                ),
+            )
+        )
+    
+    return wing_cross_sections
+
+def wing_cross_sections_movement(wing, columns):
+    """Creates wing cross-section movements using the Real_Airfoil class and defines the
+    airplane geometry using these airfoils. 
+
+    :param data: A (n_frames, n_trackers, 3) ndarray of floats containing the processed
+        tracker coordinates expressed in the normalized right-handed reference frame.
+    :param list_trackers: A list of tracker names describing the order of markers in the file.
+    :param columns: A list of unique section letters.
+    :param frequency: The frequency of the flapping-cycle in Hz.
+    :return: A list of WingCrossSection objects representing the wing cross-sections.
+    """
+    wing_cross_section_movement=[]
+
+    for i in range (len(columns)):
+        wing_cross_section_movement.append(
+            ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                base_wing_cross_section=wing.wing_cross_sections[i],
+                ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
+                phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+                phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                optitrack = True  # Put to True to use OptiTrack data. The other parameters will be ignored except for base_wing_cross_section
+            )
+        )
+
+    return wing_cross_section_movement
 
 class Real_Airfoil:
     """A class to handle airfoil shape creation and analysis from OptiTrack data."""

@@ -1,61 +1,50 @@
-"""Contains functions for analyzing real wing kinematics from OptiTrack trackers and
-comparing them to a simulated reconstruction using the Unsteady Ring Vortex
-Lattice Method (URVLM) from Ptera Software.
+"""
+Tools for extracting real wing kinematics from OptiTrack data and
+comparing them with a URVLM-based simulated reconstruction (PteraSoftware).
 
-**Contains the following classes:**
+Main class
+----------
+WingKinematicsComparison
+    Extracts real wing motion, reconstructs an equivalent simulated motion,
+    and compares real and simulated trajectories and aerodynamic forces.
 
-Analysis: A class for extracting real wing motion, reconstructing an equivalent
-simulated motion, and comparing real and simulated aerodynamic behavior.
+Public methods
+--------------
+__init__
+    Initialize the analysis pipeline and build the simulated model.
 
-**Contains the following functions:**
+extract_movement_data
+    Extract flapping amplitudes and phases from tracker data.
 
-Analysis.__init__: Initializes the analysis pipeline and builds simulated equivalents.
+build_simulated_airplane
+    Build the simulated airplane geometry.
 
-Analysis.extract_movement_data: Extracts flapping amplitudes and phases from tracker data.
+build_simulated_movement
+    Reconstruct a periodic wing motion from extracted parameters.
 
-Analysis.build_simulated_airplane: Builds a simulated Airplane identical to the real one.
+build_simulated_problem
+    Build the unsteady aerodynamic problem.
 
-Analysis.build_simulated_movement: Reconstructs a periodic wing movement from extracted parameters.
+build_simulated_solver
+    Build and run the unsteady solver.
 
-Analysis.build_simulated_problem: Builds the simulated UnsteadyProblem.
+get_coordinates
+    Return the 3D coordinates of a wing point at a given time step.
 
-Analysis.build_simulated_solver: Builds and runs the simulated unsteady solver.
+get_full_trajectory
+    Return the full trajectory of a wing point.
 
-Analysis._track_point: Locates a normalized point inside the wing panel grid.
+compare_trajectories
+    Compute real–simulated trajectory differences.
 
-Analysis.get_coordinates: Returns the 3D coordinates of a wing point at a given time step.
+compare_forces
+    Compute real–simulated aerodynamic force differences.
 
-Analysis.get_full_trajectory: Returns the full trajectory of a wing point.
+plot_trajectory_3d
+    Plot real and simulated 3D trajectories.
 
-Analysis.compare_trajectories: Computes real–simulated trajectory differences.
-
-Analysis.plot_trajectory_3d: Plots real and simulated 3D trajectories.
-
-Analysis.plot_difference_position_versus_time: Plots the mean position error over time.
-
-Analysis.get_section_by_column: Extracts a wing section along a panel column.
-
-Analysis.plot_section: Plots a real and simulated wing section through one flapping cycle.
-
-Analysis.get_forces: Returns aerodynamic scalar forces at a given point.
-
-Analysis.get_full_forces: Returns scalar forces over all time steps.
-
-Analysis.compare_forces: Computes real–simulated force differences.
-
-Analysis.plot_panel_forces: Plots real and simulated lift, side force, and induced drag.
-
-Analysis.compute_forces_over_time: Returns forces, coefficients, moments, and moment coefficients.
-
-Analysis.plot_forces: Plots forces, force coefficients, moments, and moment coefficients.
-
-Analysis.get_wing_data: Returns wing vertex coordinates for all time steps.
-
-Analysis.max_edge_len: Computes the maximum edge length of a triangle.
-
-Analysis.plot_wing: Builds a filtered bisector mesh using Delaunay triangulation.
-
-Analysis.dynamic_wing: Animates real and simulated wing deformation over time.
+plot_forces
+    Plot forces, force coefficients, and moments.
 """
 
 
@@ -65,47 +54,57 @@ import pterasoftware as ps
 from scipy.spatial import Delaunay
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-class Analysis:
+class WingKinematicsComparison:
    
-    def __init__(self, unsteady_solver, frequency = None):
-        """Initializes the Analysis object by extracting the real movement data from an
-        unsteady solver, retrieving the airfoil tracking data, computing motion-related
-        quantities, and preparing all elements required to build a simulated airplane,
-        movement, problem, and solver.
+    def __init__(self, object, delta_time = None):
+        """Initializes the class and builds simulated equivalents.
 
-        :param unsteady_solver: The unsteady solver containing the real movement data.
-        :param frequency: The oscillation frequency of the movement in Hz.
-
+        :param object: Either a UnsteadyRingVortexLatticeMethodSolver object or an Airplane_movement object.    
         :return: None.
         """
-        self.solver = unsteady_solver
-        self.problem = self.solver.unsteady_problem
-        self.movement = self.problem.movement
-        self.airplane_movements = self.movement.airplane_movements[0]
-        self.num_steps = self.movement.num_steps
-        self.delta_time = self.movement.delta_time
-        self.base_airplane = self.airplane_movements.base_airplane
-        airfoil = self.base_airplane.wings[0].wing_cross_sections[0].airfoil
+        if isinstance(object, ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver):
+            self.solver = object
+            self.problem = self.solver.unsteady_problem
+            self.movement = self.problem.movement
+            if len(self.movement.airplane_movements) != 1:
+                raise ValueError("Analysis currently only supports a single AirplaneMovement.")
+            self.airplane_movements = self.movement.airplane_movements[0]
+            self.num_steps = self.movement.num_steps
+            self.delta_time = self.movement.delta_time
+            self.base_airplane = self.airplane_movements.base_airplane
+            airfoil = self.base_airplane.wings[0].wing_cross_sections[0].airfoil
 
-        self.data = airfoil.data
-        self.list_trackers = airfoil.list_trackers
+            self.data = airfoil.data
+            self.list_trackers = airfoil.list_trackers
 
-        if frequency is not None:
-            self.frequency = frequency
-        elif airfoil.frequency is not None:
-            self.frequency = airfoil.frequency
-        else:
-            raise ValueError("Frequency must be provided either in the Analysis constructor or in the Airfoil object.")
         
-        self.period=1/self.frequency
+            self.frequency = airfoil.frequency
+            self.period=1/self.frequency
+          
+            self.extract_movement_data()
+
+            self.simulated_airplane = self.build_simulated_airplane()
+            self.simulated_movement = self.build_simulated_movement()
+            self.simulated_problem = self.build_simulated_problem()
+            self.simulated_solver = self.build_simulated_solver()
+
+        elif isinstance(object, ps.geometry.airplane.Airplane):
+            self.base_airplane = object
+            airfoil = self.base_airplane.wings[0].wing_cross_sections[0].airfoil
+
+            self.data = airfoil.data
+            self.list_trackers = airfoil.list_trackers
+
+            self.frequency = airfoil.frequency
+            self.period=1/self.frequency
       
 
-        self.extract_movement_data()
+            self.extract_movement_data()
 
-        self.simulated_airplane = self.build_simulated_airplane()
-        self.simulated_movement = self.build_simulated_movement()
-        self.simulated_problem = self.build_simulated_problem()
-        self.simulated_solver = self.build_simulated_solver()
+            self.simulated_airplane = self.build_simulated_airplane()
+
+        else :
+            raise ValueError("Object must be either a UnsteadyRingVortexLatticeMethodSolver object, an Airplane_movement object, or an Airplane object.")
 
 
     def build_simulated_airplane(self):
@@ -146,7 +145,7 @@ class Analysis:
         )
 
         return ps.geometry.airplane.Airplane(
-            wings=[simulated_wing],
+            wings=[simulated_wing, self.base_airplane.wings[2]] if len(self.base_airplane.wings) > 2 else [simulated_wing],
             name="simulatedAirplane",
             Cg_GP1_CgP1=(0.0, 0.0, 0.0),
             weight=self.base_airplane.weight,
@@ -242,7 +241,7 @@ class Analysis:
 
             main_wing_cross_section_movement.append(mov)
 
-        if len(simulated_airplane.wings) >= 1:
+        if len(simulated_airplane.wings) > 1:
             for i, cs in enumerate(simulated_airplane.wings[1].wing_cross_sections):
 
                 mov = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
@@ -261,8 +260,34 @@ class Analysis:
         else:
             reflected_wing_cross_section_movement = []
 
+        if len(self.base_airplane.wings) > 2:
+            v_tail_root_wing_cross_section_movement = (
+                ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                    base_wing_cross_section=simulated_airplane.wings[2].wing_cross_sections[0], 
+                    ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
+                    phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                    periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+                    phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                )
+            )
+            v_tail_tip_wing_cross_section_movement = (
+                ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                    base_wing_cross_section=simulated_airplane.wings[2].wing_cross_sections[1],
+                    ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
+                    phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                    ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                    periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+                    phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                )
+            )   
 
- 
         maine_wing_movement = ps.movements.wing_movement.WingMovement(
                 base_wing=simulated_airplane.wings[0],
                 wing_cross_section_movements=main_wing_cross_section_movement,
@@ -291,10 +316,34 @@ class Analysis:
                 phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
             )
 
+        if len(self.base_airplane.wings) > 2:
+            v_tail_movement = ps.movements.wing_movement.WingMovement(
+                base_wing=simulated_airplane.wings[2],
+                wing_cross_section_movements=[
+                    v_tail_root_wing_cross_section_movement,
+                    v_tail_tip_wing_cross_section_movement,
+                ],
+                ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                spacingLer_Gs_Cgs=("sine", "sine", "sine"),
+                phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                ampAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+                spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
+                phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+            )
+
+        wing_movements = []
+        if reflected_wing_cross_section_movement != [] and len(self.base_airplane.wings) > 2:
+            wing_movements = [maine_wing_movement, reflected_main_wing_movement, v_tail_movement]
+        elif reflected_wing_cross_section_movement != []:
+            wing_movements = [maine_wing_movement, reflected_main_wing_movement]
+        else:
+            wing_movements = [maine_wing_movement]
 
         airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
             base_airplane=simulated_airplane,
-            wing_movements=[maine_wing_movement, reflected_main_wing_movement] if reflected_wing_cross_section_movement != [] else [maine_wing_movement],
+            wing_movements=wing_movements,
             ampCg_GP1_CgP1=(0.0, 0.0, 0.0),
             periodCg_GP1_CgP1=(0.0, 0.0, 0.0),
             spacingCg_GP1_CgP1=("sine", "sine", "sine"),
@@ -340,7 +389,6 @@ class Analysis:
         solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
             unsteady_problem=self.simulated_problem
         )
-        solver.run()
         return solver
 
     def _track_point(self, airplane, wing_index, x_norm, y_norm):
