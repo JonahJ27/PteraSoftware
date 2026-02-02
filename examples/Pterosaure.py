@@ -231,7 +231,7 @@ example_solver = (
 
 # Run the solver.
 example_solver.run(
-    prescribed_wake=True,
+    prescribed_wake=False,
     show_progress=True,
 )
 
@@ -239,13 +239,13 @@ example_solver.run(
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-# ps.output.animate(
-#     unsteady_solver=example_solver,
-#     scalar_type="lift",
-#     show_wake_vortices=True,
-#     save=True,
-# )
+ps.output.animate(
+    unsteady_solver=example_solver,
+    scalar_type="lift",
+    show_wake_vortices=True,
+    save=True,
+)
 
-ps.output.print_results(example_solver)
+# ps.output.print_results(example_solver)
 
-ps.output.plot_wing_loads_versus_time(unsteady_solver=example_solver, show=True)
+# ps.output.plot_wing_loads_versus_time(unsteady_solver=example_solver, show=True)

@@ -1678,3 +1678,63 @@ def plot_wing_loads_versus_time(
 
     
     plt.show()
+
+def amplitude_exp(
+    unsteady_solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    freq,
+    A
+):
+
+    if not isinstance(
+        unsteady_solver,
+        unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    ):
+        raise TypeError("unsteady_solver must be an UnsteadyRingVortexLatticeMethodSolver.")
+
+    first_results_step = unsteady_solver.first_results_step
+    num_steps = unsteady_solver.num_steps
+    delta_time = unsteady_solver.delta_time
+
+    num_steps_to_average = num_steps - first_results_step
+    total_time = num_steps * delta_time
+
+    times = np.linspace(0, total_time, num_steps)
+
+    forces_W = np.zeros((3, num_steps_to_average))
+    moments_W_CgP1 = np.zeros((3, num_steps_to_average))
+    power = np.zeros(num_steps_to_average)
+
+    # Convert amplitude to radians
+    A = A * np.pi / 180  
+
+    # Angular speed signal
+    speed = 2 * np.pi * freq * A * np.cos(2 * np.pi * freq * times)
+
+    result_id = 0
+
+    for step in range(first_results_step, num_steps):
+        airplane = unsteady_solver.steady_problems[step].airplanes[0]
+        wing = airplane.wings[0]
+
+        F = np.zeros(3)
+        M = np.zeros(3)
+
+        for panel in np.ravel(wing.panels):
+            F += panel.forces_W
+            M += panel.moments_W_CgP1
+
+        forces_W[:, result_id] = F
+        moments_W_CgP1[:, result_id] = M
+
+        # Match speed index to time step
+        power[result_id] = speed[step] * M[0]
+
+        result_id += 1
+
+    lift = np.mean(-forces_W[2])
+    drag = np.mean(-forces_W[0])
+    roll = np.mean(moments_W_CgP1[0])
+    mean_power = np.mean(power)
+
+    print(lift, drag, roll, mean_power)
+    return [lift, drag, roll, mean_power]
