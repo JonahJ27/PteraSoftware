@@ -84,7 +84,7 @@ class WingKinematicsComparison:
             self.extract_movement_data()
 
             self.simulated_airplane = self.build_simulated_airplane()
-            self.simulated_movement = self.build_simulated_movement()
+            self.simulated_airplane_movement = self.build_simulated_airplane_movement()
             self.simulated_problem = self.build_simulated_problem()
             self.simulated_solver = self.build_simulated_solver()
 
@@ -194,7 +194,7 @@ class WingKinematicsComparison:
         self.phase_shift = float(np.mean(phase_shift))
         self.status_phase = float(np.mean(status_phases))
 
-    def build_simulated_movement(self):
+    def build_simulated_airplane_movement(self):
         """Reconstructs a synthetic, periodic movement model from the extracted motion
         parameters, generating a simulated wing oscillation compatible with PteraSoftware.
 
@@ -223,11 +223,13 @@ class WingKinematicsComparison:
         A = np.degrees(A)
 
         main_wing_cross_section_movement = []
+        main_wing_cross_section_movement_single_step = []
         reflected_wing_cross_section_movement = []
+        reflected_wing_cross_section_movement_single_step = []
 
         for i, cs in enumerate(simulated_airplane.wings[0].wing_cross_sections):
 
-            mov = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+            movement = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
                 base_wing_cross_section=cs,
                 ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
                 periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
@@ -239,26 +241,12 @@ class WingKinematicsComparison:
                 phaseAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
             )
 
-            main_wing_cross_section_movement.append(mov)
+            single_step_movement = ps.movements.single_step.single_step_wing_cross_section_movement.SingleStepWingCrossSectionMovement()
 
-        if len(simulated_airplane.wings) > 1:
-            for i, cs in enumerate(simulated_airplane.wings[1].wing_cross_sections):
-
-                mov = ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
-                    base_wing_cross_section=cs,
-                    ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
-                    phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
-                    ampAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),  
-                    periodAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
-                    spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-                    phaseAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
-                )
-
-                reflected_wing_cross_section_movement.append(mov)
-        else:
-            reflected_wing_cross_section_movement = []
+            main_wing_cross_section_movement.append(movement)
+            main_wing_cross_section_movement_single_step.append(single_step_movement)
+            reflected_wing_cross_section_movement.append(movement)
+            reflected_wing_cross_section_movement_single_step.append(single_step_movement)
 
         if len(self.base_airplane.wings) > 2:
             v_tail_root_wing_cross_section_movement = (
@@ -301,11 +289,9 @@ class WingKinematicsComparison:
                 phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
             )
         
-
-        if reflected_wing_cross_section_movement != []:
-            reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
-                base_wing=simulated_airplane.wings[1],
-                wing_cross_section_movements=reflected_wing_cross_section_movement,
+        single_step_main_wing_movement = (
+            ps.movements.single_step.single_step_wing_movement.SingleStepWingMovement(
+                single_step_wing_cross_section_movements=main_wing_cross_section_movement_single_step,
                 ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 spacingLer_Gs_Cgs=("sine", "sine", "sine"),
@@ -315,6 +301,34 @@ class WingKinematicsComparison:
                 spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
                 phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
             )
+        )
+    
+        reflected_main_wing_movement = ps.movements.wing_movement.WingMovement(
+            base_wing=simulated_airplane.wings[1],
+            wing_cross_section_movements=reflected_wing_cross_section_movement,
+            ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
+            periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
+            spacingLer_Gs_Cgs=("sine", "sine", "sine"),
+            phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
+            ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
+            periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+            spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
+            phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+        )
+
+        single_step_reflected_main_wing_movement = (
+            ps.movements.single_step.single_step_wing_movement.SingleStepWingMovement(
+                single_step_wing_cross_section_movements=reflected_wing_cross_section_movement_single_step,
+                ampLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                spacingLer_Gs_Cgs=("sine", "sine", "sine"),
+                phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
+                ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
+                periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+                spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
+                phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+            )
+        )
 
         if len(self.base_airplane.wings) > 2:
             v_tail_movement = ps.movements.wing_movement.WingMovement(
@@ -334,12 +348,10 @@ class WingKinematicsComparison:
             )
 
         wing_movements = []
-        if reflected_wing_cross_section_movement != [] and len(self.base_airplane.wings) > 2:
+        if len(self.base_airplane.wings) > 2:
             wing_movements = [maine_wing_movement, reflected_main_wing_movement, v_tail_movement]
-        elif reflected_wing_cross_section_movement != []:
+        else :
             wing_movements = [maine_wing_movement, reflected_main_wing_movement]
-        else:
-            wing_movements = [maine_wing_movement]
 
         airplane_movement = ps.movements.airplane_movement.AirplaneMovement(
             base_airplane=simulated_airplane,
@@ -350,7 +362,20 @@ class WingKinematicsComparison:
             phaseCg_GP1_CgP1=(0.0, 0.0, 0.0),
         )
 
-        return airplane_movement
+        single_step_airplane_movement = (
+            ps.movements.single_step.single_step_airplane_movement.SingleStepAirplaneMovement(
+                single_step_wing_movements=[
+                    single_step_main_wing_movement,
+                    single_step_reflected_main_wing_movement,
+                ],
+                ampCg_GP1_CgP1=(0.0, 0.0, 0.0),
+                periodCg_GP1_CgP1=(0.0, 0.0, 0.0),
+                spacingCg_GP1_CgP1=("sine", "sine", "sine"),
+                phaseCg_GP1_CgP1=(0.0, 0.0, 0.0),
+            )
+        )
+
+        return [airplane_movement, single_step_airplane_movement]
     
     def build_simulated_problem(self):
         """Builds a simulated unsteady aerodynamic problem using the same operating-point
@@ -360,22 +385,38 @@ class WingKinematicsComparison:
 
         :return: A simulated UnsteadyProblem object.
         """
-        real_op_mov = self.movement.operating_point_movement
+        # real_op_mov = self.movement.operating_point_movement
 
-        simulated_op_mov = ps.movements.operating_point_movement.OperatingPointMovement(
-            base_operating_point = real_op_mov.base_operating_point,
-            periodVCg__E        = real_op_mov.periodVCg__E,
-            spacingVCg__E       = real_op_mov.spacingVCg__E,
+        simulated_operating_point_movement = self.movement.operating_point_movement
+        single_step_operating_point_movement = (
+            ps.movements.single_step.single_step_operating_point_movement.SingleStepOperatingPointMovement(
+                ampVCg__E=0.0, periodVCg__E=simulated_operating_point_movement.periodVCg__E, spacingVCg__E=simulated_operating_point_movement.spacingVCg__E
+            )
         )
+        # ps.movements.operating_point_movement.OperatingPointMovement(
+        #     base_operating_point = real_op_mov.base_operating_point,
+        #     periodVCg__E        = real_op_mov.periodVCg__E,
+        #     spacingVCg__E       = real_op_mov.spacingVCg__E,
+        # )
 
         simulated_movement = ps.movements.movement.Movement(
-            airplane_movements       = [self.simulated_movement],
-            operating_point_movement = simulated_op_mov,
+            airplane_movements       = [self.simulated_airplane_movement[0]],
+            operating_point_movement = simulated_operating_point_movement,
             delta_time               = self.delta_time,
             num_steps                = self.num_steps,
         )
 
-        return ps.problems.UnsteadyProblem(simulated_movement)
+        single_step_movement = ps.movements.single_step.single_step_movement.SingleStepMovement(
+            single_step_airplane_movements=[self.simulated_airplane_movement[1]],
+            single_step_operating_point_movement=single_step_operating_point_movement,
+            delta_time=self.delta_time,
+            num_steps=self.num_steps,
+        )
+
+        return ps.problems.BetterAeroelasticUnsteadyProblem(
+            movement=simulated_movement,
+            single_step_movement=single_step_movement,
+            )   
 
 
     def build_simulated_solver(self):
@@ -386,8 +427,8 @@ class WingKinematicsComparison:
 
         :return: A simulated UnsteadyRingVortexLatticeMethodSolver object.
         """
-        solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
-            unsteady_problem=self.simulated_problem
+        solver = ps.coupled_unsteady_ring_vortex_lattice_method.CoupledUnsteadyRingVortexLatticeMethodSolver(
+            coupled_unsteady_problem=self.simulated_problem
         )
         return solver
 
@@ -931,25 +972,27 @@ class WingKinematicsComparison:
 
         :return: Dictionary mapping each time step to an array of panel vertex coordinates.
         """
-        movement = (
-            self.movement
-            if real
-            else self.simulated_solver.unsteady_problem.movement
-        )
 
         coords={}
 
-        for step in range(movement.num_steps):
-            coords_step=[]
-            airplane = movement.airplanes[0][step]
+        for step in range(self.num_steps):
+            coords_step = []
+
+            if real:
+                airplane = self.solver.steady_problems[step].airplanes[0]
+            else:
+                airplane = self.simulated_solver.steady_problems[step].airplanes[0]
+
             wing = airplane.wings[wing_index]
             panels = np.ravel(wing.panels)
-            for panel_id, panel in enumerate(panels):
-                for vertex_name in ["Flpp_GP1_CgP1", "Frpp_GP1_CgP1",
-                                    "Brpp_GP1_CgP1", "Blpp_GP1_CgP1"]:
-                    vertex = getattr(panel, vertex_name)
-                    coords_step.append(vertex)
-           
+
+            for panel in panels:
+                for vertex_name in [
+                    "Flpp_GP1_CgP1", "Frpp_GP1_CgP1",
+                    "Brpp_GP1_CgP1", "Blpp_GP1_CgP1"
+                ]:
+                    coords_step.append(getattr(panel, vertex_name))
+
             coords[step] = np.array(coords_step)
 
         return coords

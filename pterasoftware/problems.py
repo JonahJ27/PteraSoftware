@@ -576,11 +576,11 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.angluar_velocities = None
 
         # Tunable Parameters
-        self.wing_density = 0.024  # per unit height kg/m^2
+        self.wing_density = 1  # per unit height kg/m^2
         self.moment_scaling_factor = 1
-        self.spring_constant = 0
+        self.spring_constant = 1
         self.damping_constant = 1
-        self.aero_scaling = 3.0
+        self.aero_scaling = 1
         self.numerical_integration = True # use numerical integration or closed form solution
         self.damping_eps = 1e-3  # critical damping tolerance
 
@@ -714,35 +714,35 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.net_data.append(self.net_deformation.copy())
         self.angluar_velocity_data.append(self.angluar_velocities.copy())
 
-        if step % 10  == 3:
-            # print("Net deformation: ", self.net_deformation)
-            # print("step deformation: ", step_deformation)
-            aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(num_chordwise_panels, num_spanwise_panels, 3)
+        # if step % 10  == 3:
+        #     # print("Net deformation: ", self.net_deformation)
+        #     # print("step deformation: ", step_deformation)
+        #     aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(num_chordwise_panels, num_spanwise_panels, 3)
 
-            # print("Aero Moments Slep", self.net_deformation[:, 1])
-            print("Thetas: ", thetas)
+        #     # print("Aero Moments Slep", self.net_deformation[:, 1])
+        #     print("Thetas: ", thetas)
 
-        if step == self.num_steps - 1:
-            zero_curve = np.zeros((1, np.array(self.per_step_inertial).shape[0]))
-            print(np.array(self.per_step_inertial).shape)
-            print(np.array(self.per_step_aero).shape)
-            print(np.array(self.per_step_spring).shape)
-            print(np.array(self.per_step_data).shape)
-            print(np.array(self.net_data).shape)
-            plot_curves(np.array(self.per_step_data)[:, :, 1].T.tolist(), "Per Step Deformation")
-            plot_curves(np.array(self.net_data)[:, :, 1].T.tolist(), "Net Deformation")
-            plot_curves(np.vstack((zero_curve, np.array(self.per_step_inertial)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Inertial Moments")
-            plot_curves(np.vstack((zero_curve, np.array(self.per_step_aero)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Aero Moments")
-            plot_curves(np.vstack((zero_curve, np.array(self.per_step_spring)[:, :, 2].sum(axis=1).T)).tolist(), "Per Step Spring Moments")
-            plot_curves(
-                np.vstack(
-                    (
-                        zero_curve,
-                        np.array(self.flap_points)[:, :, :, 2].sum(axis=1).T,
-                    )
-                ).tolist(),
-                "Flap Points Z",
-            )
+        # if step == self.num_steps - 1:
+        #     zero_curve = np.zeros((1, np.array(self.per_step_inertial).shape[0]))
+        #     print(np.array(self.per_step_inertial).shape)
+        #     print(np.array(self.per_step_aero).shape)
+        #     print(np.array(self.per_step_spring).shape)
+        #     print(np.array(self.per_step_data).shape)
+        #     print(np.array(self.net_data).shape)
+        #     plot_curves(np.array(self.per_step_data)[:, :, 1].T.tolist(), "Per Step Deformation")
+        #     plot_curves(np.array(self.net_data)[:, :, 1].T.tolist(), "Net Deformation")
+        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_inertial)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Inertial Moments")
+        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_aero)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Aero Moments")
+        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_spring)[:, :, 2].sum(axis=1).T)).tolist(), "Per Step Spring Moments")
+        #     plot_curves(
+        #         np.vstack(
+        #             (
+        #                 zero_curve,
+        #                 np.array(self.flap_points)[:, :, :, 2].sum(axis=1).T,
+        #             )
+        #         ).tolist(),
+        #         "Flap Points Z",
+        #     )
 
         return self.net_deformation
 
@@ -966,7 +966,7 @@ def plot_curves(data, title, flap_cycle=None):
     data: list of lists
           each inner list is a curve
     """
-    plt.figure(figsize=(12, 6), dpi=200)
+    plt.figure()
 
     for i, curve in enumerate(data):
         x = range(len(curve))

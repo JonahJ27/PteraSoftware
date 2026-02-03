@@ -1028,18 +1028,31 @@ def print_results(
     ):
         these_airplanes = solver.airplanes
         solver_type = "steady"
+        
     elif isinstance(
         solver,
         (
             unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+        )
+    ):
+        these_airplanes = solver.current_airplanes
+        if solver.unsteady_problem.movement.static :
+            solver_type = "static geometry unsteady"
+        else:
+            solver_type = "variable geometry unsteady"
+
+    elif isinstance(
+        solver,
+        (
             coupled_unsteady_ring_vortex_lattice_method.CoupledUnsteadyRingVortexLatticeMethodSolver,
         )
     ):
         these_airplanes = solver.current_airplanes
-        if solver.unsteady_problem.movement.static:
+        if solver.coupled_unsteady_problem.movement.static :
             solver_type = "static geometry unsteady"
         else:
             solver_type = "variable geometry unsteady"
+
     else:
         raise TypeError(
             "solver must be a SteadyHorseshoeVortexLatticeMethodSolver, "
@@ -1127,8 +1140,10 @@ def print_results(
 
             case "static geometry unsteady":
                 assert isinstance(
-                    solver,
-                    unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                    solver, (
+                        unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                        coupled_unsteady_ring_vortex_lattice_method.CoupledUnsteadyRingVortexLatticeMethodSolver,
+                    )
                 )
 
                 title1 = f"{pad}Final Forces (in wind axes):"
@@ -1138,20 +1153,37 @@ def print_results(
                     f"{pad}Final Moment Coefficients (in wind axes, relative to "
                     f"the CG):"
                 )
-                these_forces_W = solver.unsteady_problem.finalForces_W[airplane_num]
-                these_moments_W_CgP1 = solver.unsteady_problem.finalMoments_W_CgP1[
-                    airplane_num
-                ]
-                these_forceCoefficients_W = (
-                    solver.unsteady_problem.finalForceCoefficients_W[airplane_num]
-                )
-                these_momentCoefficients_W_CgP1 = (
-                    solver.unsteady_problem.finalMomentCoefficients_W_CgP1[airplane_num]
-                )
+
+                if isinstance(solver, unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver):
+                    these_forces_W = solver.unsteady_problem.finalForces_W[airplane_num]
+                    these_moments_W_CgP1 = solver.unsteady_problem.finalMoments_W_CgP1[
+                        airplane_num
+                    ]
+                    these_forceCoefficients_W = (
+                        solver.unsteady_problem.finalForceCoefficients_W[airplane_num]
+                    )
+                    these_momentCoefficients_W_CgP1 = (
+                        solver.unsteady_problem.finalMomentCoefficients_W_CgP1[airplane_num]
+                    )
+
+                else : 
+                    these_forces_W = solver.coupled_unsteady_problem.finalForces_W[airplane_num]
+                    these_moments_W_CgP1 = solver.coupled_unsteady_problem.finalMoments_W_CgP1[
+                        airplane_num
+                    ]
+                    these_forceCoefficients_W = (
+                        solver.coupled_unsteady_problem.finalForceCoefficients_W[airplane_num]
+                    )
+                    these_momentCoefficients_W_CgP1 = (
+                        solver.coupled_unsteady_problem.finalMomentCoefficients_W_CgP1[airplane_num]
+                    )
+
             case "variable geometry unsteady":
                 assert isinstance(
-                    solver,
-                    unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                    solver, (
+                        unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                        coupled_unsteady_ring_vortex_lattice_method.CoupledUnsteadyRingVortexLatticeMethodSolver,
+                    )
                 )
 
                 title1 = f"{pad}Final Cycle-Averaged Forces (in wind axes):"
@@ -1164,18 +1196,34 @@ def print_results(
                     f"{pad}Final Cycle-Averaged Moment Coefficients (in wind "
                     f"axes, relative to the CG):"
                 )
-                these_forces_W = solver.unsteady_problem.finalMeanForces_W[airplane_num]
-                these_moments_W_CgP1 = solver.unsteady_problem.finalMeanMoments_W_CgP1[
-                    airplane_num
-                ]
-                these_forceCoefficients_W = (
-                    solver.unsteady_problem.finalMeanForceCoefficients_W[airplane_num]
-                )
-                these_momentCoefficients_W_CgP1 = (
-                    solver.unsteady_problem.finalMeanMomentCoefficients_W_CgP1[
+
+                if isinstance(solver, unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver):
+                    these_forces_W = solver.unsteady_problem.finalMeanForces_W[airplane_num]
+                    these_moments_W_CgP1 = solver.unsteady_problem.finalMeanMoments_W_CgP1[
                         airplane_num
                     ]
-                )
+                    these_forceCoefficients_W = (
+                        solver.unsteady_problem.finalMeanForceCoefficients_W[airplane_num]
+                    )
+                    these_momentCoefficients_W_CgP1 = (
+                        solver.unsteady_problem.finalMeanMomentCoefficients_W_CgP1[
+                            airplane_num
+                        ]
+                    )
+                
+                else : 
+                    these_forces_W = solver.coupled_unsteady_problem.finalMeanForces_W[airplane_num]
+                    these_moments_W_CgP1 = solver.coupled_unsteady_problem.finalMeanMoments_W_CgP1[
+                        airplane_num
+                    ]
+                    these_forceCoefficients_W = (
+                        solver.coupled_unsteady_problem.finalMeanForceCoefficients_W[airplane_num]
+                    )
+                    these_momentCoefficients_W_CgP1 = (
+                        solver.coupled_unsteady_problem.finalMeanMomentCoefficients_W_CgP1[
+                            airplane_num
+                        ]
+                    )
             case _:
                 raise ValueError(f"Unknown solver type: {solver_type}")
 
@@ -1610,7 +1658,7 @@ def _add_tracking_point(plotter, airplane, wing_index, x_norm, y_norm):
 
 
 def plot_wing_loads_versus_time(
-    unsteady_solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
     airplane_index: int = 0,
     wing_index: int = 0,
     save: bool = False,
@@ -1631,15 +1679,16 @@ def plot_wing_loads_versus_time(
     :return: None
     """
     if not isinstance(
-        unsteady_solver,
-        unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+        solver, (
+            unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+            coupled_unsteady_ring_vortex_lattice_method.CoupledUnsteadyRingVortexLatticeMethodSolver,
+        )
     ):
-        raise TypeError("unsteady_solver must be an UnsteadyRingVortexLatticeMethodSolver.")
+        raise TypeError("solver must be an UnsteadyRingVortexLatticeMethodSolver.")
 
-    first_results_step = unsteady_solver.first_results_step
-    num_steps = unsteady_solver.num_steps
-    delta_time = unsteady_solver.delta_time
-
+    first_results_step = solver.first_results_step
+    num_steps = solver.num_steps
+    delta_time = solver.delta_time
     num_steps_to_average = num_steps - first_results_step
     times = np.linspace(
         first_results_step * delta_time,
@@ -1653,15 +1702,15 @@ def plot_wing_loads_versus_time(
     result_id = 0
 
     for step in range(first_results_step, num_steps):
-        airplane = unsteady_solver.steady_problems[step].airplanes[airplane_index]
+        airplane = solver.steady_problems[step].airplanes[airplane_index]
         wing = airplane.wings[wing_index]
 
         F = np.zeros(3)
         M = np.zeros(3)
 
         for panel in np.ravel(wing.panels):
-            F += panel.forces_W
-            M += panel.moments_W_CgP1
+            F += panel.forces_W  #we print the forces in the wind axes
+            M += panel.moments_GP1_CgP1  #we print the moments in the airplane axes to know the tork around the roll axis
 
         forces_W[:, result_id] = F
         moments_W_CgP1[:, result_id] = M
@@ -1738,7 +1787,7 @@ def amplitude_exp(
 
         for panel in np.ravel(wing.panels):
             F += panel.forces_W
-            M += panel.moments_W_CgP1
+            M += panel.moments_GP1_CgP1
 
         forces_W[:, result_id] = F
         moments_W_CgP1[:, result_id] = M

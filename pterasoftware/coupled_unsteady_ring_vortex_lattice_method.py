@@ -208,6 +208,9 @@ class CoupledUnsteadyRingVortexLatticeMethodSolver:
         prescribed_wake: bool | np.bool_ = True,
         calculate_streamlines: bool | np.bool_ = True,
         show_progress: bool | np.bool_ = True,
+        wing_density=None,
+        damping_constant=None,
+        spring_constant=None,
     ) -> None:
         """Runs the solver on the UnsteadyProblem.
 
@@ -225,6 +228,15 @@ class CoupledUnsteadyRingVortexLatticeMethodSolver:
             converted internally to a bool. The default is True.
         :return: None
         """
+        if wing_density is not None:
+            self.coupled_unsteady_problem.wing_density = wing_density
+
+        if spring_constant is not None:
+            self.coupled_unsteady_problem.spring_constant = spring_constant
+
+        if damping_constant is not None:
+            self.coupled_unsteady_problem.damping_constant = damping_constant 
+
         self._prescribed_wake = _parameter_validation.boolLike_return_bool(
             prescribed_wake, "prescribed_wake"
         )
@@ -507,6 +519,7 @@ class CoupledUnsteadyRingVortexLatticeMethodSolver:
                 # Update the progress bar based on this time step's predicted
                 # approximate, relative computing time.
                 self.steady_problems.append(self.coupled_unsteady_problem.get_steady_problem(step))
+
                 bar.update(n=float(approx_times[step + 1]))
 
             _logger.debug("Calculating averaged or final forces and moments.")
