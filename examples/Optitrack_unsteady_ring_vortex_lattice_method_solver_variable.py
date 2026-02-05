@@ -7,7 +7,7 @@ import numpy as np
 
 # Define all the necessary parameters for loading the OptiTrack data.
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
 
 # This list is adapted for our robot, you may need to change the list according to your setup.
 list_trackers = [
@@ -18,7 +18,7 @@ list_trackers = [
     "I1", "I2"
 ]
 
-frequency = 5  # Frequency of the flapping-cycle in Hz.
+frequency = 4  # Frequency of the flapping-cycle in Hz.
 
 columns = ps.geometry.airfoil_creation.extract_columns(list_trackers)
 
@@ -196,7 +196,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=10,
+    num_steps=200,
 )
 
 # Define the UnsteadyProblem.
@@ -219,6 +219,9 @@ simulated_solver = WingKinematicsComparison.simulated_solver
 simulated_solver.run(
     prescribed_wake=True,
     show_progress=True,
+    wing_density=0.05,
+    damping_constant=0.1,
+    spring_constant=100
 )
 # WingKinematicsComparison.dynamic_wing()
 # Run the solver.
@@ -235,11 +238,12 @@ simulated_solver.run(
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-# ps.output.animate(
-#     unsteady_solver=example_solver,
-#     scalar_type="lift",
-#     show_wake_vortices=False,
-# )
+ps.output.animate(
+    unsteady_solver=simulated_solver,
+    scalar_type="lift",
+    show_wake_vortices=True,
+    Save=True,
+)
 
 # ps.output.print_results(example_solver)
 # print(movement.static)

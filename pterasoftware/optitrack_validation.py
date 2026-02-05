@@ -48,6 +48,7 @@ plot_forces
 """
 
 
+from matplotlib.pylab import real
 import numpy as np
 import matplotlib.pyplot as plt
 import pterasoftware as ps
@@ -472,12 +473,12 @@ class WingKinematicsComparison:
 
         :return: A (3,) array with the interpolated 3D coordinate.
         """
-        airplane = (
-            self.movement.airplanes[0][step]
-            if real
-            else self.simulated_solver.unsteady_problem.movement.airplanes[0][step]
-        )
-
+        
+        if real:
+            airplane = self.solver.steady_problems[step].airplanes[0]
+        else:
+            airplane = self.simulated_solver.steady_problems[step].airplanes[0]
+    
         i, j, u, v = self._track_point(airplane, 0, x_norm, y_norm)
         panel = airplane.wings[0].panels[i, j]
 
@@ -600,9 +601,60 @@ class WingKinematicsComparison:
         t = np.arange(self.num_steps) * self.delta_time
         plt.plot(t, mean)
         plt.xlabel("Time (s)")
-        plt.ylabel("mean of the distances (mm)")
+        plt.ylabel("mean of the distances (m)")
         plt.title("Mean error between actual and simulated trajectories")
         plt.show()
+
+    def get_mean_difference_position_mae(self):
+        """Computes and prints the mean positional error between real and simulated movement
+
+        :param None:
+
+        :return: None.
+        """
+        sum_dif = np.zeros(self.num_steps)
+
+        x_values = np.linspace(0, 1, 100)
+        y_values = np.linspace(0, 1, 100)
+
+        for x in x_values:
+            for y in y_values:
+                diff = self.compare_trajectories(x, y)
+                dist = np.linalg.norm(diff, axis=1) 
+                sum_dif += dist 
+        
+        mean = sum_dif/(len(x_values) * len(y_values))
+        
+        print("Mean error between actual and simulated trajectories: " + str(np.mean(mean)) + " m")
+        return np.mean(mean)
+
+    def get_mean_difference_position_rms(self):
+        """Computes and returns the RMS positional error between real and simulated movement."""
+
+        sum_sq_dif = np.zeros(self.num_steps)
+
+        x_values = np.linspace(0, 1, 100)
+        y_values = np.linspace(0, 1, 100)
+
+        for x in x_values:
+            for y in y_values:
+                diff = self.compare_trajectories(x, y)
+                dist_sq = np.linalg.norm(diff, axis=1) ** 2
+                sum_sq_dif += dist_sq
+
+        mean_sq = sum_sq_dif / (len(x_values) * len(y_values))
+
+        # RMS temporelle + spatiale
+        rms = np.sqrt(np.mean(mean_sq))
+
+        print(
+            "RMS error between actual and simulated trajectories: "
+            + str(rms)
+            + " m"
+        )
+
+        return rms
+
 
     #sections ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -615,18 +667,21 @@ class WingKinematicsComparison:
 
         :return: List of section coordinates for each time-step.
         """
-        movement = (
-            self.movement
-            if real
-            else self.simulated_solver.unsteady_problem.movement
-        )
+    
+        if real:
+            airplane = self.solver.steady_problems[step].airplanes[0]
+        else:
+            airplane = self.simulated_solver.steady_problems[step].airplanes[0]
 
         wing_index = 0
         coords_by_step = []
 
-        for step in range(movement.num_steps):
+        for step in range(self.num_steps):
 
-            airplane = movement.airplanes[0][step]
+            if real:
+                airplane = self.solver.steady_problems[step].airplanes[0]
+            else:
+                airplane = self.simulated_solver.steady_problems[step].airplanes[0]
             wing = airplane.wings[wing_index]
 
             panels_column = wing.panels[:, col_index]

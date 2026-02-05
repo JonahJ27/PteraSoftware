@@ -580,15 +580,9 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.moment_scaling_factor = 1
         self.spring_constant = 1
         self.damping_constant = 1
-        self.aero_scaling = 1
+        self.aero_scaling = 0
         self.numerical_integration = True # use numerical integration or closed form solution
         self.damping_eps = 1e-3  # critical damping tolerance
-
-        # self.wing_density = 0.012  # per unit height kg/m^2
-        # self.moment_scaling_factor = 5
-        # self.spring_constant = 1
-        # self.aero_scaling = 0.0
-        # self.new_integrand = True
 
         self.per_step_data = []
         self.net_data = []
@@ -606,7 +600,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         if len(self.positions) <= 2:
             return np.zeros_like(self.positions[0])
         dt = self.movement.delta_time
-        return (self.positions[-1] - 2 * self.positions[-2] + self.positions[-3]) / (dt * dt)
+        return (self.positions[-1] - 2 * self.positions[-2] + self.positions[-3]) / (dt * dt)   #correct only if position=theta, all the computation relly on a rotation/moment equation
 
     def calculate_mass_matrix(self, wing):
         areas = np.array([[panel.area for panel in row] for row in wing.panels])
@@ -649,7 +643,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
             self.net_deformation = np.zeros((num_spanwise_panels + 1, 3))
             self.angluar_velocities = np.zeros((num_spanwise_panels + 1, 3))
 
-        aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(
+        aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(  
             num_chordwise_panels, num_spanwise_panels, 3
         ) * self.aero_scaling
 
@@ -657,16 +651,16 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
             [[panel.Cpp_GP1_CgP1 for panel in row] for row in wing.panels]
         ))
 
-        mass_matrix = self.calculate_mass_matrix(wing)
+        mass_matrix = self.calculate_mass_matrix(wing)  # mass de l'aile
 
-        inertial_forces = (
-            self.calculate_wing_panel_accelerations()
-            * mass_matrix
-        )
+        # inertial_forces = (
+        #     self.calculate_wing_panel_accelerations()
+        #     * mass_matrix
+        # )
 
-        inertial_moments = np.cross(
-            self.positions[-1] - solver.stack_leading_edge_points[:num_panels].reshape((num_chordwise_panels, num_spanwise_panels, 3)), inertial_forces, axis=2
-        )
+        # inertial_moments = np.cross(
+        #     self.positions[-1] - solver.stack_leading_edge_points[:num_panels].reshape((num_chordwise_panels, num_spanwise_panels, 3)), inertial_forces, axis=2
+        # )  #produit vectoriel entre le bras de levier et la force inertielle (bizzare)
 
         undeforemed_wing = self.steady_problems[step].airplanes[0].wings[0]
         undeformed_postions = np.array(
@@ -684,13 +678,13 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         if self.base_wing_positions is None:
             self.base_wing_positions = np.array(undeformed_postions)
 
-        self.flap_points.append(np.array(undeformed_postions) - self.base_wing_positions)
-        self.per_step_inertial.append(inertial_moments.copy())
-        self.per_step_aero.append(aeroMoments_GP1_Slep.copy())
-        self.per_step_spring.append(spring_moments.copy())
+        # self.flap_points.append(np.array(undeformed_postions) - self.base_wing_positions)  # sert a rien
+        # self.per_step_inertial.append(inertial_moments.copy())       # sert a rien
+        # self.per_step_aero.append(aeroMoments_GP1_Slep.copy())        # sert a rien
+        # self.per_step_spring.append(spring_moments.copy())            # sert a rien
 
-        total_moments = aeroMoments_GP1_Slep - inertial_moments #+ spring_moments
-        deformation_moments = total_moments[:, :, 2]  # Z-axis moments
+        # # total_moments = aeroMoments_GP1_Slep - inertial_moments #+ spring_moments #sert a rien
+        # deformation_moments = total_moments[:, :, 2]  # Z-axis moments  #sert a rien
 
         step_deformation = np.array(
             [
@@ -761,7 +755,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
                 omega0 = self.angluar_velocities[span_panel][1]  
 
             dt = self.movement.delta_time
-            mass = mass_matrix[:, span_panel, :].sum()
+            mass = mass_matrix[:, span_panel, :].sum() 
             # Equation for rotational inertia of rectangular prism about flapping axis
             # Considers two factors, the first is the rotational inertial of a rectangular
             # prism about its centroid, the second is the parallel axis theorem to
@@ -771,7 +765,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
                 + wing.wing_cross_sections[span_panel + 1].chord
             ) / 2
             W = np.linalg.norm(wing.panels[0][span_panel].frontLeg_G)
-            d += W / 2
+            d += W / 2           
             span_I = 1/12 * mass * (L ** 2 + W ** 2)  + mass * (d ** 2) 
             # span_I = d * mass * L
             theta, omega, moment = self.calculate_torsional_spring_moment(
@@ -779,14 +773,16 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
                 # 1/2 * M * L^2
                 # I=mass * (wing.wing_cross_sections[span_panel].chord ** 2) / 2,
                 # I= 4/3 * mass * (L ** 2),
-                I=span_I,
+                # I=span_I,
+                I=4/3 * mass * (L ** 2),
                 theta0=theta0,
                 omega0=omega0,
                 aero_span_moment=aero_span_moment,
                 step=step,
-                span_I=span_I,
+                span_I=mass*d*L
+                # span_I=span_I,
             )
-            d += W / 2
+            d += W / 2                          
             print("Theta", theta, "Omega", omega, "Moment", moment)
             thetas[span_panel + 1] = theta
             omegas[span_panel + 1] = omega
@@ -814,7 +810,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
             )
 
         # ---- Internal spring-damper moment ----
-        spring_moment = -k * theta - c * omega
+        spring_moment = k * theta - c * omega
 
         # ---- Net moment (optional, depending on sign convention) ----
         # net_moment = spring_moment + tau(t)

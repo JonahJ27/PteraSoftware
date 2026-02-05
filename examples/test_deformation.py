@@ -101,7 +101,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=300,
+    num_steps=72,
 )
 
 # Define the UnsteadyProblem.
@@ -121,31 +121,27 @@ example_solver = (
 
 WingKinematicsComparison = ps.optitrack_validation.WingKinematicsComparison(example_solver)
 
-output_csv = r"C:\Users\henri\Documents\MIT\PteraSoftware\results.csv"
 
-with open(output_csv, mode="w", newline="") as file:
-    writer = csv.writer(file)
-    writer.writerow(["wing_density", "damping_constant", "spring_constant", "mean_difference_position_rms", "mean_difference_orientation_mae"])
+simulated_solver = WingKinematicsComparison.simulated_solver
 
-with open(output_csv, mode="a", newline="") as file:
-    writer = csv.writer(file)
-    for damping_constant in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
-        for spring_constant in [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]:
+simulated_solver.run(
+    prescribed_wake=True,
+    show_progress=True,
+    wing_density=0.05,
+    damping_constant=0.1,
+    spring_constant=0.01,
+)
 
-            WingKinematicsComparison_loop = copy.deepcopy(WingKinematicsComparison)
 
-            simulated_solver = WingKinematicsComparison_loop.simulated_solver
+WingKinematicsComparison.dynamic_wing()
 
-            simulated_solver.run(
-                prescribed_wake=True,
-                show_progress=True,
-                wing_density=0.05,
-                damping_constant=damping_constant,
-                spring_constant=spring_constant,
-            )
+ps.output.animate(
+    unsteady_solver=simulated_solver,
+    scalar_type="lift",
+    show_wake_vortices=True,
+    save=True,
+)
 
-            difference = WingKinematicsComparison_loop.get_mean_difference_position()
 
-            writer.writerow([0.05, damping_constant, spring_constant, difference])
 
-            del WingKinematicsComparison_loop
+           
