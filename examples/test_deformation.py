@@ -3,17 +3,21 @@ import numpy as np
 import csv
 import copy
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
 
 list_trackers = [
-    "A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5",
-    "C1", "C2", "C3", "C4", "C5", "D1", "D2", "D3", "D4", "D5",
-    "E1", "E2", "E3", "E4", "E5", "F1", "F2", "F3", "F4", "F5", 
-    "G1", "G2", "G3", "G4", "G5", "H1", "H2", "H3", "H4",
+    "A1", "A2", "A3", 
+    "B1", "B2", "B3", "B4", "B5",
+    "C1", "C2", "C3", "C4", "C5", 
+    "D1", "D2", "D3", "D4", "D5",
+    "E1", "E2", "E3", "E4", "E5", 
+    "F1", "F2", "F3", "F4", "F5", 
+    "G1", "G2", "G3", "G4", "G5", 
+    "H1", "H2", "H3", "H4",
     "I1", "I2"
 ]
 
-frequency = 5  
+frequency = 4  
 
 columns = ps.geometry.airfoil_creation.extract_columns(list_trackers)
 
@@ -101,7 +105,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=72,
+    num_steps=100,
 )
 
 # Define the UnsteadyProblem.
@@ -121,19 +125,18 @@ example_solver = (
 
 WingKinematicsComparison = ps.optitrack_validation.WingKinematicsComparison(example_solver)
 
-
 simulated_solver = WingKinematicsComparison.simulated_solver
 
 simulated_solver.run(
     prescribed_wake=True,
     show_progress=True,
-    wing_density=0.05,
-    damping_constant=0.1,
-    spring_constant=0.01,
+    wing_density=0.09,
+    damping_constant=0.006,
+    spring_constant=0,
 )
 
 
-WingKinematicsComparison.dynamic_wing()
+# WingKinematicsComparison.dynamic_wing()
 
 ps.output.animate(
     unsteady_solver=simulated_solver,

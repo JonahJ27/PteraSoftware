@@ -7,7 +7,7 @@ import numpy as np
 
 # Define all the necessary parameters for loading the OptiTrack data.
 
-optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\four_hz.csv"
+optitrack_file = r"C:\Users\henri\Documents\MIT\PteraSoftware\optitrack_data\five_hz.csv"
 
 # This list is adapted for our robot, you may need to change the list according to your setup.
 list_trackers = [
@@ -214,21 +214,21 @@ example_solver = (
     )
 )
 
-WingKinematicsComparison = ps.optitrack_validation.WingKinematicsComparison(example_solver)
-simulated_solver = WingKinematicsComparison.simulated_solver
-simulated_solver.run(
-    prescribed_wake=True,
-    show_progress=True,
-    wing_density=0.05,
-    damping_constant=0.1,
-    spring_constant=100
-)
-# WingKinematicsComparison.dynamic_wing()
-# Run the solver.
-# example_solver.run(
+# WingKinematicsComparison = ps.optitrack_validation.WingKinematicsComparison(example_solver)
+# simulated_solver = WingKinematicsComparison.simulated_solver
+# simulated_solver.run(
 #     prescribed_wake=True,
 #     show_progress=True,
+#     wing_density=0.05,
+#     damping_constant=0.1,
+#     spring_constant=100
 # )
+# WingKinematicsComparison.dynamic_wing()
+# Run the solver.
+example_solver.run(
+    prescribed_wake=True,
+    show_progress=True,
+)
 
 # simulated_solver.run(
 #     prescribed_wake=True,
@@ -238,21 +238,18 @@ simulated_solver.run(
 # shed. The GIF is saved in the same directory as this script. Press "q",
 # after orienting the view, to begin the animation.
 
-ps.output.animate(
-    unsteady_solver=simulated_solver,
-    scalar_type="lift",
-    show_wake_vortices=True,
-    Save=True,
-)
+# ps.output.plot_results_versus_time(example_solver)
+# ps.output.plot_wing_loads_versus_time(example_solver)
+
 
 # ps.output.print_results(example_solver)
 # print(movement.static)
 
 # ps.output.animate(
 #     unsteady_solver=example_solver,
-#     scalar_type="difference position",     
+#     scalar_type="lift",     
 #     show_wake_vortices=True,
 #     save=True,
-#     simulated_solver=simulated_solver,
 #  )
 
+ps.output.plot_theta(example_solver, wing_cross_section_index=5)

@@ -1804,3 +1804,38 @@ def amplitude_exp(
 
     print(lift, drag, roll, mean_power)
     return [lift, drag, roll, mean_power]
+
+def plot_theta(
+    solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    wing_cross_section_index: int,
+):
+    num_steps = solver.num_steps
+    delta_time = solver.delta_time
+    times = np.linspace(0, num_steps * delta_time, num_steps)
+    theta = np.zeros(num_steps)
+    alpha = np.zeros(num_steps)
+    for i in range(num_steps):
+        airplane = solver.steady_problems[i].airplanes[0]
+        wing = airplane.wings[0]
+        Lp_Wcsp_Lpp=np.sum([WCS.Lp_Wcsp_Lpp for WCS in wing.wing_cross_sections[:wing_cross_section_index+1]])
+        angles_Wcsp_to_Wcs_ixyz = np.sum([WCS.angles_Wcsp_to_Wcs_ixyz for WCS in wing.wing_cross_sections[:wing_cross_section_index+1]])
+        theta[i] = angles_Wcsp_to_Wcs_ixyz[1]
+        alpha[i] = np.arctan2(Lp_Wcsp_Lpp[1], Lp_Wcsp_Lpp[2])
+    omega = np.gradient(theta,delta_time)     
+    omega_dot = np.gradient(omega,delta_time)
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(times, theta, label=r"$\theta$")
+    plt.plot(times, alpha, label=r"$\alpha$")
+    plt.plot(times, omega, label=r"$\omega$")
+    plt.plot(times, omega_dot, label=r"$\dot{\omega}$")
+
+    plt.xlabel("Time [s]")
+    plt.ylabel("Amplitude")
+    plt.title("Temporal evolution of kinematic quantities")
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+

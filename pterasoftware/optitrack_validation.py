@@ -48,12 +48,14 @@ plot_forces
 """
 
 
+import time
 from matplotlib.pylab import real
 import numpy as np
 import matplotlib.pyplot as plt
 import pterasoftware as ps
 from scipy.spatial import Delaunay
 from matplotlib.animation import FuncAnimation, PillowWriter
+import copy
 
 class WingKinematicsComparison:
    
@@ -184,8 +186,8 @@ class WingKinematicsComparison:
             p1 = tracker_data[1]
 
 
-            amplitudes_max.append(np.arctan2(p_max[2], p_max[1] - 25*10**-3))  # 25 is half the width of the robot body (in mm), change it for each robot
-            amplitudes_min.append(np.arctan2(p_min[2], p_min[1] - 25*10**-3))
+            amplitudes_max.append(np.arctan2(p_max[2], p_max[1]))
+            amplitudes_min.append(np.arctan2(p_min[2], p_min[1]))
             phase_shift.append(np.arctan2(p0[2], p0[1]))
             status_phases.append(np.arctan2(p1[2], p1[1]))
 
@@ -194,6 +196,33 @@ class WingKinematicsComparison:
         self.amplitude_min = float(np.mean(amplitudes_min)) 
         self.phase_shift = float(np.mean(phase_shift))
         self.status_phase = float(np.mean(status_phases))
+
+    def extract_listLp_Wcsp_Lpp(self):
+        """Extracts the list of Lp_Wcsp_Lpp values for each tracker and stores them in self.listLp_Wcsp_Lpp.
+
+        :param None:
+
+        :return: None.
+        """
+        self.listLp_Wcsp_Lpp = []
+        real_trackers = [t for t in self.list_trackers]
+        trackers_1 = [t for t in real_trackers if "1" in t]
+
+        for tracker in trackers_1:
+            index = self.list_trackers.index(tracker)
+            tracker_data = self.data[:, index] 
+            self.listLp_Wcsp_Lpp.append(tracker_data)
+
+        orignial_listLp_Wcsp_Lpp = copy.deepcopy(self.listLp_Wcsp_Lpp)
+        for i in range(1, len(self.listLp_Wcsp_Lpp)):
+            self.listLp_Wcsp_Lpp[i] = (
+                orignial_listLp_Wcsp_Lpp[i] - orignial_listLp_Wcsp_Lpp[i - 1]
+            )
+
+        self.listLp_Wcsp_Lpp[0][:] = [0.0, 0.0, 0.0]
+
+        for i in range(len(self.listLp_Wcsp_Lpp)):
+            self.listLp_Wcsp_Lpp[i] = self.listLp_Wcsp_Lpp[i].T
 
     def build_simulated_airplane_movement(self):
         """Reconstructs a synthetic, periodic movement model from the extracted motion
@@ -205,23 +234,42 @@ class WingKinematicsComparison:
         """
         simulated_airplane = self.simulated_airplane
 
-        A = abs((self.amplitude_max - self.amplitude_min)/2)
+        # A = abs((self.amplitude_max - self.amplitude_min)/2)
 
-        theta0 = self.phase_shift
-        theta1 = self.status_phase
+        # theta0 = self.phase_shift
+        # theta1 = self.status_phase
 
-        s = np.clip(theta0/ A, -1.0, 1.0)
+        # s = np.clip(theta0/ A, -1.0, 1.0)
 
-        dt = self.delta_time
-        omega = 2*np.pi*self.frequency
+        # dt = self.delta_time
+        # omega = 2*np.pi*self.frequency
 
-        dtheta = (theta1 - theta0) / dt
-        c = np.clip(dtheta / (A * omega), -1.0, 1.0)
+        # dtheta = (theta1 - theta0) / dt
+        # c = np.clip(dtheta / (A * omega), -1.0, 1.0)
 
-        phi = np.arctan2(s, c)
+        # phi = np.arctan2(s, c)
 
-        phi = np.degrees(phi)
-        A = np.degrees(A)
+        # phi = np.degrees(phi)
+        # A = np.degrees(A)
+
+        # omega = 2 * np.pi * self.frequency
+
+        # A_rad = np.radians(A)
+        # phi_rad = np.radians(phi)
+
+        # t = np.linspace(0, 2 / self.frequency, 1000)
+
+        # alpha = - A_rad * omega**2 * np.sin(omega * t + phi_rad)
+
+        # plt.figure()
+        # plt.plot(t, alpha)
+        # plt.xlabel("Time (s)")
+        # plt.ylabel("Angular acceleration (rad/s²)")
+        # plt.title("Analytical Angular Acceleration")
+        # plt.grid(True)
+        # plt.show()
+
+        self.extract_listLp_Wcsp_Lpp()
 
         main_wing_cross_section_movement = []
         main_wing_cross_section_movement_single_step = []
@@ -239,10 +287,21 @@ class WingKinematicsComparison:
                 ampAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
                 periodAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
                 spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
-                phaseAngles_Wcsp_to_Wcs_ixyz=(0, 0.0, 0.0),
+                phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                listLp_Wcsp_Lpp=self.listLp_Wcsp_Lpp[i]
             )
 
-            single_step_movement = ps.movements.single_step.single_step_wing_cross_section_movement.SingleStepWingCrossSectionMovement()
+            single_step_movement = ps.movements.single_step.single_step_wing_cross_section_movement.SingleStepWingCrossSectionMovement(
+                ampLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                periodLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                spacingLp_Wcsp_Lpp=("sine", "sine", "sine"),
+                phaseLp_Wcsp_Lpp=(0.0, 0.0, 0.0),
+                ampAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+                phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                listLp_Wcsp_Lpp=self.listLp_Wcsp_Lpp[i]
+            )
 
             main_wing_cross_section_movement.append(movement)
             main_wing_cross_section_movement_single_step.append(single_step_movement)
@@ -284,10 +343,10 @@ class WingKinematicsComparison:
                 periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 spacingLer_Gs_Cgs=("sine", "sine", "sine"),
                 phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
-                ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
-                periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+                ampAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
                 spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
-                phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+                phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
             )
         
         single_step_main_wing_movement = (
@@ -297,10 +356,10 @@ class WingKinematicsComparison:
                 periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 spacingLer_Gs_Cgs=("sine", "sine", "sine"),
                 phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
-                ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
-                periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+                ampAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
                 spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
-                phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+                phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
             )
         )
     
@@ -311,10 +370,10 @@ class WingKinematicsComparison:
             periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
             spacingLer_Gs_Cgs=("sine", "sine", "sine"),
             phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
-            ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
-            periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+            ampAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+            periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
             spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
-            phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+            phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
         )
 
         single_step_reflected_main_wing_movement = (
@@ -324,10 +383,10 @@ class WingKinematicsComparison:
                 periodLer_Gs_Cgs=(0.0, 0.0, 0.0),
                 spacingLer_Gs_Cgs=("sine", "sine", "sine"),
                 phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
-                ampAngles_Gs_to_Wn_ixyz=(A, 0.0, 0.0),
-                periodAngles_Gs_to_Wn_ixyz=(self.period, 0.0, 0.0),
+                ampAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+                periodAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
                 spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
-                phaseAngles_Gs_to_Wn_ixyz=(phi, 0.0, 0.0),
+                phaseAngles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
             )
         )
 
@@ -378,6 +437,7 @@ class WingKinematicsComparison:
 
         return [airplane_movement, single_step_airplane_movement]
     
+    
     def build_simulated_problem(self):
         """Builds a simulated unsteady aerodynamic problem using the same operating-point
         movement as the real case but using the simulated Movement created previously.
@@ -417,8 +477,8 @@ class WingKinematicsComparison:
         return ps.problems.BetterAeroelasticUnsteadyProblem(
             movement=simulated_movement,
             single_step_movement=single_step_movement,
+            custom_spacing_second_derivative=True,
             )   
-
 
     def build_simulated_solver(self):
         """Creates and runs a simulated unsteady vortex-lattice solver corresponding to the
@@ -701,7 +761,120 @@ class WingKinematicsComparison:
             coords_by_step.append(section_points)
 
         return coords_by_step
+    def plot_theta(self, wing_cross_section_index=0):
+        num_steps = self.num_steps
+        delta_time = self.delta_time
+        times = np.linspace(0, num_steps * delta_time, num_steps)
+        theta = np.zeros(num_steps)
+        alpha = np.zeros(num_steps)
+        first_airfoil = [t for t in self.list_trackers if "A" in t]
+f
+        Cross_section_0 = self.get_section_by_column(0, real=True)
+        Cross_section_n = self.get_section_by_column(wing_cross_section_index, real=True)
+        if idx == 0 :  
+            next_col = sections[idx + 1]
 
+            next_cross_section = Real_Airfoil(self.data, self.step,
+                                next_col, self.list_trackers)
+
+            Xp = (1,0,0)
+            Yp = (0,1,0)
+            Zp = (0,0,1)
+            Rp = np.column_stack((Xp, Yp, Zp))
+
+            Xe = self.get_chord_unit()
+            Ye = next_cross_section.get_Lp() - self.get_Lp()
+            Ze = np.cross(Xe, Ye); Ze /= np.linalg.norm(Ze)
+            Ye = np.cross(Ze, Xe); Ye /= np.linalg.norm(Ye)
+            Re = np.column_stack((Xe, Ye, Ze))
+
+            R = Rp.T @ Re
+
+            angY = np.degrees(np.arcsin(-R[2, 0]))
+            angX = np.degrees(np.arctan2(R[2, 1], R[2, 2]))
+            angZ = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+
+            angles_Wcsp_to_Wcs_ixyz = np.array([angX, angY, angZ])
+
+            Lp_Wcsp_Lpp = self.get_Lp() 
+        
+        
+        elif idx == len(extract_columns(self.list_trackers)) - 1:
+            parent_col = sections[idx - 1]
+
+            parent = Real_Airfoil(self.data, self.step,
+                                parent_col, self.list_trackers)
+
+            Xp = parent.get_chord_unit()
+            Yp = self.get_Lp() - parent.get_Lp()
+            Zp = np.cross(Xp, Yp); Zp /= np.linalg.norm(Zp)
+            Yp = np.cross(Zp, Xp); Yp /= np.linalg.norm(Yp)
+            Rp = np.column_stack((Xp, Yp, Zp))
+
+            Xe = self.get_chord_unit()
+            Ye = self.get_Lp() - parent.get_Lp()
+            Ze = np.cross(Xe, Ye); Ze /= np.linalg.norm(Ze)
+            Ye = np.cross(Ze, Xe); Ye /= np.linalg.norm(Ye)
+            Re = np.column_stack((Xe, Ye, Ze))
+
+            R = Rp.T @ Re
+
+            angY = np.degrees(np.arcsin(-R[2, 0]))
+            angX = np.degrees(np.arctan2(R[2, 1], R[2, 2]))
+            angZ = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+            angles_Wcsp_to_Wcs_ixyz = np.array([angX, angY, angZ])
+
+            Lp_Wcsp_Lpp = Rp.T @ (self.get_Lp() - parent.get_Lp())
+
+        else :
+            parent_col = sections[idx - 1]
+
+            parent = Real_Airfoil(self.data, self.step,
+                                parent_col, self.list_trackers)
+
+            next_col = sections[idx + 1]
+
+            next_cross_section = Real_Airfoil(self.data, self.step,
+                                next_col, self.list_trackers)
+
+            Xp = parent.get_chord_unit()
+            Yp = self.get_Lp() - parent.get_Lp()
+            Zp = np.cross(Xp, Yp); Zp /= np.linalg.norm(Zp)
+            Yp = np.cross(Zp, Xp); Yp /= np.linalg.norm(Yp)
+            Rp = np.column_stack((Xp, Yp, Zp))
+
+            Xe = self.get_chord_unit()
+            Ye = next_cross_section.get_Lp() - self.get_Lp() 
+            Ze = np.cross(Xe, Ye); Ze /= np.linalg.norm(Ze)
+            Ye = np.cross(Ze, Xe); Ye /= np.linalg.norm(Ye)
+            Re = np.column_stack((Xe, Ye, Ze))
+
+            R = Rp.T @ Re
+
+            angY = np.degrees(np.arcsin(-R[2, 0]))
+            angX = np.degrees(np.arctan2(R[2, 1], R[2, 2]))
+            angZ = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+            angles_Wcsp_to_Wcs_ixyz = np.array([angX, angY, angZ])
+
+            Lp_Wcsp_Lpp = Rp.T @ (self.get_Lp() - parent.get_Lp())
+
+        omega = np.gradient(theta,delta_time)     
+        omega_dot = np.gradient(omega,delta_time)
+        plt.figure(figsize=(10, 6))
+
+        plt.plot(times, theta, label=r"$\theta$")
+        plt.plot(times, alpha, label=r"$\alpha$")
+        plt.plot(times, omega, label=r"$\omega$")
+        plt.plot(times, omega_dot, label=r"$\dot{\omega}$")
+
+        plt.xlabel("Time [s]")
+        plt.ylabel("Amplitude")
+        plt.title("Temporal evolution of kinematic quantities")
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.show()
     def plot_section(self, col_index, compare_simulated=True):
         """Plots the flapping motion of a wing section over half a period (upstroke and
         downstroke), and optionally compares real and simulated data.
@@ -1092,11 +1265,8 @@ class WingKinematicsComparison:
     def dynamic_wing(self, wing_index=0):
         """Creates an animated visualization comparing the 3D bisector mesh of the real
         wing and the simulated wing over time.
-
-        :param wing_index: Index of the wing to animate.
-
-        :return: A matplotlib FuncAnimation object containing the animation.
         """
+
         points_real_dict = self.get_wing_data(real=True, wing_index=wing_index)
         steps = sorted(points_real_dict.keys())
         points_real = np.array([points_real_dict[s] for s in steps])
@@ -1106,46 +1276,71 @@ class WingKinematicsComparison:
 
         faces = self.plot_wing(points_real[0])
 
-        fig = plt.figure(figsize=(10, 10))
+        fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        ax.set_xlim(-0.500, 0.500)
-        ax.set_ylim(-0.500, 0.500)
-        ax.set_zlim(-0.500, 0.500)
+        lim = 0.5
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_zlim(-lim, lim)
+
+        ax.grid(False)
 
         def update(frame):
             ax.cla()
 
-            ax.set_xlim(-0.500, 0.500)
-            ax.set_ylim(-0.500, 0.500)
-            ax.set_zlim(-0.500, 0.500)
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+            ax.set_zlim(-lim, lim)
+            ax.grid(False)
 
-            
             P = points_real[frame]
-
-            ax.plot_trisurf(
+            surf_real = ax.plot_trisurf(
                 P[:, 0], P[:, 1], P[:, 2],
-                triangles=faces, color='cyan',
-                edgecolor='k', linewidth=0.2, alpha=0.5
+                triangles=faces,
+                color='cyan',
+                edgecolor='none',
+                linewidth=0,
+                alpha=0.4,
+                shade=True
             )
-            ax.scatter(P[:, 0], P[:, 1], P[:, 2], color='b', s=12)
 
-            
-            F = points_simulated[frame].copy()
-        
+            scatter_real = ax.scatter(
+                P[:, 0], P[:, 1], P[:, 2],
+                color='blue',
+                s=15,
+                label="Tracker OptiTrack"
+            )
 
-            ax.plot_trisurf(
+            F = points_simulated[frame]
+            surf_sim = ax.plot_trisurf(
                 F[:, 0], F[:, 1], F[:, 2],
-                triangles=faces, color='orange',
-                edgecolor='k', linewidth=0.2, alpha=0.5
+                triangles=faces,
+                color='red',
+                edgecolor='none',
+                linewidth=0,
+                alpha=0.6,
+                shade=True
             )
-            ax.scatter(F[:, 0], F[:, 1], F[:, 2], color='r', s=12)
 
-            ax.set_title(f"Real (cyan/blue) vs simulated Mirrored (orange/red) — Frame {frame+1}/{len(points_real)}")
+            ax.set_title(
+                f"Real deformations of OptiTrack (cyan/blue) vs simulated deformations of PteraSoftware (red) — Frame {frame+1}/{len(points_real)}"
+            )
+
+            ax.legend(loc="upper right")
+
             return ax,
 
-        ani = FuncAnimation(fig, update, frames=len(points_real), interval=80, blit=False)
-        writer = PillowWriter(fps=12)
+        ani = FuncAnimation(
+            fig,
+            update,
+            frames=len(points_real),
+            interval=1000/120,
+            blit=False
+        )
+
+        writer = PillowWriter(fps=20)
         ani.save("Dynamic.gif", writer=writer)
+
         plt.show()
 

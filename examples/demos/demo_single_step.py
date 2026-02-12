@@ -254,7 +254,7 @@ main_wing_movement = ps.movements.wing_movement.WingMovement(
     ampAngles_Gs_to_Wn_ixyz=(15.0, 0.0, 0.0),  # (0.0, 0.0, 0.0),
     periodAngles_Gs_to_Wn_ixyz=(1.0, 0.0, 0.0),  # (0.0, 0.0, 0.0),
     spacingAngles_Gs_to_Wn_ixyz=("sine", "sine", "sine"),
-    phaseAngles_Gs_to_Wn_ixyz=(130.0, 0.0, 0.0),
+    phaseAngles_Gs_to_Wn_ixyz=(130.0, 0, 0.0),
 )
 
 single_step_main_wing_movement = (
@@ -395,7 +395,7 @@ movement = ps.movements.movement.Movement(
     airplane_movements=[airplane_movement],
     operating_point_movement=operating_point_movement,
     delta_time=0.03,
-    num_cycles=3,
+    num_cycles=1,
     num_chords=None,
     num_steps=None,
 )
@@ -433,9 +433,9 @@ del example_problem
 example_solver.run(
     prescribed_wake=True,
     show_progress=True,
-    wing_density=1,
-    damping_constant=0.0,
-    spring_constant=0.0,
+    wing_density=0.1,
+    damping_constant=3,
+    spring_constant=0.5,
 )
 
 # Call the animate function on the solver. This produces a GIF of the wake being

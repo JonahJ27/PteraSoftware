@@ -67,6 +67,7 @@ class WingCrossSectionMovement:
             0.0,
             0.0,
         ),
+        listLp_Wcsp_Lpp = None,
         optitrack=False,
     ) -> None:
         """The initialization method.
@@ -144,6 +145,11 @@ class WingCrossSectionMovement:
             ampAngles_Wcsp_to_Wcs_ixyz is 0.0 and non zero if not. Values are converted
             to floats internally. The units are in degrees. The default is (0.0, 0.0,
             0.0).
+        :param listLp_Wcsp_Lpp: A list of 3 ndarrays with shape (num_steps,) representing the
+            Lp_Wcsp_Lpp values for each time step. If this parameter is not None, 
+            the WingCrossSectionMovement will use these values for the WingCrossSection's 
+            Lp_Wcsp_Lpp parameters at each time step instead of generating them with 
+            the oscillating functions. The default is None.
         :param optitrack: Set to True to use OptiTrack data for the movement. The other
             parameters will be ignored except for base_wing_cross_section. Default is
             False.
@@ -236,9 +242,9 @@ class WingCrossSectionMovement:
                 )
         self.periodAngles_Wcsp_to_Wcs_ixyz = periodAngles_Wcsp_to_Wcs_ixyz
         
-        if self.base_wing_cross_section.airfoil.frequency is not None and optitrack:
-            frequency = self.base_wing_cross_section.airfoil.frequency
-            self.periodAngles_Wcsp_to_Wcs_ixyz = (1/frequency, 0,0)
+        # if self.base_wing_cross_section.airfoil.frequency is not None:
+        #     frequency = self.base_wing_cross_section.airfoil.frequency
+        #     self.periodAngles_Wcsp_to_Wcs_ixyz = (1/frequency, 0,0)
 
         spacingAngles_Wcsp_to_Wcs_ixyz = (
             _parameter_validation.threeD_spacing_vectorLike_return_tuple(
@@ -269,6 +275,8 @@ class WingCrossSectionMovement:
                     "be also be 0.0."
                 )
         self.phaseAngles_Wcsp_to_Wcs_ixyz = phaseAngles_Wcsp_to_Wcs_ixyz
+
+        self.listLp_Wcsp_Lpp = listLp_Wcsp_Lpp
 
         self.optitrack = optitrack
 
@@ -320,39 +328,42 @@ class WingCrossSectionMovement:
         # If optitrack is False, then use the oscillating functions to generate the movement of the WingCrossSection
         if self.optitrack is False :
             # Generate oscillating values for each dimension of Lp_Wcsp_Lpp.
-            listLp_Wcsp_Lpp = np.zeros((3, num_steps), dtype=float)
-            for dim in range(3):
-                spacing = self.spacingLp_Wcsp_Lpp[dim]
-                if spacing == "sine":
-                    listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_sinspaces(
-                        amps=self.ampLp_Wcsp_Lpp[dim],
-                        periods=self.periodLp_Wcsp_Lpp[dim],
-                        phases=self.phaseLp_Wcsp_Lpp[dim],
-                        bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
-                        num_steps=num_steps,
-                        delta_time=delta_time,
-                    )
-                elif spacing == "uniform":
-                    listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_linspaces(
-                        amps=self.ampLp_Wcsp_Lpp[dim],
-                        periods=self.periodLp_Wcsp_Lpp[dim],
-                        phases=self.phaseLp_Wcsp_Lpp[dim],
-                        bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
-                        num_steps=num_steps,
-                        delta_time=delta_time,
-                    )
-                elif callable(spacing):
-                    listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_customspaces(
-                        amps=self.ampLp_Wcsp_Lpp[dim],
-                        periods=self.periodLp_Wcsp_Lpp[dim],
-                        phases=self.phaseLp_Wcsp_Lpp[dim],
-                        bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
-                        num_steps=num_steps,
-                        delta_time=delta_time,
-                        custom_function=spacing,
-                    )
-                else:
-                    raise ValueError(f"Invalid spacing value: {spacing}")
+            if self.listLp_Wcsp_Lpp is None:
+                listLp_Wcsp_Lpp = np.zeros((3, num_steps), dtype=float)
+                for dim in range(3):
+                    spacing = self.spacingLp_Wcsp_Lpp[dim]
+                    if spacing == "sine":
+                        listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_sinspaces(
+                            amps=self.ampLp_Wcsp_Lpp[dim],
+                            periods=self.periodLp_Wcsp_Lpp[dim],
+                            phases=self.phaseLp_Wcsp_Lpp[dim],
+                            bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
+                            num_steps=num_steps,
+                            delta_time=delta_time,
+                        )
+                    elif spacing == "uniform":
+                        listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_linspaces(
+                            amps=self.ampLp_Wcsp_Lpp[dim],
+                            periods=self.periodLp_Wcsp_Lpp[dim],
+                            phases=self.phaseLp_Wcsp_Lpp[dim],
+                            bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
+                            num_steps=num_steps,
+                            delta_time=delta_time,
+                        )
+                    elif callable(spacing):
+                        listLp_Wcsp_Lpp[dim, :] = _functions.oscillating_customspaces(
+                            amps=self.ampLp_Wcsp_Lpp[dim],
+                            periods=self.periodLp_Wcsp_Lpp[dim],
+                            phases=self.phaseLp_Wcsp_Lpp[dim],
+                            bases=self.base_wing_cross_section.Lp_Wcsp_Lpp[dim],
+                            num_steps=num_steps,
+                            delta_time=delta_time,
+                            custom_function=spacing,
+                        )
+                    else:
+                        raise ValueError(f"Invalid spacing value: {spacing}")
+            else:
+                listLp_Wcsp_Lpp = self.listLp_Wcsp_Lpp
 
             # Generate oscillating values for each dimension of angles_Wcsp_to_Wcs_ixyz.
             listAngles_Wcsp_to_Wcs_ixyz = np.zeros((3, num_steps), dtype=float)

@@ -17,6 +17,7 @@ import math
 
 import numpy as np
 import scipy.signal as sp_sig
+from scipy.interpolate import UnivariateSpline
 
 
 from copy import deepcopy
@@ -576,10 +577,10 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.angluar_velocities = None
 
         # Tunable Parameters
-        self.wing_density = 1  # per unit height kg/m^2
+        self.wing_density = 0.9  # per unit height kg/m^2
         self.moment_scaling_factor = 1
-        self.spring_constant = 1
-        self.damping_constant = 1
+        self.spring_constant = 100
+        self.damping_constant = 0.03
         self.aero_scaling = 0
         self.numerical_integration = True # use numerical integration or closed form solution
         self.damping_eps = 1e-3  # critical damping tolerance
@@ -594,6 +595,9 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.flap_points = []
 
         # For custom spacing defined in movement.
+        if custom_spacing_second_derivative is True :
+            self.angular_acceleration_vector = self.angular_acceleration_function()
+        
         self.custom_spacing_second_derivative = custom_spacing_second_derivative
 
     def calculate_wing_panel_accelerations(self):
@@ -766,21 +770,15 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
             ) / 2
             W = np.linalg.norm(wing.panels[0][span_panel].frontLeg_G)
             d += W / 2           
-            span_I = 1/12 * mass * (L ** 2 + W ** 2)  + mass * (d ** 2) 
-            # span_I = d * mass * L
             theta, omega, moment = self.calculate_torsional_spring_moment(
                 dt,
-                # 1/2 * M * L^2
-                # I=mass * (wing.wing_cross_sections[span_panel].chord ** 2) / 2,
-                # I= 4/3 * mass * (L ** 2),
-                # I=span_I,
                 I=4/3 * mass * (L ** 2),
                 theta0=theta0,
                 omega0=omega0,
                 aero_span_moment=aero_span_moment,
                 step=step,
-                span_I=mass*d*L
-                # span_I=span_I,
+                span_I=mass*d*L,
+                dist=d
             )
             d += W / 2                          
             print("Theta", theta, "Omega", omega, "Moment", moment)
@@ -791,7 +789,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         return thetas, omegas, spring_moments
 
     def calculate_torsional_spring_moment(
-        self, dt, I, theta0, omega0, aero_span_moment, step, span_I, num_steps=2, 
+        self, dt, I, theta0, omega0, aero_span_moment, step, span_I, num_steps=2, dist=1, 
     ):
         k = self.spring_constant
         c = self.damping_constant
@@ -833,17 +831,89 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         amp = wing_movement.ampAngles_Gs_to_Wn_ixyz[0]
         b = 2 * np.pi / wing_movement.periodAngles_Gs_to_Wn_ixyz[0]
         h = np.deg2rad(wing_movement.phaseAngles_Gs_to_Wn_ixyz[0])
-        if spacing == "sine":
+        if self.custom_spacing_second_derivative is not None:
+            if self.custom_spacing_second_derivative is True :
+                torque_func = lambda time: self.angular_acceleration_optitrack_function(time) * span_I
+            else :
+                torque_func = lambda time: self.custom_spacing_second_derivative(time) * span_I
+        elif spacing == "sine":
             torque_func = lambda time: -1 * (b ** 2) * np.sin(b * time + h) * amp * span_I
         elif spacing == "uniform":
             raise ValueError("Sawtooth function (uniform spacing) is not differentiable, cannot be used for inertial torque function.")
-        elif callable(spacing):
-            if self.custom_spacing_second_derivative is not None:
-                torque_func = lambda time: self.custom_spacing_second_derivative(time) * span_I
-            else:
-                raise ValueError("Custom spacing function provided without second derivative function for inertial torque calculation.")
+        else:
+            raise ValueError("Custom spacing function provided without second derivative function for inertial torque calculation.")
 
         return torque_func 
+
+    def angular_acceleration_function(self):
+        """
+        Docstring for generate_inertial_torque_function_optitrack
+        
+        :param span_I: float
+            The rotational inertia of the wing span section about alpha (the flapping axis).
+        """
+        # origine = self.single_step_movement.airplane_movements[0].wing_movements[0].wing_cross_section_movements[0].listLp_Wcsp_Lpp.T
+        # tip = np.sum([m.listLp_Wcsp_Lpp.T for m in self.single_step_movement.airplane_movements[0].wing_movements[0].wing_cross_section_movements[:]], axis=0)
+        leading_edge_vector = np.sum([m.listLp_Wcsp_Lpp.T for m in self.single_step_movement.airplane_movements[0].wing_movements[0].wing_cross_section_movements[:5]], axis=0) #np.array(tip) - np.array(origine)
+        print("Leading edge vector: ", leading_edge_vector)
+        angular_acceleration_vector = np.zeros(self.movement.num_steps)
+        # for i in range(2, len(angular_acceleration_vector) - 2):
+        #     angle_1=np.arctan2(np.linalg.norm(np.cross(leading_edge_vector[i-2], leading_edge_vector[i-1])), np.dot(leading_edge_vector[i-2], leading_edge_vector[i-1]))
+        #     angle_2=np.arctan2(np.linalg.norm(np.cross(leading_edge_vector[i-1], leading_edge_vector[i])), np.dot(leading_edge_vector[i-1], leading_edge_vector[i]))
+        #     acceleration=(angle_2-angle_1)/self.movement.delta_time**2
+        #     angular_acceleration_vector[i]=acceleration
+        # angular_acceleration_vector[0]=angular_acceleration_vector[2]
+        # angular_acceleration_vector[1]=angular_acceleration_vector[2]
+        # angular_acceleration_vector[-1]=angular_acceleration_vector[-3]
+        # angular_acceleration_vector[-2]=angular_acceleration_vector[-3]
+        # alpha = angular_acceleration_vector
+        # theta = np.atan2(leading_edge_vector[:, 1],  # y
+        #            leading_edge_vector[:, 2])  # Z
+        # omega = np.gradient(theta, self.movement.delta_time)     
+        # alpha = np.gradient(omega, self.movement.delta_time) 
+        # dt = self.movement.delta_time
+        # v_norm = np.linalg.norm(leading_edge_vector, axis=1, keepdims=True)
+        # v_unit = leading_edge_vector / v_norm
+
+        # dv_dt = np.gradient(v_unit, dt, axis=0)
+        # omega_vec = np.cross(v_unit, dv_dt)
+        # e = np.array([1, 0, 0])
+        # omega = omega_vec @ e
+        # alpha = np.gradient(omega, dt)
+        # # print("Theta: ", np.rad2deg(theta))  # print(theta)  
+        # print(self.movement.delta_time)   
+        # print("Angular acceleration vector: ", alpha)
+
+        dt = self.movement.delta_time
+        t = np.arange(len(leading_edge_vector)) * dt
+        v_norm = np.linalg.norm(leading_edge_vector, axis=1, keepdims=True)
+        v_unit = leading_edge_vector / v_norm
+        dv_dt = np.gradient(v_unit, dt, axis=0)
+        omega_vec = np.cross(v_unit, dv_dt)
+        e = np.array([1, 0, 0])  
+        omega = omega_vec @ e
+        omega = omega - np.mean(omega)
+        spline = UnivariateSpline(t, omega, s=1e-6)  
+        # alpha_brut = np.gradient(omega, dt)
+        # print(f"Min alpha brut: {np.min(alpha_brut)}")
+        # print(f"Max alpha brut: {np.max(alpha_brut)}")
+        alpha_spline = spline.derivative()
+
+        self.angular_acceleration_spline = alpha_spline
+
+        # plt.figure()
+        # plt.plot(t, alpha_spline(t))
+        # plt.xlabel("Time (s)")
+        # plt.ylabel("Angular acceleration (rad/s²)")
+        # plt.title("Angular acceleration")
+        # plt.show()
+
+        return alpha_spline
+
+
+    def angular_acceleration_optitrack_function(self, time):
+        return self.angular_acceleration_spline(time)
+    
 
     def spring_numerical_ode(self, t, k, c, I, theta0, omega0, aero_torque, inertial_torque_func):
         """ Numerical solution to the spring-damper ODE with arbitrary torque input.

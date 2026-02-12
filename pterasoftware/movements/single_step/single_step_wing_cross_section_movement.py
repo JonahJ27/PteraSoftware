@@ -55,6 +55,7 @@ class SingleStepWingCrossSectionMovement:
         periodAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
         spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
         phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+        listLp_Wcsp_Lpp=None
     ):
         """This is the initialization method.
 
@@ -153,6 +154,14 @@ class SingleStepWingCrossSectionMovement:
             0.0, 0.0, 0.0). Each element must be 0.0 if the corresponding element in
             ampAngles_Wcsp_to_Wcs_ixyz is 0.0 and non-zero if not. The units are in
             degrees.
+
+        :param listLp_Wcsp_Lpp: 2D numpy array of shape (3, num_steps), optional
+
+            This is a list of the WingCrossSectionMovement's changes in its Lp_Wcsp_Lpp
+            parameters. Can be a 2D numpy array of shape (3, num_steps) of numbers
+            (int or float). Values are converted to floats internally. The default value is None. 
+            If this parameter is not None, it overrides the parameters 
+            ampLp_Wcsp_Lpp, periodLp_Wcsp_Lpp, spacingLp_Wcsp_Lpp, and phaseLp_Wcsp_Lpp.
         """
 
         ampLp_Wcsp_Lpp = threeD_number_vectorLike_return_float(
@@ -258,7 +267,7 @@ class SingleStepWingCrossSectionMovement:
                 )
         self.phaseAngles_Wcsp_to_Wcs_ixyz = phaseAngles_Wcsp_to_Wcs_ixyz
 
-        self.listLp_Wcsp_Lpp = None
+        self.listLp_Wcsp_Lpp = listLp_Wcsp_Lpp
         self.listAngles_Wcsp_to_Wcs_ixyz = None
 
     def generate_next_wing_cross_sections(

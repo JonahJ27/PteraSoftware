@@ -396,3 +396,5 @@ class Real_Airfoil:
             Lp_Wcsp_Lpp = Rp.T @ (self.get_Lp() - parent.get_Lp())
 
         return Lp_Wcsp_Lpp, angles_Wcsp_to_Wcs_ixyz
+
+
