@@ -341,7 +341,7 @@ class SingleStepWingCrossSectionMovement:
         thisLp_Wcsp_Lpp = self.listLp_Wcsp_Lpp[:, step] 
         theseAngles_Wcsp_to_Wcs_ixyz = self.listAngles_Wcsp_to_Wcs_ixyz[
             :, step
-        ] + (deformation_matrix*180/np.pi)
+        ] + deformation_matrix
 
         # Make a new WingCrossSection for this time step.
         this_wing_cross_section = geometry.wing_cross_section.WingCrossSection(

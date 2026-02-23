@@ -1612,50 +1612,6 @@ def _plot_scalars(
         color=_text_color,
     )
 
-def _add_tracking_point(plotter, airplane, wing_index, x_norm, y_norm):
-    """Adds a visual tracking marker to a specific location on a wing surface.
-
-    This function takes a wing identified by its index, locates the panel
-    corresponding to the normalized chordwise and spanwise coordinates, and
-    computes the interpolated 3D point on the wing surface. It then plots a small
-    sphere at this position in the visualization.
-
-    :param plotter: The PyVista Plotter used to draw the tracking point.
-    :param airplane: The Airplane whose wing contains the tracked point.
-    :param wing_index: The index of the wing on which the point is located.
-    :param x_norm: The normalized chordwise coordinate (0 → leading edge, 1 → trailing edge).
-    :param y_norm: The normalized spanwise coordinate (0 → root, 1 → tip).
-    :return: None
-    """
-    wing = airplane.wings[wing_index]
-
-    # Localiser panneau + interpolation
-    Nx = wing.num_chordwise_panels
-    Ny = wing.num_spanwise_panels
-
-    i = int(x_norm * Nx)
-    j = int(y_norm * Ny)
-    if i == Nx: i -= 1
-    if j == Ny: j -= 1
-
-    u = x_norm * Nx - i
-    v = y_norm * Ny - j
-
-    panel = wing.panels[i, j]
-
-    p00 = panel.Flpp_GP1_CgP1
-    p10 = panel.Frpp_GP1_CgP1
-    p01 = panel.Blpp_GP1_CgP1
-    p11 = panel.Brpp_GP1_CgP1
-
-    point = ((1 - u) * (1 - v) * p00
-            + u * (1 - v) * p10
-            + (1 - u) * v * p01
-            + u * v * p11)
-
-    sphere = pv.Sphere(radius=5, center=point)
-    plotter.add_mesh(sphere, color="red")
-
 
 def plot_wing_loads_versus_time(
     solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
@@ -1770,10 +1726,8 @@ def amplitude_exp(
     moments_W_CgP1 = np.zeros((3, num_steps_to_average))
     power = np.zeros(num_steps_to_average)
 
-    # Convert amplitude to radians
     A = A * np.pi / 180  
 
-    # Angular speed signal
     speed = 2 * np.pi * freq * A * np.cos(2 * np.pi * freq * times)
 
     result_id = 0
@@ -1792,7 +1746,6 @@ def amplitude_exp(
         forces_W[:, result_id] = F
         moments_W_CgP1[:, result_id] = M
 
-        # Match speed index to time step
         power[result_id] = speed[step] * M[0]
 
         result_id += 1
@@ -1805,37 +1758,4 @@ def amplitude_exp(
     print(lift, drag, roll, mean_power)
     return [lift, drag, roll, mean_power]
 
-def plot_theta(
-    solver: unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
-    wing_cross_section_index: int,
-):
-    num_steps = solver.num_steps
-    delta_time = solver.delta_time
-    times = np.linspace(0, num_steps * delta_time, num_steps)
-    theta = np.zeros(num_steps)
-    alpha = np.zeros(num_steps)
-    for i in range(num_steps):
-        airplane = solver.steady_problems[i].airplanes[0]
-        wing = airplane.wings[0]
-        Lp_Wcsp_Lpp=np.sum([WCS.Lp_Wcsp_Lpp for WCS in wing.wing_cross_sections[:wing_cross_section_index+1]])
-        angles_Wcsp_to_Wcs_ixyz = np.sum([WCS.angles_Wcsp_to_Wcs_ixyz for WCS in wing.wing_cross_sections[:wing_cross_section_index+1]])
-        theta[i] = angles_Wcsp_to_Wcs_ixyz[1]
-        alpha[i] = np.arctan2(Lp_Wcsp_Lpp[1], Lp_Wcsp_Lpp[2])
-    omega = np.gradient(theta,delta_time)     
-    omega_dot = np.gradient(omega,delta_time)
-    plt.figure(figsize=(10, 6))
-
-    plt.plot(times, theta, label=r"$\theta$")
-    plt.plot(times, alpha, label=r"$\alpha$")
-    plt.plot(times, omega, label=r"$\omega$")
-    plt.plot(times, omega_dot, label=r"$\dot{\omega}$")
-
-    plt.xlabel("Time [s]")
-    plt.ylabel("Amplitude")
-    plt.title("Temporal evolution of kinematic quantities")
-    plt.legend()
-    plt.grid(True)
-
-    plt.tight_layout()
-    plt.show()
 

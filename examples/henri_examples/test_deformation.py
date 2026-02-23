@@ -17,7 +17,7 @@ list_trackers = [
     "I1", "I2"
 ]
 
-frequency = 4  
+frequency = 4
 
 columns = ps.geometry.airfoil_creation.extract_columns(list_trackers)
 
@@ -29,7 +29,7 @@ example_airplane = ps.geometry.airplane.Airplane(
             wing_cross_sections=ps.geometry.airfoil_creation.creation_wing_cross_sections(data, list_trackers, columns, frequency),
             name="Main Wing",
             Ler_Gs_Cgs= [0.0, 0.025, 0.0], # position of the wing's rotation axes
-            angles_Gs_to_Wn_ixyz= [4, 0.0, 0.0], # angle offset
+            angles_Gs_to_Wn_ixyz= [4.0, 0.0, 0.0], # angle offset
             symmetric=True,
             mirror_only=False,
             symmetryNormal_G=(0.0, 1.0, 0.0),
@@ -105,7 +105,7 @@ movement = ps.movements.movement.Movement(
     delta_time=1/360,   # Time step between two frames in the OptiTrack data
     num_cycles=None,
     num_chords=None,
-    num_steps=100,
+    num_steps=150,
 )
 
 # Define the UnsteadyProblem.
@@ -122,6 +122,10 @@ example_solver = (
         unsteady_problem=example_problem,
     )
 )
+example_solver.run(
+    prescribed_wake=True,
+    show_progress=True,
+)
 
 WingKinematicsComparison = ps.optitrack_validation.WingKinematicsComparison(example_solver)
 
@@ -130,20 +134,25 @@ simulated_solver = WingKinematicsComparison.simulated_solver
 simulated_solver.run(
     prescribed_wake=True,
     show_progress=True,
-    wing_density=0.09,
-    damping_constant=0.006,
-    spring_constant=0,
+    wing_density=1,
+    damping_constant=10,
+    spring_constant=100,
 )
 
-
+# WingKinematicsComparison.plot_trajectory_3d(0.8, 0.5)
+# WingKinematicsComparison.plot_difference_position_versus_time()
+WingKinematicsComparison.plot_section(5)
+# WingKinematicsComparison.plot_panel_forces(0.8, 0.7)
 # WingKinematicsComparison.dynamic_wing()
+# WingKinematicsComparison.plot_forces()
 
-ps.output.animate(
-    unsteady_solver=simulated_solver,
-    scalar_type="lift",
-    show_wake_vortices=True,
-    save=True,
-)
+# ps.output.animate(
+#     unsteady_solver=example_solver,
+#     scalar_type="difference position",
+#     show_wake_vortices=False,
+#     simulated_solver=simulated_solver,
+#     save=True,
+# )
 
 
 

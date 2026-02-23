@@ -657,14 +657,14 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
 
         mass_matrix = self.calculate_mass_matrix(wing)  # mass de l'aile
 
-        # inertial_forces = (
-        #     self.calculate_wing_panel_accelerations()
-        #     * mass_matrix
-        # )
+        inertial_forces = (
+            self.calculate_wing_panel_accelerations()
+            * mass_matrix
+        )
 
-        # inertial_moments = np.cross(
-        #     self.positions[-1] - solver.stack_leading_edge_points[:num_panels].reshape((num_chordwise_panels, num_spanwise_panels, 3)), inertial_forces, axis=2
-        # )  #produit vectoriel entre le bras de levier et la force inertielle (bizzare)
+        inertial_moments = np.cross(
+            self.positions[-1] - solver.stack_leading_edge_points[:num_panels].reshape((num_chordwise_panels, num_spanwise_panels, 3)), inertial_forces, axis=2
+        )  #produit vectoriel entre le bras de levier et la force inertielle (bizzare)
 
         undeforemed_wing = self.steady_problems[step].airplanes[0].wings[0]
         undeformed_postions = np.array(
@@ -682,13 +682,13 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         if self.base_wing_positions is None:
             self.base_wing_positions = np.array(undeformed_postions)
 
-        # self.flap_points.append(np.array(undeformed_postions) - self.base_wing_positions)  # sert a rien
-        # self.per_step_inertial.append(inertial_moments.copy())       # sert a rien
-        # self.per_step_aero.append(aeroMoments_GP1_Slep.copy())        # sert a rien
-        # self.per_step_spring.append(spring_moments.copy())            # sert a rien
+        self.flap_points.append(np.array(undeformed_postions) - self.base_wing_positions)  # sert a rien
+        self.per_step_inertial.append(inertial_moments.copy())       # sert a rien
+        self.per_step_aero.append(aeroMoments_GP1_Slep.copy())        # sert a rien
+        self.per_step_spring.append(spring_moments.copy())            # sert a rien
 
-        # # total_moments = aeroMoments_GP1_Slep - inertial_moments #+ spring_moments #sert a rien
-        # deformation_moments = total_moments[:, :, 2]  # Z-axis moments  #sert a rien
+        total_moments = aeroMoments_GP1_Slep - inertial_moments #+ spring_moments #sert a rien
+        deformation_moments = total_moments[:, :, 2]  # Z-axis moments  #sert a rien
 
         step_deformation = np.array(
             [
@@ -712,35 +712,35 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         self.net_data.append(self.net_deformation.copy())
         self.angluar_velocity_data.append(self.angluar_velocities.copy())
 
-        # if step % 10  == 3:
-        #     # print("Net deformation: ", self.net_deformation)
-        #     # print("step deformation: ", step_deformation)
-        #     aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(num_chordwise_panels, num_spanwise_panels, 3)
+        if step % 10  == 3:
+            # print("Net deformation: ", self.net_deformation)
+            # print("step deformation: ", step_deformation)
+            aeroMoments_GP1_Slep = np.array(solver.moments_GP1_Slep[:num_panels]).reshape(num_chordwise_panels, num_spanwise_panels, 3)
 
-        #     # print("Aero Moments Slep", self.net_deformation[:, 1])
-        #     print("Thetas: ", thetas)
+            # print("Aero Moments Slep", self.net_deformation[:, 1])
+            print("Thetas: ", thetas)
 
-        # if step == self.num_steps - 1:
-        #     zero_curve = np.zeros((1, np.array(self.per_step_inertial).shape[0]))
-        #     print(np.array(self.per_step_inertial).shape)
-        #     print(np.array(self.per_step_aero).shape)
-        #     print(np.array(self.per_step_spring).shape)
-        #     print(np.array(self.per_step_data).shape)
-        #     print(np.array(self.net_data).shape)
-        #     plot_curves(np.array(self.per_step_data)[:, :, 1].T.tolist(), "Per Step Deformation")
-        #     plot_curves(np.array(self.net_data)[:, :, 1].T.tolist(), "Net Deformation")
-        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_inertial)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Inertial Moments")
-        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_aero)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Aero Moments")
-        #     plot_curves(np.vstack((zero_curve, np.array(self.per_step_spring)[:, :, 2].sum(axis=1).T)).tolist(), "Per Step Spring Moments")
-        #     plot_curves(
-        #         np.vstack(
-        #             (
-        #                 zero_curve,
-        #                 np.array(self.flap_points)[:, :, :, 2].sum(axis=1).T,
-        #             )
-        #         ).tolist(),
-        #         "Flap Points Z",
-        #     )
+        if step == self.num_steps - 1:
+            zero_curve = np.zeros((1, np.array(self.per_step_inertial).shape[0]))
+            print(np.array(self.per_step_inertial).shape)
+            print(np.array(self.per_step_aero).shape)
+            print(np.array(self.per_step_spring).shape)
+            print(np.array(self.per_step_data).shape)
+            print(np.array(self.net_data).shape)
+            plot_curves(np.array(self.per_step_data)[:, :, 1].T.tolist(), "Per Step Deformation")
+            plot_curves(np.array(self.net_data)[:, :, 1].T.tolist(), "Net Deformation")
+            plot_curves(np.vstack((zero_curve, np.array(self.per_step_inertial)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Inertial Moments")
+            plot_curves(np.vstack((zero_curve, np.array(self.per_step_aero)[:, :, :, 2].sum(axis=1).T)).tolist(), "Per Step Aero Moments")
+            plot_curves(np.vstack((zero_curve, np.array(self.per_step_spring)[:, :, 2].sum(axis=1).T)).tolist(), "Per Step Spring Moments")
+            plot_curves(
+                np.vstack(
+                    (
+                        zero_curve,
+                        np.array(self.flap_points)[:, :, :, 2].sum(axis=1).T,
+                    )
+                ).tolist(),
+                "Flap Points Z",
+            )
 
         return self.net_deformation
 
@@ -892,7 +892,7 @@ class BetterAeroelasticUnsteadyProblem(CoupledUnsteadyProblem):
         omega_vec = np.cross(v_unit, dv_dt)
         e = np.array([1, 0, 0])  
         omega = omega_vec @ e
-        omega = omega - np.mean(omega)
+        omega = omega - np.mean(omega)*180/np.pi
         spline = UnivariateSpline(t, omega, s=1e-6)  
         # alpha_brut = np.gradient(omega, dt)
         # print(f"Min alpha brut: {np.min(alpha_brut)}")
