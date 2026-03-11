@@ -363,7 +363,6 @@ def animate(
     save: bool | np.bool_ = False,
     testing: bool | np.bool_ = False,
     simulated_solver=None,
-    track_point=None
 ) -> None:
     """Animates an UnsteadyRingVortexLatticeMethodSolver's Airplane(s).
 
@@ -638,16 +637,6 @@ def animate(
                 show_edges=True,
                 color=_panel_color,
                 smooth_shading=False,
-            )
-
-        if track_point is not None:
-            wing_index, x_norm, y_norm = track_point
-            _add_tracking_point(
-                plotter,
-                airplanes[0],   # avion à ce step
-                wing_index,
-                x_norm,
-                y_norm
             )
 
         # If saving, append a WebP Image of this frame to the list of Images.
