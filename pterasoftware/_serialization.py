@@ -38,6 +38,11 @@ from .aeroelastic_unsteady_ring_vortex_lattice_method import (
 from .free_flight_unsteady_ring_vortex_lattice_method import (
     FreeFlightUnsteadyRingVortexLatticeMethodSolver,
 )
+
+# noinspection PyProtectedMember
+from .free_flight_aeroelastic_unsteady_ring_vortex_lattice_method import (
+    FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
+)
 from .geometry.airfoil import Airfoil
 from .geometry.airplane import Airplane
 from .geometry.wing import Wing
@@ -50,6 +55,7 @@ from .movements.aeroelastic_wing_cross_section_movement import (
 from .movements.aeroelastic_wing_movement import AeroelasticWingMovement
 from .movements.airplane_movement import AirplaneMovement
 from .movements.free_flight_movement import FreeFlightMovement
+from .movements.free_flight_movement import FreeFlightAeroelasticMovement
 from .movements.free_flight_operating_point_movement import (
     FreeFlightOperatingPointMovement,
 )
@@ -63,6 +69,7 @@ from .operating_point import OperatingPoint
 from .problems import (
     AeroelasticUnsteadyProblem,
     FreeFlightUnsteadyProblem,
+    FreeFlightAeroelasticUnsteadyProblem,
     SteadyProblem,
     UnsteadyProblem,
     _CoupledUnsteadyProblem,
@@ -135,9 +142,12 @@ _CLASS_REGISTRY: dict[str, type] = {
     "AeroelasticUnsteadyProblem": AeroelasticUnsteadyProblem,
     "AeroelasticUnsteadyRingVortexLatticeMethodSolver": AeroelasticUnsteadyRingVortexLatticeMethodSolver,
     "FreeFlightMovement": FreeFlightMovement,
+    "FreeFlightAeroelasticMovement": FreeFlightAeroelasticMovement,
     "FreeFlightOperatingPointMovement": FreeFlightOperatingPointMovement,
     "FreeFlightUnsteadyProblem": FreeFlightUnsteadyProblem,
+    "FreeFlightAeroelasticUnsteadyProblem" : FreeFlightAeroelasticUnsteadyProblem,
     "FreeFlightUnsteadyRingVortexLatticeMethodSolver": FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+    "FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver": FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
     "MuJoCoModel": MuJoCoModel,
 }
 
@@ -169,9 +179,12 @@ _PUBLIC_SAVEABLE_CLASSES: frozenset[str] = frozenset(
         "AeroelasticUnsteadyProblem",
         "AeroelasticUnsteadyRingVortexLatticeMethodSolver",
         "FreeFlightMovement",
+        "FreeFlightAeroelasticMovement",
         "FreeFlightOperatingPointMovement",
         "FreeFlightUnsteadyProblem",
+        "FreeFlightAeroelasticUnsteadyProblem",
         "FreeFlightUnsteadyRingVortexLatticeMethodSolver",
+        "FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver",
     }
 )
 
@@ -219,7 +232,7 @@ class UnboundCallable:
 
     Saved files store a custom callable (a custom spacing function, an
     AeroelasticWingMovement's second-derivative function, or a
-    FreeFlightUnsteadyProblem's external_loads_fn) as an inert marker holding the
+    (FreeFlightUnsteadyProblem or FreeFlightAeroelasticUnsteadyProblem)'s external_loads_fn) as an inert marker holding the
     callable's qualified name, its source text when that could be retrieved, and a
     SHA-256 hash of that text. Nothing in the file is ever executed, so loading rebuilds
     the marker as an UnboundCallable rather than as the original function.
@@ -341,7 +354,7 @@ def save(path: str | Path, obj: object) -> None:
     reference is written as a pointer to it, and load() restores the sharing.
 
     Custom callables (custom spacing functions, an AeroelasticWingMovement's second-
-    derivative functions, and a FreeFlightUnsteadyProblem's external_loads_fn) cannot be
+    derivative functions, and a (FreeFlightUnsteadyProblem or FreeFlightAeroelasticUnsteadyProblem)'s external_loads_fn) cannot be
     written to JSON as code. Each is stored as an inert marker holding its qualified
     name, its source text when that can be retrieved, and a hash of that text. The built
     in "sine" and "uniform" spacings are stored by name and restored exactly. See load()

@@ -23,11 +23,13 @@ from . import (
     _parameter_validation,
     _transformations,
     free_flight_unsteady_ring_vortex_lattice_method,
+    free_flight_aeroelastic_unsteady_ring_vortex_lattice_method,
     steady_horseshoe_vortex_lattice_method,
     steady_ring_vortex_lattice_method,
     unsteady_ring_vortex_lattice_method,
 )
 from .movements import free_flight_movement as free_flight_movement_mod
+
 
 _logger = _logging.get_logger("output")
 
@@ -285,11 +287,12 @@ def draw(
     )
     if show_mujoco_geometry and not isinstance(
         solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver),
     ):
         raise ValueError(
             "show_mujoco_geometry can only be True when drawing a "
-            "FreeFlightUnsteadyRingVortexLatticeMethodSolver."
+            "FreeFlightUnsteadyRingVortexLatticeMethodSolver or FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver."
         )
 
     if not isinstance(window_size, Sequence) or len(window_size) != 2:
@@ -352,7 +355,8 @@ def draw(
     # for the standard body-fixed rendering in geometry axes.
     is_free_flight = isinstance(
         solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver),
     )
     T_pas_GP1_CgP1_to_E_Eo: np.ndarray | None = None
 
@@ -448,7 +452,8 @@ def draw(
     if show_mujoco_geometry:
         assert isinstance(
             solver,
-            free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+            (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+             free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver),
         )
         worldbody_geoms, body_geoms = _output_rendering.get_mujoco_render_geometry(
             solver
@@ -772,7 +777,8 @@ def animate(
     )
     if show_mujoco_geometry and not isinstance(
         unsteady_solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver),
     ):
         raise ValueError(
             "show_mujoco_geometry can only be True when animating a "
@@ -815,7 +821,8 @@ def animate(
     # for the standard body-fixed rendering in geometry axes.
     is_free_flight = isinstance(
         unsteady_solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver),
     )
     step_transforms: list[np.ndarray] = []
     if is_free_flight:
@@ -835,7 +842,9 @@ def animate(
     if show_mujoco_geometry:
         assert isinstance(
             unsteady_solver,
-            free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+            (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+            ),
         )
         worldbody_geoms, body_geoms = _output_rendering.get_mujoco_render_geometry(
             unsteady_solver
@@ -1771,12 +1780,14 @@ def plot_results_versus_time(
     # describes the first Airplane, the single rigid body the dynamics integrate.
     if isinstance(
         unsteady_solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+        ),
     ):
         # Narrow the movement to a FreeFlightMovement so its operating point history is
         # typed. The solver type guarantees this, so the assert documents the invariant.
         movement = unsteady_solver.unsteady_problem.movement
-        assert isinstance(movement, free_flight_movement_mod.FreeFlightMovement)
+        assert isinstance(movement, (free_flight_movement_mod.FreeFlightMovement,free_flight_movement_mod.FreeFlightAeroelasticMovement))
         operating_points = movement.operating_point_movement.operating_points
 
         # The state history covers every time step, starting at time step 0, so it uses
@@ -2328,12 +2339,14 @@ def log_results(
     # first Airplane, the single rigid body the dynamics integrate.
     if isinstance(
         solver,
-        free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+        (free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+        ),
     ):
         # Narrow the movement to a FreeFlightMovement so its operating point history is
         # typed. The solver type guarantees this, so the assert documents the invariant.
         movement = solver.unsteady_problem.movement
-        assert isinstance(movement, free_flight_movement_mod.FreeFlightMovement)
+        assert isinstance(movement, (free_flight_movement_mod.FreeFlightMovement,free_flight_movement_mod.FreeFlightAeroelasticMovement))
         operating_points = movement.operating_point_movement.operating_points
 
         final_time = solver.delta_time * (len(operating_points) - 1)
