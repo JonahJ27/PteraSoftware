@@ -1168,10 +1168,26 @@ class FlapDriveInputs(NamedTuple):
     transmission. angleXRad_Gs_to_Wn_ixyz and angleDerivativeXRad_Gs_to_Wn_ixyz are the
     actual flap angle (rad) and its time derivative (rad/s), which follow from the
     actuator state and the transmission. jacobian and hessian are the transmission's
-    derivatives of the flap angle at the actuator position. fluid_torque is the torque
-    (N*m) that the fluid exerts on the Wings about their flap axis, positive in the
-    direction of increasing flap angle. wing_flap_inertia is the Wings' combined inertia
-    about the flap axis (kg*m^2).
+    derivatives of the flap angle at the actuator position. wing_flap_inertia is the
+    Wings' combined inertia about the flap axis (kg*m^2).
+
+    **This record is what the controller knows, not what the Wings feel:**
+
+    It is built by inverse_dynamics_controller and handed to the actuator function, so
+    it holds only what a controller could know: the measured state, the reference, and
+    the controller's own feedforward. It deliberately doesn't hold the true fluid torque
+    on the Wings. That torque belongs to the dynamics, and it reaches
+    single_wing_dynamics as a separate argument, never through this record. So changing
+    how the controller estimates the aerodynamic torque (the FlapDrive's
+    feedforward_aerodynamic) can't change the torque that actually acts on the Wings.
+
+    feedforward_fluid_torque is the controller's estimate of the fluid torque (N*m) on
+    the Wings about their flap axis, positive in the direction of increasing flap
+    angle, which the feedforward cancels. Which estimate it is depends on the
+    FlapDrive's feedforward_aerodynamic: if True, it is the measured fluid torque given
+    to inverse_dynamics_controller (in a simulation, the previous time step's UVLM
+    torque). If a callable, it is that model's prediction, such as a blade element
+    theory model. If False, it is 0.0.
 
     The desired fields come from the FlapReference, in the units of the transmission.
     They are zero when the FlapDrive has no reference. desired_actuator_position,
@@ -1185,8 +1201,9 @@ class FlapDriveInputs(NamedTuple):
 
     **Important, the feedforward's fluid torque is not predicted:**
 
-    feedforward_force uses fluid_torque, the torque from the previous time step's UVLM
-    solution, at the Wings' actual motion, held constant over the step. The blade
+    By default, feedforward_force uses the measured fluid torque, the torque from the
+    previous time step's UVLM solution, at the Wings' actual motion, held constant over
+    the step. The blade
     element theory code's singleWingInverseDynamicsController instead evaluates the
     aerodynamic torque at the desired motion: it calls aerodynamicBladeElementTheoryCalc
     with the current wing angle and the desired wing velocity, wing_velo_des = J_motor *
@@ -1218,7 +1235,6 @@ class FlapDriveInputs(NamedTuple):
     angleDerivativeXRad_Gs_to_Wn_ixyz: float
     jacobian: float
     hessian: float
-    fluid_torque: float
     wing_flap_inertia: float
     desired_actuator_position: float
     desired_actuator_velocity: float
@@ -1228,6 +1244,7 @@ class FlapDriveInputs(NamedTuple):
     feedforward_damping_force: float
     feedforward_passive_force: float
     feedforward_aerodynamic_force: float
+    feedforward_fluid_torque: float
 
 
 class FlapDriveAccelerations(NamedTuple):
@@ -1293,13 +1310,27 @@ class FlapDrive:
     actuator function that the user supplies, which receives a FlapDriveInputs and
     returns the actuator's force.
 
+    **The controller and the dynamics see different fluid torques:**
+
+    The two halves are kept apart on purpose. The controller only sees what a real
+    controller could: inverse_dynamics_controller takes a measured_fluid_torque, which
+    it uses only for its feedforward, and its FlapDriveInputs carries only the
+    controller's estimate, feedforward_fluid_torque. The true fluid torque on the
+    Wings goes to single_wing_dynamics as its own fluid_torque argument. In a
+    simulation both are the UVLM torque from the previous time step, but they are
+    separate inputs, so replacing the controller's estimate with your own aerodynamic
+    model (feedforward_aerodynamic) changes only what the controller asks for, never
+    what the Wings feel. Any difference between the estimate and the true torque shows
+    up as tracking error, which the actuator function's feedback has to correct.
+
     **How a simulation uses it:**
 
     At each time step, the FlapDrivenAeroelasticUnsteadyProblem takes the fluid torque
     on the Wings from the latest UVLM solution and integrates the actuator's state over
-    the step. At every evaluation, inverse_dynamics_controller builds a FlapDriveInputs,
-    the actuator function returns a force, and single_wing_dynamics returns the
-    accelerations. The flap angle and flap acceleration at the end of the step then set
+    the step. At every evaluation, inverse_dynamics_controller builds a FlapDriveInputs
+    with that torque as its measurement, the actuator function returns a force, and
+    single_wing_dynamics returns the accelerations with that same torque acting on the
+    Wings. The flap angle and flap acceleration at the end of the step then set
     the Wings' geometry and the torsional springs' inertial forcing for the next step.
     A FlapDrive holds no state of its own between evaluations. The problem keeps the
     actuator's state and the histories.
@@ -1469,7 +1500,7 @@ class FlapDrive:
             default is True.
         :param feedforward_aerodynamic: Determines the aerodynamic term of the
             feedforward force, -J * T_aero, which cancels the aerodynamic torque on the
-            Wings. If True, T_aero is the fluid torque given to
+            Wings. If True, T_aero is the measured_fluid_torque given to
             inverse_dynamics_controller, which in a simulation is the previous time
             step's UVLM torque at the Wings' actual motion. If False, there is no
             aerodynamic term. If a callable, it is your own aerodynamic model: it
@@ -1478,8 +1509,10 @@ class FlapDrive:
             Wings about the flap axis (N*m), positive in the direction of increasing
             flap angle, like the blade element theory code's
             singleWingInverseDynamicsController, which evaluates its aerodynamic model
-            at the desired wing velocity. It must return a finite number. The default is
-            True.
+            at the desired wing velocity. It must return a finite number. Whichever is
+            chosen only sets the controller's feedforward. The torque that acts on the
+            Wings is always the true fluid torque given to single_wing_dynamics. The
+            default is True.
         :return: None
         """
         # Validate the Wings that this drive flaps. Whether those indices exist on the
@@ -1774,7 +1807,7 @@ class FlapDrive:
         time: float | int,
         actuator_position: float | int,
         actuator_velocity: float | int,
-        fluid_torque: float | int,
+        measured_fluid_torque: float | int,
         computed_wing_flap_inertia: float | int | None = None,
     ) -> FlapDriveInputs:
         """Builds the record that is passed to the actuator function, including the
@@ -1790,18 +1823,26 @@ class FlapDrive:
         It evaluates the transmission at the actuator position to fill in the actual
         flap angle, the flap angle's time derivative, the Jacobian, and the Hessian. It
         also fills in the desired actuator state from this FlapDrive's reference, and
-        the feedforward force. The feedforward force uses fluid_torque as given, which
-        in a simulation is the previous time step's fluid torque at the actual motion,
-        not a prediction at the desired motion as in the blade element theory code. See
-        FlapDriveInputs.
+        the feedforward force. By default, the feedforward force uses
+        measured_fluid_torque as given, which in a simulation is the previous time
+        step's fluid torque at the actual motion, not a prediction at the desired motion
+        as in the blade element theory code. See FlapDriveInputs.
+
+        This is only the controller. measured_fluid_torque affects nothing but the
+        feedforward, and it isn't passed on: the returned FlapDriveInputs carries the
+        controller's estimate (feedforward_fluid_torque), not the true torque.
+        single_wing_dynamics takes the true fluid torque separately.
 
         :param time: The simulation time (s).
         :param actuator_position: The actuator position, in the units of the
             transmission.
         :param actuator_velocity: The actuator velocity, in the units of the
             transmission per second.
-        :param fluid_torque: The torque (N*m) that the fluid exerts on the Wings about
-            their flap axis, positive in the direction of increasing flap angle.
+        :param measured_fluid_torque: The latest fluid torque (N*m) on the Wings about
+            their flap axis that the controller can measure, positive in the direction
+            of increasing flap angle. It is used only as the feedforward's aerodynamic
+            estimate when this FlapDrive's feedforward_aerodynamic is True, and ignored
+            otherwise.
         :param computed_wing_flap_inertia: None, or the Wings' combined inertia about
             the flap axis (kg*m^2), as estimated by the caller. It is ignored if this
             FlapDrive has a wing_flap_inertia, and it is required if it does not. If not
@@ -1843,7 +1884,7 @@ class FlapDrive:
 
         position = float(actuator_position)
         velocity = float(actuator_velocity)
-        fluid_torque = float(fluid_torque)
+        measured_fluid_torque = float(measured_fluid_torque)
 
         # Evaluate the transmission at the actuator's position: the flap angle, J, and H
         # (wing_angle_curr, J_motor, and H_motor in the blade element theory code).
@@ -1855,6 +1896,7 @@ class FlapDrive:
         feedforward_damping_force = 0.0
         feedforward_passive_force = 0.0
         feedforward_aerodynamic_force = 0.0
+        feedforward_fluid_torque = 0.0
         reference = self._reference
         # Read the desired state at the current time, which the feedback compares the
         # actual state against (des_motor_pos_traj and des_motor_velo_traj in the blade
@@ -1936,13 +1978,17 @@ class FlapDrive:
             )
 
         # The aerodynamic term: the actuator must cancel the aerodynamic torque on the
-        # Wings, carried through the transmission (tau_aero_motor there). By default it
-        # is the fluid torque as given, which in a simulation is the previous time
-        # step's UVLM torque at the Wings' actual motion. The blade element theory code
-        # instead predicts it at the desired wing velocity
-        # (aerodynamicBladeElementTheoryCalc with wing_velo_des), which the UVLM can't
-        # do cheaply. A user model passed as feedforward_aerodynamic does that
-        # prediction instead, at the actual flap angle and the desired flap rate.
+        # Wings, carried through the transmission (tau_aero_motor there). By default the
+        # controller's estimate of that torque is the measured fluid torque, which in a
+        # simulation is the previous time step's UVLM torque at the Wings' actual
+        # motion. The blade element theory code instead predicts it at the desired wing
+        # velocity (aerodynamicBladeElementTheoryCalc with wing_velo_des), which the
+        # UVLM can't do cheaply. A user model passed as feedforward_aerodynamic does
+        # that prediction instead, at the actual flap angle and the desired flap rate.
+        #
+        # The estimate stays inside the controller: it only sets this term and
+        # feedforward_fluid_torque. The torque that acts on the Wings is passed to
+        # single_wing_dynamics separately, so the estimate can't change it.
         #
         # VALIDATED CORRECT
         if self._feedforward_aerodynamic is not False:
@@ -1954,7 +2000,7 @@ class FlapDrive:
                     desired_flap_rate,
                 )
             else:
-                feedforward_fluid_torque = fluid_torque
+                feedforward_fluid_torque = measured_fluid_torque
             feedforward_aerodynamic_force = -jacobian * feedforward_fluid_torque
 
         feedforward_force = (
@@ -1973,7 +2019,6 @@ class FlapDrive:
             angleDerivativeXRad_Gs_to_Wn_ixyz=jacobian * velocity,
             jacobian=jacobian,
             hessian=hessian,
-            fluid_torque=fluid_torque,
             wing_flap_inertia=wing_flap_inertia,
             desired_actuator_position=desired_position,
             desired_actuator_velocity=desired_velocity,
@@ -1983,9 +2028,12 @@ class FlapDrive:
             feedforward_damping_force=feedforward_damping_force,
             feedforward_passive_force=feedforward_passive_force,
             feedforward_aerodynamic_force=feedforward_aerodynamic_force,
+            feedforward_fluid_torque=feedforward_fluid_torque,
         )
 
-    def single_wing_dynamics(self, inputs: FlapDriveInputs) -> FlapDriveAccelerations:
+    def single_wing_dynamics(
+        self, inputs: FlapDriveInputs, fluid_torque: float | int
+    ) -> FlapDriveAccelerations:
         """Calculates the actuator and flap angle accelerations from the equation of
         motion in the class docstring.
 
@@ -1994,7 +2042,17 @@ class FlapDrive:
 
         VALIDATED CORRECT
 
-        :param inputs: The FlapDriveInputs holding the drive's state at this instant.
+        This is the dynamics, the physics the Wings obey. It takes the true fluid torque
+        as its own argument, not from inputs, which is the controller's record and holds
+        only the controller's estimate of that torque.
+
+        :param inputs: The FlapDriveInputs holding the drive's state at this instant. It
+            is passed to the actuator function, and its state fields set the equation of
+            motion's state.
+        :param fluid_torque: The torque (N*m) that the fluid actually exerts on the
+            Wings about their flap axis, positive in the direction of increasing flap
+            angle. In a simulation it is the previous time step's UVLM torque, held
+            constant over the step.
         :return: A FlapDriveAccelerations holding the actuator acceleration, the flap
             angle acceleration, the actuator's generalized force, and the torque that
             the transmission applies to the Wings.
@@ -2003,14 +2061,16 @@ class FlapDrive:
         # is the controller's torque_des clipped by motor_sat_controller.clipTorque,
         # giving torque_applied.
         actuator_force = _call_scalar_function(self._actuator, "actuator", inputs)
-        # VALIDATED CORRECT
+        fluid_torque = float(fluid_torque)
+        # The true fluid torque, not the controller's estimate in inputs, acts on the
+        # Wings. VALIDATED CORRECT
         effective_inertia, bias, passive_wing_torque = self._equation_of_motion_terms(
             inputs.actuator_position,
             inputs.actuator_velocity,
             inputs.jacobian,
             inputs.hessian,
             inputs.angleXRad_Gs_to_Wn_ixyz,
-            inputs.fluid_torque,
+            fluid_torque,
             inputs.wing_flap_inertia,
         )
         # Solve for the actuator's acceleration (motor_accel in the blade element theory
@@ -2034,7 +2094,7 @@ class FlapDrive:
         # -T_passive here, so their sum is this same expression. VALIDATED CORRECT
         transmission_torque = (
             inputs.wing_flap_inertia * angleSecondDerivativeXRad_Gs_to_Wn_ixyz
-            - inputs.fluid_torque
+            - fluid_torque
             - passive_wing_torque
         )
 

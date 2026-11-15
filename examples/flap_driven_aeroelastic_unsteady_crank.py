@@ -300,10 +300,12 @@ def make_motor() -> tuple[
     def motor(inputs: ps.flap_drive.FlapDriveInputs) -> float:
         """The torque that the motor applies: a feedforward torque plus feedback on the
         motor's position and velocity, limited by the saturation controller."""
-        # The feedforward's aerodynamic part is the previous time step's UVLM torque at
-        # the wing's actual motion. The blade element theory code's feedforward instead
-        # predicts it at the desired wing velocity. To do that here, pass your own
-        # aerodynamic model as the FlapDrive's feedforward_aerodynamic below. The
+        # NO BLADE ELEMENT THEORY MODEL IS USED IN THIS EXAMPLE. The feedforward's
+        # aerodynamic part is the previous time step's UVLM torque at the wing's actual
+        # motion (feedforward_aerodynamic=True below), so the controller and the wing
+        # see the same UVLM torque. The blade element theory code's feedforward instead
+        # predicts it at the desired wing velocity. To do that here, pass a blade
+        # element theory model as the FlapDrive's feedforward_aerodynamic below. The
         # FlapDrive's feedforward_inertial, feedforward_damping, feedforward_passive,
         # and feedforward_aerodynamic switches turn each term of the feedforward on or
         # off.
@@ -337,6 +339,14 @@ def make_motor() -> tuple[
 # (use_position_lookup=True), like the blade element theory code's use_closest_pos,
 # which works because the motor keeps turning one way, so the reference's positions are
 # monotonic. Set it to False to read the reference at the current time instead.
+#
+# The aerodynamic model is the UVLM only. No blade element theory model is used yet.
+# feedforward_aerodynamic=True makes the controller's feedforward cancel the previous
+# time step's UVLM torque. The wing itself always feels the UVLM torque, whatever this
+# is set to. To make the controller use a blade element theory model instead, replace
+# True with a function of the flap angle (rad) and the desired flap rate (rad/s) that
+# returns the predicted fluid torque on the wing (N*m, positive toward increasing flap
+# angle). Only the controller's feedforward would change.
 saturation_controllers = []
 max_torque_possible_logs = []
 example_flap_drives = []
@@ -354,6 +364,8 @@ for wing_index in range(2):
             wing_flap_inertia=WING_FLAP_INERTIA,
             reference=flap_reference,
             use_position_lookup=True,
+            # The UVLM torque, not a blade element theory model.
+            feedforward_aerodynamic=True,
         )
     )
 

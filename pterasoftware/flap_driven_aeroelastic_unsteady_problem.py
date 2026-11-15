@@ -64,14 +64,19 @@ def _evaluate_flap_drive(
     :return: A tuple of the FlapDriveInputs passed to the actuator function and the
         resulting FlapDriveAccelerations.
     """
+    # The UVLM's fluid torque plays two separate roles. The controller gets it as a
+    # measurement, which it uses for its feedforward only when the drive's
+    # feedforward_aerodynamic is True (a model passed there replaces it). The dynamics
+    # get it as the torque that actually acts on the Wings. It reaches the dynamics only
+    # through the second call, so the controller's estimate can't change it.
     inputs = flap_drive.inverse_dynamics_controller(
         time,
         actuator_position,
         actuator_velocity,
-        fluid_torque,
-        wing_flap_inertia,
+        measured_fluid_torque=fluid_torque,
+        computed_wing_flap_inertia=wing_flap_inertia,
     )
-    return inputs, flap_drive.single_wing_dynamics(inputs)
+    return inputs, flap_drive.single_wing_dynamics(inputs, fluid_torque=fluid_torque)
 
 
 def _clear_movement_period_caches(
@@ -135,6 +140,37 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
     Wings that belong to no FlapDrive keep their prescribed flap motion. The aerodynamic
     torque is one time step old when it acts, the same lag that the structural
     deformation has.
+
+    **The order of one time step:**
+
+    The solver solves time step s, then calls initialize_next_problem(solver, s) to
+    build time step s + 1. That method first calls _advance_flap_drives, which, for each
+    FlapDrive, sums the fluid torque on its Wings from time step s's solution,
+    integrates the actuator's state from time s * delta_time to (s + 1) * delta_time
+    with that torque held constant, and records the flap angle at s + 1 and the flap
+    acceleration over the interval on its Wings' movements. It then calls the parent's
+    initialize_next_problem, which integrates the torsional springs over the same
+    interval (their inertial forcing reads the recorded flap acceleration through
+    _generate_inertial_moment_function) and generates time step s + 1's Airplane (its
+    Wings' flap angles come from the recorded flap angles through the movements'
+    override). The solver then solves time step s + 1 on that Airplane.
+
+    **Loose coupling and its one time step lag:**
+
+    The fluid and the FlapDrives are coupled loosely (explicitly): the UVLM solves each
+    time step once, and the FlapDrives see its result only on the next interval. Over
+    the interval from s to s + 1, the actuator, the controller, and the motor's limits
+    are integrated continuously, but the fluid torque is frozen at its value at s, so
+    the fluid's response to the flap's motion during the interval only arrives one time
+    step later. This acts like a delay of one time step in the aerodynamic load, which
+    is a phase error of 360.0 * delta_time / period degrees per wingbeat. It is also the
+    source of a possible instability: the part of the fluid torque that resists the
+    Wings' acceleration (the added mass) is applied a step late, so for light Wings with
+    a large added mass relative to their own inertia, the flap can oscillate and
+    diverge. A smaller delta_time shrinks both effects. Removing the lag needs the UVLM
+    to be solved more than once per time step, which this class doesn't do yet. The
+    planned fix, a fixed-point sub-iteration of each time step on the fluid torque, is
+    described in docs/FLAP_DRIVE.md under "Planned: Strongly Coupling the Flap".
 
     Each FlapDrive follows its FlapReference, a table of its actuator's desired motion
     and the only definition of its flap trajectory. The FlapDrive's Wings are moved by
@@ -439,6 +475,10 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
             wing_index
         ]
 
+        # Sum the Wing's Panels' forces, and their moments about the first Airplane's
+        # CG, which the solver has just computed for the current time step. These are
+        # the total aerodynamic force and moment on the Wing, before the moment is moved
+        # to the shoulder below.
         panels = np.ravel(wing.panels)
         totalForces_GP1 = np.zeros(3, dtype=float)
         totalMoments_GP1_CgP1 = np.zeros(3, dtype=float)
@@ -458,10 +498,16 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
             is_position=True,
         )
 
+        # Move the moment from the CG to the rotation point (the shoulder) with the
+        # moment transport theorem, M_p = M_CG - r_p x F, where r_p is the rotation
+        # point's position relative to the CG.
         torques_G = totalMoments_GP1_CgP1 - np.cross(
             rotationPoint_G_Cg, totalForces_GP1
         )
 
+        # Keep only the component about the flap axis, which is the torque that turns
+        # the Wing about its shoulder and loads the FlapDrive. The other two components
+        # are carried by the shoulder's bearing.
         flapAxis_G = np.array([1.0, 0.0, 0.0], dtype=float)
         sign = 1.0
         if wing.mirror_only:
@@ -477,14 +523,30 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
         solver: CoupledUnsteadyRingVortexLatticeMethodSolver,
         step: int,
     ) -> None:
+        """Builds the next time step's SteadyProblem, after first advancing the
+        FlapDrives to it.
+
+        The solver calls this once per time step, after it has solved time step step, so
+        the Panels of the solver's current Airplane hold that time step's loads. See the
+        class docstring for the order of the work.
+
+        :param solver: The solver that has just solved time step step.
+        :param step: The index of the time step that was just solved.
+        :return: None
+        """
         # There is no next time step to prepare after the final one.
         if step >= self.num_steps - 1:
             return
 
-        # The flap angles of the next time step must be recorded on the movements before
-        # the parent generates the next time step's Airplane from them.
+        # Advance the FlapDrives first. The parent's initialize_next_problem reads what
+        # this records: it builds the next Airplane at the recorded flap angles, and its
+        # torsional springs use the recorded flap acceleration as their inertial
+        # forcing. Calling them in the other order would build the next Airplane at the
+        # base Wing's flap angle.
         self._advance_flap_drives(solver, step)
 
+        # Integrate the torsional springs over the same interval and generate the next
+        # time step's Airplane, unchanged from AeroelasticUnsteadyProblem.
         super().initialize_next_problem(solver, step)
 
     def _advance_flap_drives(
@@ -495,18 +557,35 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
         """Integrates every FlapDrive over the interval from the current time step to
         the next one, and records the results.
 
+        Each FlapDrive is independent of the others (each has its own actuator state and
+        its own Wings), so they are integrated one after another. For each one, this
+        finds the fluid torque on its Wings, integrates its actuator's state across the
+        interval with that torque held constant, and then writes three things: the flap
+        angle at the next time step and the flap acceleration over the interval, on its
+        Wings' movements, where the parent class reads them, and one new entry in each
+        of this problem's flap histories.
+
         :param solver: The solver that has just solved the current time step.
         :param step: The current time step index.
         :return: None
         """
+        # The interval being integrated runs from the time step the solver just solved
+        # to the one being built. It is the same interval the parent's torsional springs
+        # integrate over, so the flap acceleration recorded here covers exactly the
+        # times at which the springs read it.
         dt = self.delta_time
         next_step = step + 1
         start_time = step * dt
         end_time = next_step * dt
 
         for drive_position, flap_drive in enumerate(self._flap_drives):
-            # Drive the flap without the startup transient's large aerodynamic loads for
-            # the first step_discards steps.
+            # Find the fluid torque that acts on the drive's Wings over the interval. It
+            # is the torque from the solution of the time step just solved, summed over
+            # the drive's Wings, because they share one actuator. It is held constant
+            # over the whole interval: this is the one time step lag of the loose
+            # coupling that the class docstring describes. For the first step_discards
+            # time steps it is 0.0 instead, so the UVLM's startup transient, whose loads
+            # are large and unphysical while the wake forms, doesn't kick the actuator.
             fluid_torque = 0.0
             if next_step > self.step_discards:
                 fluid_torque = sum(
@@ -514,10 +593,20 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                     for wing_index in flap_drive.wing_indices
                 )
 
+            # The integration starts from the actuator's state at the end of the
+            # previous interval, which is the last entry of the histories. Nothing else
+            # stores the actuator's state between time steps: the FlapDrive itself is
+            # stateless.
             wing_flap_inertia = self._flap_wing_flap_inertias[drive_position]
             position0 = self.flap_actuator_positions[drive_position][-1]
             velocity0 = self.flap_actuator_velocities[drive_position][-1]
 
+            # This evaluates the drive at one instant: the controller builds its
+            # FlapDriveInputs (the actual state, the reference, and the feedforward),
+            # the user's actuator function returns its force, and the equation of motion
+            # gives the accelerations. The drive, the torque, and the inertia are bound
+            # as default arguments so that each loop iteration's function keeps its own
+            # values instead of reading the loop variables after they change.
             def evaluate(
                 time: float,
                 state: np.ndarray,
@@ -536,12 +625,22 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                     wing_flap_inertia,
                 )
 
+            # The state is (actuator position, actuator velocity), so its time
+            # derivative is (actuator velocity, actuator acceleration). The acceleration
+            # comes from the full controller and equation of motion at this instant, so
+            # the feedback, the feedforward, and the motor's limits all act continuously
+            # within the interval, not once per time step.
             def derivative(time: float, state: np.ndarray) -> np.ndarray:
                 _, accelerations = evaluate(time, state)
                 return np.array(
                     [state[1], accelerations.actuator_acceleration], dtype=float
                 )
 
+            # Integrate across the interval with an adaptive step size. The integrator
+            # takes as many internal steps as the actuator's dynamics need, which can be
+            # many when the motor saturates or the linkage nears a dead center. The
+            # dense output is a continuous solution across the interval, which the
+            # sampling below reads.
             solution = solve_ivp(
                 derivative,
                 (start_time, end_time),
@@ -556,7 +655,11 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                     f"{start_time} s to {end_time} s failed: {solution.message}"
                 )
             # Sample the Wings' flap angular acceleration across the interval, for the
-            # torsional spring's inertial forcing.
+            # torsional spring's inertial forcing. The springs need the acceleration at
+            # whatever times their own integrator chooses, so it is sampled at evenly
+            # spaced times from the dense solution and later read by linear
+            # interpolation. This also keeps the springs from calling the user's
+            # actuator function, which may log or keep its own records.
             sample_times = np.linspace(start_time, end_time, _FLAP_ACCELERATION_SAMPLES)
             dense_solution = solution.sol
             assert dense_solution is not None
@@ -570,8 +673,16 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                 dtype=float,
             )
 
+            # Evaluate the drive once more at the end of the interval, at the
+            # integrator's final state, which is the drive's state at the next time
+            # step. This gives the flap angle the next Airplane is built at, and every
+            # value the histories record for that time step.
             end_inputs, end_accelerations = evaluate(end_time, solution.y[:, -1])
 
+            # A Wing only allows flap angles in [-90.0, 90.0] degrees, so an angle
+            # beyond that is limited for the geometry, with a warning. The actuator's
+            # own state isn't changed, so the histories still show where the drive
+            # actually went.
             angle_deg = float(np.rad2deg(end_inputs.angleXRad_Gs_to_Wn_ixyz))
             if abs(angle_deg) > 90.0:
                 _logger.warning(
@@ -581,6 +692,12 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                 )
                 angle_deg = float(np.clip(angle_deg, -90.0, 90.0))
 
+            # Hand the results to the parent class through the drive's Wings' movements.
+            # When the parent generates the next Airplane, each movement replaces its
+            # Wing's flap angle with the recorded one, and when the parent integrates
+            # the torsional springs, _generate_inertial_moment_function reads the
+            # recorded acceleration. All of the drive's Wings get the same values,
+            # because they share one actuator.
             acceleration_function = _make_interpolated_function(
                 sample_times, sample_accelerations
             )
@@ -592,6 +709,10 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
                     ],
                 ).record_flap_step(next_step, angle_deg, acceleration_function)
 
+            # Record the drive at the next time step. The actuator position and velocity
+            # entries are also the next interval's initial state. The fluid torque entry
+            # is the torque that acted over this interval, not one computed at the next
+            # time step, which the solver hasn't solved yet.
             self.flap_actuator_positions[drive_position].append(
                 end_inputs.actuator_position
             )
@@ -637,6 +758,10 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
         :return: A callable that accepts a time (s) and returns the inertial moment
             (N*m).
         """
+        # The parent's torsional spring model calls this once per strip per time step.
+        # For a driven Wing, the acceleration is the one _advance_flap_drives just
+        # recorded for this interval, so the strip's inertial load follows the flap's
+        # actual motion, including any lag or saturation of the actuator.
         if isinstance(
             wing_movement,
             flap_driven_wing_movement_mod.FlapDrivenAeroelasticWingMovement,
@@ -645,6 +770,8 @@ class FlapDrivenAeroelasticUnsteadyProblem(problems.AeroelasticUnsteadyProblem):
             if acceleration_function is not None:
                 return lambda time: flapping_axis_inertia * acceleration_function(time)
 
+        # A Wing that no FlapDrive moves keeps the parent's behavior, which uses its
+        # prescribed flap motion.
         return problems.AeroelasticUnsteadyProblem._generate_inertial_moment_function(
             flapping_axis_inertia, wing_movement
         )

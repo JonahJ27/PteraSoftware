@@ -133,7 +133,18 @@ torque_applied, info = saturation_controller.clip_torque(torque_desired, inputs.
 
 ### `FlapDriveInputs`
 
-The record the actuator callable receives. Besides the time and actuator state, it carries the actual flap angle and rate, `J`, `H`, the fluid torque, the wing inertia, the desired actuator position, velocity, and acceleration read from the reference, and `feedforward_force`. The feedforward force is the inverse dynamics (`singleWingInverseDynamicsController`): the force that would produce the desired acceleration, computed from the same equation of motion as the forward dynamics so the two can't drift apart.
+The record the actuator callable receives. Besides the time and actuator state, it carries the actual flap angle and rate, `J`, `H`, the wing inertia, the desired actuator position, velocity, and acceleration read from the reference, `feedforward_force`, and `feedforward_fluid_torque`. The feedforward force is the inverse dynamics (`singleWingInverseDynamicsController`): the force that would produce the desired acceleration, computed from the same equation of motion as the forward dynamics so the two can't drift apart.
+
+#### The controller and the dynamics get the fluid torque separately
+
+`FlapDriveInputs` is what the controller knows, so it doesn't carry the true fluid torque on the wing. The UVLM torque enters the drive through two separate arguments:
+
+| Call | Argument | Role |
+|---|---|---|
+| `inverse_dynamics_controller(time, q, q', measured_fluid_torque, ...)` | `measured_fluid_torque` | The controller's measurement. It is used only for the feedforward, and only when `feedforward_aerodynamic` is `True`. |
+| `single_wing_dynamics(inputs, fluid_torque)` | `fluid_torque` | The torque that actually acts on the wing in the equation of motion. |
+
+In a simulation `_evaluate_flap_drive` passes the same UVLM torque to both. Because they are separate arguments, a BET model passed as `feedforward_aerodynamic` changes only `feedforward_fluid_torque` (the controller's estimate) and the feedforward. It never changes what the wing feels, and any mismatch shows up as tracking error for the feedback to correct.
 
 **Important difference from the BET feedforward:** the fluid torque in `feedforward_force` is the previous time step's UVLM torque at the wing's actual motion, held constant over the step. `singleWingInverseDynamicsController` instead predicts the aerodynamic torque at the desired motion, by calling `aerodynamicBladeElementTheoryCalc` with the current wing angle and the desired wing velocity `wing_velo_des = J_motor * des_motor_velo`. The UVLM can't cheaply evaluate the loads for a motion the wing isn't making, so that prediction isn't available here. The difference matters most when the motor lags its reference, as while it is saturated: the BET feedforward asks for the torque to overcome the aerodynamic load at the desired, faster flap rate, while this one only asks for the load at the actual, slower rate from one step ago, so it is less aggressive, and it lags where the load changes quickly, near the turnarounds. To use a predicted torque, pass your own model as the `FlapDrive`'s `feedforward_aerodynamic` (see below).
 
@@ -243,7 +254,7 @@ There are four clocks.
 
 **The drive's internal steps.** Within each UVLM step, each drive's state `(q, q')` is integrated from `t_s` to `t_(s+1)` with `scipy.integrate.solve_ivp` (RK45, relative tolerance 1e-6, absolute tolerance 1e-9). The solver picks its own sub-steps, usually several to many per UVLM step, and calls your actuator function at every one of them and at its rejected trial steps. Saturation and controller behavior therefore resolve within a step, but your actuator function must depend only on its input, as `ode45` requires in the BET code. Integration restarts from the last state at every step.
 
-**The fluid torque's lag.** The fluid torque used over `[t_s, t_(s+1)]` comes from step `s`'s solution and is held constant over the interval. It is one step old when it acts, the same lag the existing structural deformation has. This is a loose (explicit) coupling. Keep `delta_time` small relative to the flap period. The example uses 50 steps per cycle. Very stiff controller gains or a very light wing can make this lag matter, and it's worth halving `delta_time` to check convergence.
+**The fluid torque's lag.** The fluid torque used over `[t_s, t_(s+1)]` comes from step `s`'s solution and is held constant over the interval. It is one step old when it acts, the same lag the existing structural deformation has. This is a loose (explicit) coupling. Keep `delta_time` small relative to the flap period. The example uses 50 steps per cycle. Very stiff controller gains or a very light wing can make this lag matter, and it's worth halving `delta_time` to check convergence. The planned fix is described in "Planned: Strongly Coupling the Flap" below.
 
 **The reference's samples.** The `FlapReference` table is sampled every 1e-4 s, independent of the UVLM step, and interpolated linearly in time between samples. The inertial forcing passed to the torsional spring model is sampled at 21 points per UVLM step from the drive's dense output and interpolated linearly.
 
@@ -264,9 +275,63 @@ All derivatives are analytical: the crank kinematics and inverse kinematics with
 - The fluid torque held constant over each step.
 - In the example, the stroke amplitude found by sampling the forward kinematics at 20,000 points, as `runSingleSimulation` does.
 
+## Planned: Strongly Coupling the Flap
+
+This is not implemented. It records the design for removing the one step lag, so it can be built later.
+
+### The problem
+
+The UVLM solves each step once. The fluid torque `T_s` from step `s` is then held constant over `[t_s, t_(s+1)]` while the drive moves the wing, so the fluid's reaction to that motion only arrives in `T_(s+1)`, one step later. This has two effects:
+
+- A phase error. The aerodynamic load is late by about `360 * delta_time / period` degrees. With the examples' 50 steps per wingbeat, that is about 7 degrees.
+- A possible instability. Part of the fluid torque resists the wing's acceleration (added mass, roughly `T ~ -I_added * phi''`). Applied a step late, it acts as a delayed restoring torque. If `I_added` is large relative to the wing's inertia plus the actuator's reflected inertia, `I_w + I_a / J^2`, the flap overshoots and can diverge. A heavy geared motor makes this unlikely, while a light wing or a direct drive makes it likely.
+
+A smaller `delta_time` shrinks both effects but doesn't remove them, and the cost of a UVLM step grows with the wake.
+
+### The fix: sub-iterate each step
+
+Each time step becomes a fixed-point iteration that drives the flap motion and the fluid torque to agreement before the step is committed. This is the same approach `FreeFlightUnsteadyProblem` already uses for the rigid body (see [Strong Coupling](STRONG_COUPLING.md)).
+
+```
+save the drive's state at t_s (the last history entries) and the actuator function's state
+guess the torque at t_(s+1): T_trial = T_s, or the extrapolation 2 * T_s - T_(s-1)
+repeat k = 0, 1, 2, ... up to k_max:
+    restore the drive's and the actuator function's state at t_s
+    integrate the drive over [t_s, t_(s+1)] with T(t) = linear from T_s to T_trial
+        -> phi_trial at t_(s+1), and phi''_trial(t) over the interval
+    integrate the torsional springs over the same interval with phi''_trial(t)
+    build a trial Airplane at phi_trial and the trial deformation
+    solve the UVLM at step s + 1 on the trial Airplane, without committing it
+        -> T_new, the flap torque on the trial Airplane
+    residual = T_new - T_trial
+    if the residual passes the convergence test: stop
+    relax: T_trial = T_trial + omega_k * residual, with an Aitken omega_k
+commit the converged step: record phi, phi'', and the histories, and build the real Airplane at s + 1
+```
+
+The unknown iterated on is the fluid torque at the end of the step, one scalar per drive. Once it is known, the drive's motion over the step follows from integrating the drive, so nothing else needs a guess.
+
+### What it needs
+
+- **A solver that can evaluate a step without committing it.** `FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver` already has `freeze_substep`, `evaluate_trial_aero_loads`, and `restore_substep` for the body's sub-iteration. Its transient next-step `SteadyProblem` is built over a copy of the next `Airplane`, so building it over a new trial `Airplane` at each iteration is a small extension. `AeroelasticUnsteadyRingVortexLatticeMethodSolver` has no such interface and would need one, which changes shared solver code. So the free-flight flap-driven problem is the natural first home for this.
+- **A restartable actuator function.** The drive itself has no state, and each iteration restarts from the last history entries. The actuator function can hold state, though. `MotorSaturationController` keeps its leaky buckets and treats a time earlier than one it has already seen as the latest time seen. Restarting at `t_s` after integrating to `t_(s+1)` would therefore be wrong by a whole step, not by one integrator step. It needs a `save_state` and `restore_state` pair, called around every iteration. Logs the example's actuator function keeps, such as `max_torque_possible_log`, are keyed by time, so the accepted iteration overwrites the trial ones.
+- **The springs in the same loop.** The trial `Airplane` carries both the flap angle and the deformation, so the torsional springs should be integrated inside the loop. That removes the deformation's lag too.
+- **A convergence test and relaxation.** Reuse `_fixed_point_relaxation.py`: its weighted norm, its convergence test with a relative and an absolute tolerance, and its Aitken relaxation factor. Scale the torque residual by a reference torque, such as the drive's peak transmission torque, so one tolerance works across vehicle sizes.
+- **In free flight, one loop for the body and the flap.** The body's sub-iteration already iterates the 12-vector of the rigid body state. Append one entry per drive (the trial torque) to that vector and give it a weight in `_build_relaxation_weights`. Then a single loop drives the body, the flap, and the loads to agreement, and each iteration costs one UVLM solve, as now.
+
+### Cost
+
+Each iteration costs one extra UVLM solve. With Aitken relaxation, expect 2 to 5 iterations per step, so a run takes about 2 to 5 times as long. In free flight with the merged loop, the body's iteration already pays for these solves, so the extra cost is only the iterations the flap adds.
+
+### Cheaper alternatives, if strong coupling is too slow
+
+- **Extrapolate the torque.** Use `T(t) = T_s + (T_s - T_(s-1)) * (t - t_s) / delta_time` over the interval instead of a constant. This needs no extra solves and cuts most of the phase error for a smooth periodic load, but it doesn't fix the added mass instability, and it amplifies the UVLM's step to step noise.
+- **Treat added mass implicitly.** Give `FlapDrive` an added flap inertia `I_added`, use `I_w + I_added` in the effective inertia, and pass `T_s + I_added * phi''_s` as the fluid torque. This is the standard fix for the added mass instability in loosely coupled fluid structure solvers, and it needs no extra solves. `I_added` can come from thin plate theory (`(pi / 8) * rho * c^2 * r^2` per strip, summed along the span) or from two UVLM solves at different flap accelerations at the start of a run. The circulatory part of the torque is still one step late.
+
 ## Known Limitations
 
 - `AeroelasticUnsteadyProblem._calculate_mass_matrix` copies each panel's mass into three components, and `_calculate_strip_inertias` sums all three, so strip masses and inertias are three times too large. The flap drive uses that estimate only when `wing_flap_inertia` isn't given. This bug is in existing code and is not fixed.
+- The flap is coupled to the fluid loosely, so the fluid torque acts one step late, which causes a phase error and can make a light wing's flap unstable. See "Planned: Strongly Coupling the Flap" above.
 - The feedforward's aerodynamic torque is the previous step's UVLM torque at the actual motion, not a prediction at the desired motion as in the BET code's `singleWingInverseDynamicsController`. See `FlapDriveInputs` above.
 - The example's torsional spring model is Ptera Software's strip model, not the BET code's torsional deformation, so deformation results won't match.
 - A `FlapReference` whose trajectory doesn't repeat with a fixed period (`period=None`) gives inaccurate cycle averaged results, and if nothing else moves, the simulation is treated as static. The problem warns about it. See "The period and cycle averaged results" above.
