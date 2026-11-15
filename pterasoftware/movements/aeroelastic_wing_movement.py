@@ -302,9 +302,10 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
         step: int,
         delta_time: float | int,
         deformationAngles_Wcsp_to_Wcs_ixyz: np.ndarray | None = None,
+        overrideAngleX_Gs_to_Wn_ixyz: float | int | None = None,
     ) -> geometry.wing.Wing:
         """Creates the Wing at a single time step, optionally applying structural
-        deformation to each WingCrossSection.
+        deformation to each WingCrossSection and overriding the prescribed flap angle.
 
         Computes the prescribed Wing using the inherited oscillation logic, then threads
         per WingCrossSection deformation angles down to each
@@ -318,6 +319,12 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
             using an intrinsic xy'z" sequence that is added to the corresponding
             WingCrossSection's prescribed angles_Wcsp_to_Wcs_ixyz. The units are in
             degrees. When None, no deformation is applied. The default is None.
+        :param overrideAngleX_Gs_to_Wn_ixyz: A number (int or float) that replaces the x
+            component of the Wing's prescribed angles_Gs_to_Wn_ixyz (the flap angle,
+            using an intrinsic xy'z" sequence) at this time step. The y and z components
+            are unaffected, and the rotation point offset adjustment uses the overridden
+            value. The units are in degrees. When None, the prescribed flap angle is
+            used. The default is None.
         :return: The Wing at this time step, with structural deformation applied to each
             WingCrossSection if provided.
         """
@@ -398,6 +405,12 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
                 )
             else:
                 raise ValueError(f"Invalid spacing value: {this_spacing}")
+
+        # Replace the prescribed flap angle if the caller supplies one. This happens
+        # before the rotation point offset adjustment below, which consumes these
+        # angles.
+        if overrideAngleX_Gs_to_Wn_ixyz is not None:
+            theseAngles_Gs_to_Wn_ixyz[0] = overrideAngleX_Gs_to_Wn_ixyz
 
         # Generate the WingCrossSections for this time step, threading deformation to
         # each AeroelasticWingCrossSectionMovement child.

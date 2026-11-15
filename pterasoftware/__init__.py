@@ -3,7 +3,11 @@
 from typing import TYPE_CHECKING, Any
 
 # Eager imports: core modules always needed to define simulations.
+import pterasoftware.crank_linkage
+import pterasoftware.flap_drive
+import pterasoftware.flap_driven_aeroelastic_unsteady_problem
 import pterasoftware.geometry
+import pterasoftware.motor_saturation
 import pterasoftware.movements
 import pterasoftware.operating_point
 import pterasoftware.problems
@@ -15,8 +19,8 @@ if TYPE_CHECKING:
     from pterasoftware import (
         aeroelastic_unsteady_ring_vortex_lattice_method,
         convergence,
-        free_flight_unsteady_ring_vortex_lattice_method,
         free_flight_aeroelastic_unsteady_ring_vortex_lattice_method,
+        free_flight_unsteady_ring_vortex_lattice_method,
         output,
         steady_horseshoe_vortex_lattice_method,
         steady_ring_vortex_lattice_method,
@@ -31,7 +35,7 @@ _LAZY_MODULES = {
     "aeroelastic_unsteady_ring_vortex_lattice_method": "pterasoftware.aeroelastic_unsteady_ring_vortex_lattice_method",
     "convergence": "pterasoftware.convergence",
     "free_flight_unsteady_ring_vortex_lattice_method": "pterasoftware.free_flight_unsteady_ring_vortex_lattice_method",
-    "free_flight_aeroelastic_unsteady_ring_vortex_lattice_method" : "pterasoftware.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method",
+    "free_flight_aeroelastic_unsteady_ring_vortex_lattice_method": "pterasoftware.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method",
     "output": "pterasoftware.output",
     "steady_horseshoe_vortex_lattice_method": "pterasoftware.steady_horseshoe_vortex_lattice_method",
     "steady_ring_vortex_lattice_method": "pterasoftware.steady_ring_vortex_lattice_method",

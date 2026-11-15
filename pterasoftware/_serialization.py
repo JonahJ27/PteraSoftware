@@ -33,15 +33,20 @@ from ._panel import Panel
 from .aeroelastic_unsteady_ring_vortex_lattice_method import (
     AeroelasticUnsteadyRingVortexLatticeMethodSolver,
 )
-
-# noinspection PyProtectedMember
-from .free_flight_unsteady_ring_vortex_lattice_method import (
-    FreeFlightUnsteadyRingVortexLatticeMethodSolver,
+from .crank_linkage import CrankLinkage
+from .flap_drive import FlapDrive, FlapReference, FlapTransmission
+from .flap_driven_aeroelastic_unsteady_problem import (
+    FlapDrivenAeroelasticUnsteadyProblem,
 )
 
 # noinspection PyProtectedMember
 from .free_flight_aeroelastic_unsteady_ring_vortex_lattice_method import (
     FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
+)
+
+# noinspection PyProtectedMember
+from .free_flight_unsteady_ring_vortex_lattice_method import (
+    FreeFlightUnsteadyRingVortexLatticeMethodSolver,
 )
 from .geometry.airfoil import Airfoil
 from .geometry.airplane import Airplane
@@ -54,8 +59,13 @@ from .movements.aeroelastic_wing_cross_section_movement import (
 )
 from .movements.aeroelastic_wing_movement import AeroelasticWingMovement
 from .movements.airplane_movement import AirplaneMovement
-from .movements.free_flight_movement import FreeFlightMovement
-from .movements.free_flight_movement import FreeFlightAeroelasticMovement
+from .movements.flap_driven_aeroelastic_wing_movement import (
+    FlapDrivenAeroelasticWingMovement,
+)
+from .movements.free_flight_movement import (
+    FreeFlightAeroelasticMovement,
+    FreeFlightMovement,
+)
 from .movements.free_flight_operating_point_movement import (
     FreeFlightOperatingPointMovement,
 )
@@ -68,8 +78,8 @@ from .operating_point import OperatingPoint
 # noinspection PyProtectedMember
 from .problems import (
     AeroelasticUnsteadyProblem,
-    FreeFlightUnsteadyProblem,
     FreeFlightAeroelasticUnsteadyProblem,
+    FreeFlightUnsteadyProblem,
     SteadyProblem,
     UnsteadyProblem,
     _CoupledUnsteadyProblem,
@@ -95,7 +105,7 @@ _CALLABLE_FUNC_TO_NAME = {func: name for name, func in _CALLABLE_NAME_TO_FUNC.it
 # class registry changed, encoding strategy changed), and also when the meaning of a
 # serialized value changes, so that a file saved under the old meaning fails to load
 # loudly instead of being read under the new one.
-_FORMAT_VERSION = 31
+_FORMAT_VERSION = 37
 
 # This is the default maximum decompressed size in bytes when reading archives. The cap
 # is cumulative across every member read during one load(). Prevents zip bombs from
@@ -141,11 +151,17 @@ _CLASS_REGISTRY: dict[str, type] = {
     "AeroelasticWingCrossSectionMovement": AeroelasticWingCrossSectionMovement,
     "AeroelasticUnsteadyProblem": AeroelasticUnsteadyProblem,
     "AeroelasticUnsteadyRingVortexLatticeMethodSolver": AeroelasticUnsteadyRingVortexLatticeMethodSolver,
+    "FlapTransmission": FlapTransmission,
+    "CrankLinkage": CrankLinkage,
+    "FlapReference": FlapReference,
+    "FlapDrive": FlapDrive,
+    "FlapDrivenAeroelasticWingMovement": FlapDrivenAeroelasticWingMovement,
+    "FlapDrivenAeroelasticUnsteadyProblem": FlapDrivenAeroelasticUnsteadyProblem,
     "FreeFlightMovement": FreeFlightMovement,
     "FreeFlightAeroelasticMovement": FreeFlightAeroelasticMovement,
     "FreeFlightOperatingPointMovement": FreeFlightOperatingPointMovement,
     "FreeFlightUnsteadyProblem": FreeFlightUnsteadyProblem,
-    "FreeFlightAeroelasticUnsteadyProblem" : FreeFlightAeroelasticUnsteadyProblem,
+    "FreeFlightAeroelasticUnsteadyProblem": FreeFlightAeroelasticUnsteadyProblem,
     "FreeFlightUnsteadyRingVortexLatticeMethodSolver": FreeFlightUnsteadyRingVortexLatticeMethodSolver,
     "FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver": FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
     "MuJoCoModel": MuJoCoModel,
@@ -178,6 +194,12 @@ _PUBLIC_SAVEABLE_CLASSES: frozenset[str] = frozenset(
         "AeroelasticWingCrossSectionMovement",
         "AeroelasticUnsteadyProblem",
         "AeroelasticUnsteadyRingVortexLatticeMethodSolver",
+        "FlapTransmission",
+        "CrankLinkage",
+        "FlapReference",
+        "FlapDrive",
+        "FlapDrivenAeroelasticWingMovement",
+        "FlapDrivenAeroelasticUnsteadyProblem",
         "FreeFlightMovement",
         "FreeFlightAeroelasticMovement",
         "FreeFlightOperatingPointMovement",
@@ -232,10 +254,11 @@ class UnboundCallable:
 
     Saved files store a custom callable (a custom spacing function, an
     AeroelasticWingMovement's second-derivative function, or a
-    (FreeFlightUnsteadyProblem or FreeFlightAeroelasticUnsteadyProblem)'s external_loads_fn) as an inert marker holding the
-    callable's qualified name, its source text when that could be retrieved, and a
-    SHA-256 hash of that text. Nothing in the file is ever executed, so loading rebuilds
-    the marker as an UnboundCallable rather than as the original function.
+    (FreeFlightUnsteadyProblem or FreeFlightAeroelasticUnsteadyProblem)'s
+    external_loads_fn) as an inert marker holding the callable's qualified name, its
+    source text when that could be retrieved, and a SHA-256 hash of that text. Nothing
+    in the file is ever executed, so loading rebuilds the marker as an UnboundCallable
+    rather than as the original function.
 
     An UnboundCallable passes callable checks, so a loaded object keeps the same
     structure as the one that was saved, and saving it again writes the same marker back
@@ -354,11 +377,12 @@ def save(path: str | Path, obj: object) -> None:
     reference is written as a pointer to it, and load() restores the sharing.
 
     Custom callables (custom spacing functions, an AeroelasticWingMovement's second-
-    derivative functions, and a (FreeFlightUnsteadyProblem or FreeFlightAeroelasticUnsteadyProblem)'s external_loads_fn) cannot be
-    written to JSON as code. Each is stored as an inert marker holding its qualified
-    name, its source text when that can be retrieved, and a hash of that text. The built
-    in "sine" and "uniform" spacings are stored by name and restored exactly. See load()
-    for how the markers are restored.
+    derivative functions, and a (FreeFlightUnsteadyProblem or
+    FreeFlightAeroelasticUnsteadyProblem)'s external_loads_fn) cannot be written to JSON
+    as code. Each is stored as an inert marker holding its qualified name, its source
+    text when that can be retrieved, and a hash of that text. The built in "sine" and
+    "uniform" spacings are stored by name and restored exactly. See load() for how the
+    markers are restored.
 
     The archive records an internal serialization format version. load() accepts a file
     only when that format version matches the running code's exactly, and there is no

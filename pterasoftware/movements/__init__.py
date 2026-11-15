@@ -5,6 +5,7 @@ import pterasoftware.movements.aeroelastic_movement
 import pterasoftware.movements.aeroelastic_wing_cross_section_movement
 import pterasoftware.movements.aeroelastic_wing_movement
 import pterasoftware.movements.airplane_movement
+import pterasoftware.movements.flap_driven_aeroelastic_wing_movement
 import pterasoftware.movements.free_flight_movement
 import pterasoftware.movements.free_flight_operating_point_movement
 import pterasoftware.movements.movement

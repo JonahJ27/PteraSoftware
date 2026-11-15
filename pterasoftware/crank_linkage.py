@@ -1,10 +1,16 @@
-"""Contains the crank linkage kinematics that FlapTransmission.crank_linkage uses.
+"""Contains the CrankLinkage class, a motor, gearbox, and crank linkage powertrain that
+a FlapDrive can use as its transmission.
 
 ENTIRE SCRIPT VALIDATED CORRECT
 
 The linkage connects a gearbox crank to a wing crank through a rigid link. Its geometry
 is described in the plane of the flap (the body y and z axes), and every derivative here
 is analytical.
+
+FlapDrive knows nothing about this linkage. It only calls the four members of the
+flap_drive.Transmission interface (evaluate_angle, evaluate_jacobian, evaluate_hessian,
+and convert_trajectory), which CrankLinkage implements in terms of the motor's angle.
+Any other powertrain can be used the same way by writing a class with those members.
 """
 
 from __future__ import annotations
@@ -19,6 +25,16 @@ from . import _parameter_validation
 # "numerical" differentiates the motor position in time with finite differences, like
 # its convertWingTrajToMotorNumerical.
 DERIVATIVE_METHODS = ("analytical", "numerical")
+
+# This is the default number of samples over one turn of the gearbox crank that
+# angle_range uses to find the extremes of the stroke, as in the blade element theory
+# code's runSingleSimulation.
+_DEFAULT_ANGLE_RANGE_SAMPLES = 10000
+
+# This is the largest change (rad) in the gearbox crank angle between two samples of a
+# converted trajectory, beyond what its velocity allows, before the trajectory is taken
+# to have jumped between inverse kinematics solutions.
+_MAX_CRANK_STEP_RAD = 0.1
 
 # This is the number of crank angles at which the linkage is checked for assembling at
 # construction.
@@ -133,7 +149,7 @@ def _law_of_cosines_terms(
 
 
 class CrankLinkage:
-    """A class used to evaluate the kinematics of a crank linkage.
+    """A class used to describe a motor, gearbox, and crank linkage powertrain.
 
     VALIDATED CORRECT
 
@@ -142,12 +158,41 @@ class CrankLinkage:
     length wing_crank_length, which turns about the shoulder origin with the wing. The
     shoulder origin sits at (gearbox_to_shoulder_y, gearbox_to_shoulder_z) from the
     gearbox origin in the body y and z axes. The wing crank is rotated from the wing by
-    wing_crank_angle_offset_rad.
+    wing_crank_angle_offset_rad. A motor turns the gearbox crank through a gearbox with
+    a reduction of gear_ratio.
 
-    The crank angle q is the gearbox crank's angle from the body y axis. The wing angle
-    follows from it by the linkage's forward kinematics, and every derivative of the
-    wing angle with respect to q is analytical. The inverse kinematics has two solutions
-    for each wing angle, and the derivatives of both are analytical as well.
+    **Conforms to the flap_drive.Transmission protocol:**
+
+    CrankLinkage is built to be passed directly to a FlapDrive as its transmission. To
+    conform to the flap_drive.Transmission protocol, it implements exactly the members
+    that protocol lists: evaluate_angle, evaluate_jacobian, evaluate_hessian, and
+    convert_trajectory, with the same signatures. It doesn't
+    inherit from Transmission or import flap_drive. A Protocol is satisfied by having
+    the members, so conforming is a matter of matching them, and FlapDrive's
+    isinstance check and mypy both accept a CrankLinkage on that basis. Renaming or
+    changing the signature of any of those four members would break that conformance.
+    Everything else in the class, including the crank angle kinematics and angle_range,
+    is specific to the crank linkage and isn't part of the protocol.
+
+    **Two coordinates:**
+
+    The crank angle (the reduction angle, theta_r in the blade element theory code) is
+    the gearbox crank's angle from the body y axis. wing_angle, wing_angle_jacobian,
+    wing_angle_hessian, crank_angles, and crank_angle_derivatives work in it, and they
+    match that code's calcCrankshaftFK, calcCrankshaftJacFK, calcCrankshaftHessFK,
+    calcCrankshaftIK, calcCrankshaftJacIK, and calcCrankshaftHessIK.
+
+    The motor angle is the crank angle times gear_ratio. evaluate_angle,
+    evaluate_jacobian, evaluate_hessian, and convert_trajectory work in it, because they
+    are the flap_drive.Transmission interface that a FlapDrive uses, and a FlapDrive
+    integrates the motor's dynamics. They match that code's motor side J_motor =
+    crankshaftJacFK(theta_r) / gearbox_reduction, H_motor = crankshaftHessFK(theta_r) /
+    gearbox_reduction^2, and convertWingTrajToMotorAnalytical or
+    convertWingTrajToMotorNumerical.
+
+    Every derivative of the wing angle with respect to the crank angle is analytical.
+    The inverse kinematics has two solutions for each wing angle, and the derivatives of
+    both are analytical as well.
     """
 
     __slots__ = (
@@ -158,6 +203,8 @@ class CrankLinkage:
         "_gearbox_crank_length",
         "_linkage_length",
         "_GoSoDist_squared",
+        "_gear_ratio",
+        "_derivative_method",
     )
 
     def __init__(
@@ -168,6 +215,8 @@ class CrankLinkage:
         wing_crank_angle_offset_rad: float | int,
         gearbox_crank_length: float | int,
         linkage_length: float | int,
+        gear_ratio: float | int = 1.0,
+        derivative_method: str = "analytical",
     ) -> None:
         """The initialization method.
 
@@ -189,6 +238,20 @@ class CrankLinkage:
         :param linkage_length: The length of the link between the two cranks. It must be
             a positive number (int or float) and will be converted internally to a
             float. The units are in meters.
+        :param gear_ratio: The reduction from the motor to the gearbox crank
+            (gearbox_reduction in the blade element theory code). It must be a nonzero
+            number (int or float) and will be converted internally to a float. It is
+            unitless. The default is 1.0, which has the motor turn the gearbox crank
+            directly.
+        :param derivative_method: How convert_trajectory finds the motor's velocity and
+            acceleration. Valid options are "analytical", which applies the chain rule
+            with the inverse kinematics' analytical Jacobian and Hessian (the blade
+            element theory code's convertWingTrajToMotorAnalytical), and "numerical",
+            which differentiates the motor position in time with central differences
+            (its convertWingTrajToMotorNumerical). It only affects the trajectory
+            conversion. The forward kinematics' Jacobian and Hessian, which a
+            FlapDrive's equation of motion uses, are always analytical. The default is
+            "analytical".
         :return: None
         """
         self._gearbox_to_shoulder_y = (
@@ -215,6 +278,17 @@ class CrankLinkage:
         self._linkage_length = _parameter_validation.number_in_range_return_float(
             linkage_length, "linkage_length", 0.0, False
         )
+        self._gear_ratio = _parameter_validation.number_in_range_return_float(
+            gear_ratio, "gear_ratio"
+        )
+        if self._gear_ratio == 0.0:
+            raise ValueError("gear_ratio can't be zero.")
+        if derivative_method not in DERIVATIVE_METHODS:
+            raise ValueError(
+                f"derivative_method must be one of {DERIVATIVE_METHODS}, but it is "
+                f"{derivative_method}."
+            )
+        self._derivative_method = derivative_method
         # Store the squared magnitude of p_GoSo_B (GoSoDist^2), which appears in the
         # derivatives of both kinematics directions.
         self._GoSoDist_squared = (
@@ -230,6 +304,207 @@ class CrankLinkage:
                 "positions don't describe a crank that turns through a full revolution."
             )
 
+    # --- Immutable: read only properties ---
+    @property
+    def gearbox_to_shoulder_y(self) -> float:
+        return self._gearbox_to_shoulder_y
+
+    @property
+    def gearbox_to_shoulder_z(self) -> float:
+        return self._gearbox_to_shoulder_z
+
+    @property
+    def wing_crank_length(self) -> float:
+        return self._wing_crank_length
+
+    @property
+    def wing_crank_angle_offset_rad(self) -> float:
+        return self._wing_crank_angle_offset_rad
+
+    @property
+    def gearbox_crank_length(self) -> float:
+        return self._gearbox_crank_length
+
+    @property
+    def linkage_length(self) -> float:
+        return self._linkage_length
+
+    @property
+    def gear_ratio(self) -> float:
+        return self._gear_ratio
+
+    @property
+    def derivative_method(self) -> str:
+        return self._derivative_method
+
+    # --- The flap_drive.Transmission interface, in the motor's angle ---
+    #
+    # These four methods exist to conform to the flap_drive.Transmission protocol, so
+    # that a FlapDrive can use this CrankLinkage as its transmission. Their names and
+    # signatures must match that protocol exactly. They translate between the motor
+    # angle, which a FlapDrive integrates, and the crank angle kinematics further below:
+    # evaluate_angle, evaluate_jacobian, evaluate_hessian, and convert_trajectory.
+    def evaluate_angle(self, actuator_position: float | int) -> float:
+        """Returns the flap angle at a motor angle.
+
+        This is a member of the flap_drive.Transmission protocol.
+
+        :param actuator_position: The motor angle, in radians.
+        :return: The flap angle (the x component of the Wing's angles_Gs_to_Wn_ixyz), in
+            radians.
+        """
+        # The gearbox crank turns by the motor's angle divided by the gear ratio
+        # (theta_r = motor_pos / gearbox_reduction in the blade element theory code).
+        # That code also wraps theta_r to [0, 2 * pi), which isn't needed here, because
+        # the kinematics are periodic in the crank angle.
+        return float(self.wing_angle(float(actuator_position) / self._gear_ratio))
+
+    def evaluate_jacobian(self, actuator_position: float | int) -> float:
+        """Returns the first derivative of the flap angle with respect to the motor
+        angle.
+
+        This is a member of the flap_drive.Transmission protocol.
+
+        :param actuator_position: The motor angle, in radians.
+        :return: The Jacobian. It is unitless.
+        """
+        # The chain rule through the gearbox divides by the gear ratio once (J_motor =
+        # crankshaftJacFK(theta_r) / gearbox_reduction there).
+        return (
+            float(self.wing_angle_jacobian(float(actuator_position) / self._gear_ratio))
+            / self._gear_ratio
+        )
+
+    def evaluate_hessian(self, actuator_position: float | int) -> float:
+        """Returns the second derivative of the flap angle with respect to the motor
+        angle.
+
+        This is a member of the flap_drive.Transmission protocol.
+
+        :param actuator_position: The motor angle, in radians.
+        :return: The Hessian, in per radian.
+        """
+        # The chain rule through the gearbox divides by the gear ratio once per
+        # derivative (H_motor = crankshaftHessFK(theta_r) / gearbox_reduction^2 there).
+        return (
+            float(self.wing_angle_hessian(float(actuator_position) / self._gear_ratio))
+            / self._gear_ratio**2
+        )
+
+    def convert_trajectory(
+        self,
+        times: np.ndarray,
+        flap_angles_rad: np.ndarray,
+        flap_angle_derivatives_rad: np.ndarray,
+        flap_angle_second_derivatives_rad: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Converts a flap angle trajectory into the motor trajectory that produces it.
+
+        This is a member of the flap_drive.Transmission protocol.
+
+        It uses this CrankLinkage's derivative_method, and _convert_wing_trajectory
+        describes how the inverse kinematics solution is chosen and how the turnarounds
+        are handled. The solution is chosen by the direction of the wing's motion, so
+        this describes a crank that turns one way through full revolutions, and a flap
+        trajectory that reaches the linkage's full stroke at each turnaround. A
+        trajectory that turns around short of the full stroke would make the gearbox
+        crank jump, so it raises a ValueError.
+
+        :param times: A (N,) ndarray of floats holding the times of the samples. They
+            must be finite and strictly increasing. The units are in seconds.
+        :param flap_angles_rad: A (N,) ndarray of floats holding the flap angles (the x
+            component of the Wing's angles_Gs_to_Wn_ixyz) at those times. The units are
+            in radians.
+        :param flap_angle_derivatives_rad: A (N,) ndarray of floats holding the flap
+            angles' time derivatives at the same times. The units are in radians per
+            second.
+        :param flap_angle_second_derivatives_rad: A (N,) ndarray of floats holding the
+            flap angles' second time derivatives at the same times. The units are in
+            radians per second squared.
+        :return: A tuple of three (N,) ndarrays of floats holding the motor position
+            (rad), velocity (rad/s), and acceleration (rad/s^2) at the same times.
+        """
+        # Check that the four arrays line up sample for sample, and that the times
+        # increase.
+        inputs = []
+        for name, value in (
+            ("times", times),
+            ("flap_angles_rad", flap_angles_rad),
+            ("flap_angle_derivatives_rad", flap_angle_derivatives_rad),
+            ("flap_angle_second_derivatives_rad", flap_angle_second_derivatives_rad),
+        ):
+            array = np.asarray(value, dtype=float)
+            if array.ndim != 1 or array.shape != np.shape(times):
+                raise ValueError(f"{name} must be a 1D array with the same length.")
+            inputs.append(array)
+        sample_times = inputs[0]
+        if (
+            not np.isfinite(sample_times).all()
+            or not (np.diff(sample_times) > 0.0).all()
+        ):
+            raise ValueError("times must be finite and strictly increasing.")
+
+        positions, velocities, accelerations = self._convert_wing_trajectory(
+            self._gear_ratio,
+            inputs[1],
+            inputs[2],
+            inputs[3],
+            self._derivative_method,
+            sample_times,
+        )
+
+        # A turnaround short of the linkage's stroke switches the inverse kinematics
+        # solution, which makes the crank angle jump between samples by far more than
+        # its velocity allows. Each sample's change is compared with what the velocities
+        # on either side of it allow, with a margin.
+        gear_ratio_magnitude = abs(self._gear_ratio)
+        crank_steps = np.abs(np.diff(positions)) / gear_ratio_magnitude
+        allowed_steps = (
+            np.maximum(np.abs(velocities[:-1]), np.abs(velocities[1:]))
+            / gear_ratio_magnitude
+            * np.diff(sample_times)
+        )
+        jumps = np.flatnonzero(crank_steps > 4.0 * allowed_steps + _MAX_CRANK_STEP_RAD)
+        if jumps.size > 0:
+            raise ValueError(
+                "The flap trajectory turns around short of the crank linkage's stroke "
+                f"at {sample_times[jumps[0]]:.4f} s, where the gearbox crank would have "
+                f"to jump by {crank_steps[jumps[0]]:.3f} rad. A crank that turns one "
+                "way only reverses the flap at its dead centers, so a trajectory that "
+                "it can follow must reach the full stroke at every turnaround."
+            )
+        if not (
+            np.isfinite(positions).all()
+            and np.isfinite(velocities).all()
+            and np.isfinite(accelerations).all()
+        ):
+            raise ValueError(
+                "The flap trajectory leaves the crank linkage's stroke, so it has no "
+                "motor trajectory."
+            )
+        return positions, velocities, accelerations
+
+    def angle_range(
+        self, num_samples: int = _DEFAULT_ANGLE_RANGE_SAMPLES
+    ) -> tuple[float, float]:
+        """Returns the smallest and largest flap angles over one turn of the gearbox
+        crank, which are the ends of the linkage's stroke.
+
+        :param num_samples: The number of crank angles to sample over one turn. It must
+            be an int of at least 2. The default is 10000.
+        :return: A tuple of the smallest and largest flap angles, in radians.
+        """
+        num_samples = _parameter_validation.int_in_range_return_int(
+            num_samples, "num_samples", 2, True
+        )
+        # Sample the forward kinematics over one turn of the gearbox crank and keep the
+        # extremes, like the blade element theory code's loop over red_angs =
+        # linspace(0, 2*pi, 10000) in runSingleSimulation. Its wing_beat_amplitude is
+        # the difference of the two, and its dihedral is their average.
+        angles = self.wing_angle(np.linspace(0.0, 2.0 * np.pi, num_samples))
+        return float(np.min(angles)), float(np.max(angles))
+
+    # --- The linkage's kinematics, in the crank angle ---
     def _forward_terms(
         self, reduction_angle: np.ndarray | float
     ) -> tuple[np.ndarray, ...]:
@@ -575,7 +850,7 @@ class CrankLinkage:
         )
         return d_reduction_angle, dd_reduction_angle
 
-    def convert_trajectory(
+    def _convert_wing_trajectory(
         self,
         gear_ratio: float,
         wing_angles: np.ndarray,

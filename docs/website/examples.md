@@ -17,6 +17,8 @@ Unsteady Ring VLM Solver with Ground Effect <examples/unsteady_ring_vortex_latti
 Aeroelastic Unsteady Ring VLM Solver with First-Order Deformation <examples/aeroelastic_unsteady_first_order_deformation>
 Aeroelastic Unsteady Ring VLM Solver with First-Order Deformation Plotting <examples/aeroelastic_unsteady_first_order_plotting>
 Aeroelastic Unsteady Ring VLM Solver with First-Order Deformation of Mixed Wings <examples/aeroelastic_unsteady_first_order_deformation_mixed_wings>
+Flap-Driven Aeroelastic Unsteady Ring VLM Solver with a User-Defined Transmission <examples/flap_driven_aeroelastic_unsteady>
+Flap-Driven Aeroelastic Unsteady Ring VLM Solver with a Motor and Crank Linkage <examples/flap_driven_aeroelastic_unsteady_crank>
 Free Flight Unsteady Ring VLM Solver with a Glider <examples/free_flight_unsteady_ring_vortex_lattice_method_solver_glider>
 Free Flight Unsteady Ring VLM Solver with a Flapping Wing <examples/free_flight_unsteady_ring_vortex_lattice_method_solver_flapping>
 ```
