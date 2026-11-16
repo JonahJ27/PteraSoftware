@@ -11,10 +11,10 @@
   "flap_inertia_kg_m2": 1.411,
   "mass_kg": 0.882,
   "meshing": {
-    "description": "How the outline becomes Ptera Software WingCrossSections. Leading edge points within merge_tolerance_mm of a trailing edge point share its station. The root chord replaces the outline's zero chord at the shoulder. root_gap_m is how far each half's root sits from the plane of symmetry, so the halves can flap separately.",
+    "description": "How the outline becomes Ptera Software WingCrossSections. Leading edge points within merge_tolerance_mm of a trailing edge point share its station. The root chord replaces the outline's zero chord at the shoulder. root_offset_y_m is each root's (and shoulder's) distance from the plane of symmetry, half of the CAD model's 410 mm root spacing, and each wing flaps about its own root.",
     "merge_tolerance_mm": 1.5,
     "root_chord_m": 0.005,
     "spanwise_panel_width_m": 0.1,
-    "root_gap_m": 0.001
+    "root_offset_y_m": 0.205
   }
 }

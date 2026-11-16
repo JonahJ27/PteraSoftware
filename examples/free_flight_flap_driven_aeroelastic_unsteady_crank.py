@@ -227,14 +227,14 @@ wing_planform_area = float(
 )
 WING_DENSITY = WING_MASS / wing_planform_area
 # The model 5 wing flaps about an axis through its shoulder, the origin of its points,
-# parallel to the x axis. Both Wings' shoulders are on the airplane's plane of symmetry,
-# as in the blade element theory code, whose wingspan is twice the shoulder to tip
-# length. Each Wing's root starts ROOT_GAP out from the plane of symmetry, so that the
-# Airplane splits the symmetric Wing into two Wings that can flap separately (with the
-# root on the plane, it would stay one Wing, mirrored about it). The rotation point
-# offset below moves each Wing's flap axis back to the shoulder, on the plane of
-# symmetry.
-ROOT_GAP = wing_parameters["meshing"]["root_gap_m"]
+# parallel to the x axis. As in the CAD model, the two Wings' roots, and so their
+# shoulders, are 410 millimeters apart, so each root is ROOT_OFFSET_Y from the plane of
+# symmetry, and each Wing flaps about its own root's leading edge point (the default
+# rotation point). Because the root is off the plane, the Airplane splits the symmetric
+# Wing into two Wings that can flap separately. Don't move the roots much closer
+# together: the two roots' bound vortices spin in opposite directions, and within a few
+# centimeters of each other they throw the free wake's root vertices far out of place.
+ROOT_OFFSET_Y = wing_parameters["meshing"]["root_offset_y_m"]
 
 # Define the V-tail, a rigid tail for pitch stability, 3 meters behind the wing's root.
 # It sits on the plane of symmetry, so it stays one Wing that is mirrored about that
@@ -285,7 +285,7 @@ example_airplane = ps.geometry.airplane.Airplane(
             name="Main Wing",
             Ler_Gs_Cgs=(
                 station_leading_edge_x_mm[0] * SCALE_M_PER_MM,
-                ROOT_GAP,
+                ROOT_OFFSET_Y,
                 0.0,
             ),
             angles_Gs_to_Wn_ixyz=(np.rad2deg(DIHEDRAL_RAD), 0.0, 0.0),
@@ -327,7 +327,6 @@ for wing_index in main_wing_indices:
                 )
                 for wing_cross_section in wing.wing_cross_sections
             ],
-            rotationPointOffset_Gs_Ler=(0.0, -ROOT_GAP, 0.0),
         )
     )
 

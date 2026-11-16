@@ -35,6 +35,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 21 | The torsional spring ODE is stiff for light or narrow strips, and is integrated explicitly | Structure | Medium |
 | 22 | A wing can't be driven by more than one FlapDrive | Control | Low |
 | 23 | The flap examples duplicate their wing and motor building code | Code health | Low |
+| 24 | The free wake is sensitive to the root spacing and passes through the V-tail | Geometry | Medium |
 
 ## Coupling
 
@@ -297,6 +298,18 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 **Fix.** Decide whether exceeding the range should be an error, a hard stop in the dynamics, or allowed by lifting the `Wing`'s limit.
 
 **Where.** `_advance_flap_drives`, `geometry/wing.py`.
+
+### 24. The free wake is sensitive to the root spacing and passes through the V-tail
+
+**Priority:** Medium
+
+**Problem.** To flap separately, the two halves of the main wing are split into two Wings whose roots are off the plane of symmetry. Each root edge then carries a bound vortex leg, and the two legs spin in opposite directions. Bound vortex legs have no core, so a free wake vertex near both sees a nearly singular velocity. With the roots 2 mm apart (an earlier version of the model 5 examples), the newest root wake vertices moved up to 208 m/s faster than the rest of the wake at a 20 m/s airspeed, ended up meters out of place, and dragged the first wingbeat's wake corners out to 12 m from the centerline. With the CAD model's 410 mm root spacing (`root_offset_y_m` = 0.205 in `model_5_wing.json`), the worst vertex moves 23 m/s faster than the rest of the wake and the wake stays within the span. The remaining hot spot is where the main wing's inner wake passes through the V-tail, whose bound legs also have no core.
+
+**Why it matters.** The wing and tail loads come from the same velocity field, so a wake vertex thrown near a surface corrupts the loads, not only the picture. Runs of the model 5 examples made with the 2 mm root spacing shouldn't be trusted near the root.
+
+**Fix.** Keep the roots at the real body's spacing, never a token gap. For the tail, give bound vortex legs a small core when they act on wake points, or truncate or cut the wake where it meets a downstream surface. A prescribed wake (`prescribed_wake=True`) avoids both, at the cost of the wake's rollup.
+
+**Where.** The examples and `model_5_wing.json`. A core on bound legs would be in `unsteady_ring_vortex_lattice_method.py`, where `_current_bound_r_c0s` is zero except for the trailing legs.
 
 ### 17. A saved problem can't be rerun
 
