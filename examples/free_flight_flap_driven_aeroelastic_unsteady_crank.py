@@ -62,7 +62,7 @@ crank_parameters = load_parameters("crank_linkage.json")
 # Define the initial flight condition, the flap frequency, and the simulation's time
 # steps. The vehicle holds its initial state for PRESCRIBED_NUM_STEPS time steps (one
 # wingbeat), so the wake can develop, and then flies freely for the rest.
-FLAP_FREQUENCY = 3.0
+FLAP_FREQUENCY = 3.5
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 20.0
 ANGLE_OF_ATTACK = 10.0
@@ -207,25 +207,23 @@ for i, y_mm in enumerate(station_y_mm):
         )
     )
 
-# Define the model 5 wing's mass properties, from the blade element theory code's
-# precomputeWingGeometry with runSim's settings: a carbon fiber leading edge tube
-# (leading_edge_shape = 6, a 2.5 millimeter wall, with a 36 millimeter outer diameter
-# and a density of 1500.0 kg/m^3) along the leading edge points, and no membrane mass
-# (include_membrane_mass = false). WING_FLAP_INERTIA is the tube's inertia about the
-# flap axis at the shoulder (its Ixx), which is what that code's
-# inertialBladeElementTheoryCalc uses. The torsional spring model spreads a Wing's mass
-# over its panels by area instead, so its wing_density is the tube's mass divided by one
-# Wing's planform area. See docs/FLAP_DRIVE_TODO.md about the two inertias.
-WING_FLAP_INERTIA = wing_parameters["flap_inertia_kg_m2"]
-WING_MASS = wing_parameters["mass_kg"]
-station_chords = (
-    station_trailing_edge_x_mm - station_leading_edge_x_mm
-) * SCALE_M_PER_MM
-station_widths = np.diff(station_y_mm) * SCALE_M_PER_MM
-wing_planform_area = float(
-    np.sum(0.5 * (station_chords[:-1] + station_chords[1:]) * station_widths)
+# Define the model 5 wing's mass properties, which have two parts (see
+# model_5_wing.json). The leading edge is a carbon fiber tube (the blade element theory
+# code's leading_edge_shape = 6), and the membrane has the measured areal density from
+# that code's runSim. Both parts' masses and inertias about the shoulder are computed as
+# in that code's precomputeWingGeometry. The motor flaps the whole wing, so each
+# FlapDrive's wing inertia, WING_FLAP_INERTIA, is the sum of the tube's and the
+# membrane's. The torsional springs twist each strip about its leading edge, where the
+# tube sits, so the tube adds almost nothing to their twist inertia, and the springs get
+# only the membrane: wing_density is the membrane's areal density. (The torsional spring
+# model currently triples every strip's mass. See item 3 of docs/FLAP_DRIVE_TODO.md.)
+leading_edge_parameters = wing_parameters["leading_edge"]
+membrane_parameters = wing_parameters["membrane"]
+WING_FLAP_INERTIA = (
+    leading_edge_parameters["flap_inertia_kg_m2"]
+    + membrane_parameters["flap_inertia_kg_m2"]
 )
-WING_DENSITY = WING_MASS / wing_planform_area
+WING_DENSITY = membrane_parameters["areal_density_kg_m2"]
 # The model 5 wing flaps about an axis through its shoulder, the origin of its points,
 # parallel to the x axis. As in the CAD model, the two Wings' roots, and so their
 # shoulders, are 410 millimeters apart, so each root is ROOT_OFFSET_Y from the plane of

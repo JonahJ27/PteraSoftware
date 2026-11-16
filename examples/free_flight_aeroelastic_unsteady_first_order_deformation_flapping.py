@@ -1,5 +1,6 @@
-"""Demonstrates running Ptera Software's FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
-with a flapping-wing airplane whose main wing deforms under its own aerodynamic loads
+"""Demonstrates running Ptera Software's
+FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver with a flapping-wing airplane
+whose main wing deforms under its own aerodynamic loads.
 
 The main wing flaps symmetrically while the unsteady aerodynamics are coupled to
 MuJoCo's rigid body dynamics, so the airplane flies a free six-degree-of-freedom
@@ -33,20 +34,20 @@ Lp_Wcsp_Lpp_Offsets = (0.1, 0.5, 0.0)
 CROSS_SECTION_CHORDS = [1.75, 1.75, 1.75, 1.75, 1.65, 1.55, 1.4, 1.2, 1.0]
 wing_cross_sections = []
 
-#DEFINE ROBOT WEIGHT
-ROBOT_WEIGHT = 420 #in newtons
+# DEFINE ROBOT WEIGHT
+ROBOT_WEIGHT = 420  # in newtons
 
-#DEFINE FLAP PARAMS
-FLAP_PERIOD = 1/2
+# DEFINE FLAP PARAMS
+FLAP_PERIOD = 1 / 2
 FLAP_AMPLITUDE = 15
-FLAP_CYCLES = 6*1/FLAP_PERIOD
-dt_des = .03
+FLAP_CYCLES = 6 * 1 / FLAP_PERIOD
+dt_des = 0.03
 PRESCRIBED_RIGID_STEPS = 10
 
-#WING PARAMS
+# WING PARAMS
 WING_DENSITY = 6
 SPRING_CONSTANT_RAD = 10000.0
-DAMPING_CONSTANT_RAD =  10000.0
+DAMPING_CONSTANT_RAD = 10000.0
 
 # Define WingCrossSections with a variable set of chords. All WingCrossSections for the
 # deformation simulation have num_spanwise_panels = 2 (except the wing tip, which is
@@ -157,7 +158,6 @@ example_airplane = ps.geometry.airplane.Airplane(
     c_ref=None,
     b_ref=None,
 )
-
 
 
 # The main Wing was defined to have symmetric = True, mirror_only = False, and with a
@@ -332,12 +332,13 @@ del v_tail_wing_movement
 
 # Define a new OperatingPoint.
 example_operating_point = ps.operating_point.OperatingPoint(
-    rho=1.225, 
-    vCg__E=10.0, 
-    alpha=3.3, 
-    beta=0.0, 
+    rho=1.225,
+    vCg__E=10.0,
+    alpha=3.3,
+    beta=0.0,
     angles_E_to_BP1_izyx=(0.0, 3.3, 0.0),
-    externalFX_W=0.0, nu=15.06e-6,
+    externalFX_W=0.0,
+    nu=15.06e-6,
     g_E=(0.0, 0.0, 9.80665),
 )
 
@@ -355,18 +356,17 @@ operating_point_movement = (
 del example_operating_point
 
 
-
 # Define the FreeFlightMovement. This contains the AirplaneMovement and the
 # FreeFlightOperatingPointMovement. The Airplane first holds its initial flight
 # condition for prescribed_num_steps time steps so the wake can develop, then the solver
 # releases the rigid body dynamics for the remaining free_num_steps time steps.
-#TODO: NEED AEROELASTIC FREE FLIGHT MOVEMENT
+# TODO: NEED AEROELASTIC FREE FLIGHT MOVEMENT
 movement = ps.movements.free_flight_movement.FreeFlightAeroelasticMovement(
     airplane_movements=[example_airplane_movement],
     operating_point_movement=operating_point_movement,
     delta_time=dt_des,
     prescribed_num_steps=PRESCRIBED_RIGID_STEPS,
-    free_num_steps=int(FLAP_PERIOD*FLAP_CYCLES/dt_des) - PRESCRIBED_RIGID_STEPS,
+    free_num_steps=int(FLAP_PERIOD * FLAP_CYCLES / dt_des) - PRESCRIBED_RIGID_STEPS,
 )
 
 
@@ -380,7 +380,7 @@ movement = ps.movements.free_flight_movement.FreeFlightAeroelasticMovement(
 # consistent. The solver applies the gravitational force as mass * g_E. No external
 # loads are applied (external_loads_fn = None), so the Airplane is driven only by its
 # flapping aerodynamics, gravity, and inertia.
-#TODO: NEED AEROELASTIC FREE FLIGHT UNSTEADY PROBLEM
+# TODO: NEED AEROELASTIC FREE FLIGHT UNSTEADY PROBLEM
 example_problem = ps.problems.FreeFlightAeroelasticUnsteadyProblem(
     movement=movement,
     wing_density=WING_DENSITY,
@@ -397,7 +397,7 @@ example_problem = ps.problems.FreeFlightAeroelasticUnsteadyProblem(
 
 # Define a new solver. We'll create a FreeFlightUnsteadyRingVortexLatticeMethodSolver,
 # which requires a FreeFlightUnsteadyProblem.
-#TODO: NEED AEROELASTIC FREE FLIGHT ULVM SOLVER
+# TODO: NEED AEROELASTIC FREE FLIGHT ULVM SOLVER
 example_solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
     free_flight_unsteady_problem=example_problem,
 )

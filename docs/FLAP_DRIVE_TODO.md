@@ -117,7 +117,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Why it matters.** The example demonstrates the coupling, not a flyable vehicle. Its trajectory says nothing about the robot.
 
-**Fix.** Use the robot's measured mass, CG, and inertia (including the wings and motors, per item 2), and move them into a JSON file in `examples/flap_drive_parameters/` like the wing and powertrain. Fix the wingbeat comment, or set `PRESCRIBED_NUM_STEPS` from the flap period. Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
+**Fix.** Build `mass` and `I_BP1_CgP1` from parts instead of placeholders, in a `vehicle.json` in `examples/flap_drive_parameters/` like the wing and powertrain: the body (fuselage, motors, and gearboxes, with their CG and inertia from the CAD model) plus, for each wing, both of its mass parts from `model_5_wing.json` (the leading edge tube as a line mass along the leading edge points, and the membrane as an areal mass over the outline), placed at the 0.205 m root offset and the mean flap angle, with the parallel axis terms. The rigid body sees the whole wing's mass, spar and membrane, unlike the torsional springs (item 4). The inertia stays constant during a run (item 2). Fix the wingbeat comment, or set `PRESCRIBED_NUM_STEPS` from the flap period. Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
 
 **Where.** The example, `trim.py`.
 
@@ -147,17 +147,17 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Where.** `problems.py`, `_calculate_mass_matrix` and `_calculate_strip_inertias`.
 
-### 4. A measured wing inertia and the torsional springs' strip inertia can disagree
+### 4. The spar and membrane mass split is set by hand in the examples
 
-**Priority:** High
+**Priority:** Medium
 
-**Problem.** A `FlapDrive`'s `wing_flap_inertia`, such as the examples' 1.411 kg\*m^2 per wing (the model 5 leading edge tube's, from `model_5_wing.json`, and twice that for the shared motor example's one drive), is used only in the drive's equation of motion. The torsional springs always use the strip inertias from `wing_density`. The two can describe wings of different mass, and the UVLM wing has no leading edge spar mass at all.
+**Problem.** The model 5 wing's mass has two parts in `model_5_wing.json`: the leading edge tube (0.882 kg, 1.411 kg\*m^2 about the shoulder) and the membrane (0.0546 kg, 0.0500 kg\*m^2, from the blade element theory code's measured areal density). The examples give each `FlapDrive` both parts' inertia (1.461 kg\*m^2 per wing, twice that for the shared motor) and give the torsional springs only the membrane (`wing_density` = 0.0550 kg/m^2), because the strips twist about the leading edge, where the tube sits. Nothing in the package knows about the split: the problem only takes one `wing_density`, and a `FlapDrive` without `wing_flap_inertia` estimates its inertia from that density, which leaves out the spar. The free flight example also multiplies the density by 10 (a user setting).
 
-**Why it matters.** The drive's motion can be right while the deformation is computed for a different mass distribution, or the reverse.
+**Why it matters.** The split is correct only as long as each example passes both values by hand. A drive that relies on the estimate would miss most of the wing's inertia (about 97% of it for model 5). The torsional springs also triple the membrane's mass (item 3).
 
-**Fix.** Make one mass model the source of truth: either derive `wing_density` (and a separate spar mass per strip) from the measured properties, or give the structural model per strip masses that sum to the measured inertia. Warn when the two disagree by more than a tolerance.
+**Fix.** Let the problem take the spar separately (for example, a spar mass per unit span, or a callable that returns a strip's spar inertia about its leading edge), use spar plus membrane for the estimate of a drive's wing inertia, and use the membrane alone, plus the spar's small twist inertia about its own axis, for the springs. Fix item 3 first.
 
-**Where.** `flap_drive.py` (`inverse_dynamics_controller`'s inertia choice), `problems.py` (strip inertias).
+**Where.** `flap_driven_aeroelastic_unsteady_problem.py` (`_calculate_wings_flap_inertia`), `problems.py` (strip inertias), the examples.
 
 ### 21. The torsional spring ODE is stiff for light or narrow strips, and is integrated explicitly
 

@@ -1526,13 +1526,14 @@ class FlapDrive:
             gets that Wing's inertia, and a FlapDrive that flaps both halves of a
             symmetric Wing gets twice one half's inertia (the problem's own estimate
             sums its Wings the same way). Size the actuator for all of its Wings too,
-            since it also carries the sum of their fluid torques. WARNING: it is used
-            only in this FlapDrive's equation of motion. The problem's torsional
-            springs, which deform the Wings, always use strip inertias from the
-            problem's wing density. If this value disagrees with that estimate, the
-            drive and the structure model Wings of different mass, and if this value is
-            the true inertia, the computed wing deformation is likely invalid. Choose
-            the wing density so that the two agree. The default is None.
+            since it also carries the sum of their fluid torques. It is used only in
+            this FlapDrive's equation of motion. The problem's torsional springs, which
+            deform the Wings, always use strip inertias from the problem's wing density,
+            so the two can describe different mass on purpose: for a wing with a leading
+            edge spar and a membrane, this is the whole wing's inertia (spar and
+            membrane), while the wing density is the membrane's alone, because the
+            strips twist about the spar. Otherwise, choose them so they describe the
+            same mass. The default is None.
         :param reference: The FlapReference that this FlapDrive follows, the only
             definition of its flap trajectory. It must cover the whole simulation. Build
             one with FlapReference.constant_velocity, or with
