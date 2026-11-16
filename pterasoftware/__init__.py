@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import pterasoftware.crank_linkage
 import pterasoftware.flap_drive
 import pterasoftware.flap_driven_aeroelastic_unsteady_problem
+import pterasoftware.free_flight_flap_driven_aeroelastic_unsteady_problem
 import pterasoftware.geometry
 import pterasoftware.motor_saturation
 import pterasoftware.movements

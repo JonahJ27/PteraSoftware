@@ -17,6 +17,8 @@ from . import aeroelastic_wing_movement as aeroelastic_wing_movement_mod
 def _yz_components(values: object, name: str) -> tuple:
     """Returns the y and z components of an angular motion parameter as a tuple.
 
+    VALIDATED CORRECT
+
     The values themselves are validated by AeroelasticWingMovement once the x component
     is added, so this only checks that there are exactly two of them.
 
@@ -195,11 +197,16 @@ class FlapDrivenAeroelasticWingMovement(
         # driven, indexed by time step. These are the x components of the Wing's
         # angles_Gs_to_Wn_ixyz (angles describing the orientation of the wing axes
         # relative to the geometry axes, after accounting for symmetry, using an
-        # intrinsic xy'z" sequence). It is empty until the problem records step 0.
+        # intrinsic xy'z" sequence). It is empty until the problem records step 0. The
+        # problem fills it with record_flap_step, and generate_wing_at_time_step reads
+        # it (see that method for the full path).
         self._listOverrideAnglesX_Gs_to_Wn_ixyz: list[float] = []
 
         # This is the Wing's flap angular acceleration (rad/s^2) as a function of time
         # over the latest recorded time step's interval, or None before any is recorded.
+        # Unlike the angles, only the latest one is kept, because the problem's
+        # _generate_inertial_moment_function reads it for the torsional springs right
+        # after it is recorded, while it builds the next time step.
         self._angleSecondDerivativeXRad_function: Callable[[float], float] | None = None
 
         # This is the period (s) of the FlapDrive's reference, which the problem sets,
@@ -270,6 +277,8 @@ class FlapDrivenAeroelasticWingMovement(
     ) -> FlapDrivenAeroelasticWingMovement:
         """Returns a FlapDrivenAeroelasticWingMovement with the same parameters as an
         existing AeroelasticWingMovement, except for its flap motion.
+
+        VALIDATED CORRECT
 
         It lets an existing aeroelastic simulation setup gain a FlapDrive by swapping
         its AeroelasticWingMovements for these. The existing movement's flap motion (the
@@ -436,11 +445,43 @@ class FlapDrivenAeroelasticWingMovement(
             replaces the flap angle, or None. The default is None.
         :return: The Wing at this time step.
         """
+        # In normal operation, the flap angle reaches this method through the record,
+        # not through overrideAngleX_Gs_to_Wn_ixyz:
+        #
+        # 1. Before the parent problem builds the first time step, the problem's
+        #    _prepare_flap_drives records step 0 with record_flap_step, at the flap
+        #    angle of the FlapDrive's initial actuator position.
+        # 2. After the solver solves time step s, the problem's _advance_flap_drives
+        #    integrates the FlapDrive across the interval to the next time step and
+        #    records that step with record_flap_step, along with the flap acceleration
+        #    over the interval.
+        # 3. The parent problem's initialize_next_problem then builds step s + 1's
+        #    Airplane through the unchanged movement chain (AeroelasticMovement, then
+        #    AeroelasticAirplaneMovement, then this method). That chain passes
+        #    deformationAngles_Wcsp_to_Wcs_ixyz but has no flap angle argument, so
+        #    overrideAngleX_Gs_to_Wn_ixyz is None here, and the recorded angle for this
+        #    step is used.
+        #
+        # So every step is recorded before it is generated. The explicit
+        # overrideAngleX_Gs_to_Wn_ixyz parameter exists only to keep the parent's
+        # signature, and if given, it wins over the record. The base Wing's flap angle
+        # is used only for a step with no record, which happens only when no FlapDrive
+        # owns this Wing, or when the geometry is built outside or ahead of a flap
+        # driven problem (for example, FreeFlightAeroelasticMovement builds every
+        # Airplane when it is constructed). That fallback is silent.
+        #
+        # The recorded angle is in degrees, like every angle in the geometry, while the
+        # recorded acceleration is in rad/s^2, because it is only read by the problem's
+        # _generate_inertial_moment_function to compute a moment for the torsional
+        # springs. The problem's _advance_flap_drives converts the angle from radians.
         if overrideAngleX_Gs_to_Wn_ixyz is None and step < len(
             self._listOverrideAnglesX_Gs_to_Wn_ixyz
         ):
             overrideAngleX_Gs_to_Wn_ixyz = self._listOverrideAnglesX_Gs_to_Wn_ixyz[step]
 
+        # The parent replaces the x component of the Wing's angles_Gs_to_Wn_ixyz with
+        # the override, if there is one, before it applies the rotation point offset, so
+        # the Wing flaps about its shoulder.
         return super().generate_wing_at_time_step(
             step,
             delta_time,

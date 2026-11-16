@@ -43,6 +43,9 @@ from .flap_driven_aeroelastic_unsteady_problem import (
 from .free_flight_aeroelastic_unsteady_ring_vortex_lattice_method import (
     FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
 )
+from .free_flight_flap_driven_aeroelastic_unsteady_problem import (
+    FreeFlightFlapDrivenAeroelasticUnsteadyProblem,
+)
 
 # noinspection PyProtectedMember
 from .free_flight_unsteady_ring_vortex_lattice_method import (
@@ -105,7 +108,7 @@ _CALLABLE_FUNC_TO_NAME = {func: name for name, func in _CALLABLE_NAME_TO_FUNC.it
 # class registry changed, encoding strategy changed), and also when the meaning of a
 # serialized value changes, so that a file saved under the old meaning fails to load
 # loudly instead of being read under the new one.
-_FORMAT_VERSION = 37
+_FORMAT_VERSION = 38
 
 # This is the default maximum decompressed size in bytes when reading archives. The cap
 # is cumulative across every member read during one load(). Prevents zip bombs from
@@ -162,6 +165,7 @@ _CLASS_REGISTRY: dict[str, type] = {
     "FreeFlightOperatingPointMovement": FreeFlightOperatingPointMovement,
     "FreeFlightUnsteadyProblem": FreeFlightUnsteadyProblem,
     "FreeFlightAeroelasticUnsteadyProblem": FreeFlightAeroelasticUnsteadyProblem,
+    "FreeFlightFlapDrivenAeroelasticUnsteadyProblem": FreeFlightFlapDrivenAeroelasticUnsteadyProblem,
     "FreeFlightUnsteadyRingVortexLatticeMethodSolver": FreeFlightUnsteadyRingVortexLatticeMethodSolver,
     "FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver": FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
     "MuJoCoModel": MuJoCoModel,
@@ -205,6 +209,7 @@ _PUBLIC_SAVEABLE_CLASSES: frozenset[str] = frozenset(
         "FreeFlightOperatingPointMovement",
         "FreeFlightUnsteadyProblem",
         "FreeFlightAeroelasticUnsteadyProblem",
+        "FreeFlightFlapDrivenAeroelasticUnsteadyProblem",
         "FreeFlightUnsteadyRingVortexLatticeMethodSolver",
         "FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver",
     }

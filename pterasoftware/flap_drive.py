@@ -14,11 +14,14 @@ crank_linkage.CrankLinkage, or a class of your own.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, NamedTuple, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 import numpy as np
 
 from . import _parameter_validation
+
+if TYPE_CHECKING:
+    from .operating_point import OperatingPoint
 
 # This is the default central difference step for FlapTransmission's
 # from_forward_kinematics constructor. It is in the same units as the actuator position.
@@ -1154,6 +1157,64 @@ class FlapReference:
         )
 
 
+class AerodynamicModelInputs(NamedTuple):
+    """The state that a FlapDrive passes to its aerodynamic model, the callable given as
+    its feedforward_aerodynamic, each time it is evaluated.
+
+    VALIDATED CORRECT
+
+    A record is used so that fields can be added later without breaking existing models.
+    It holds what a model such as a blade element theory model needs to predict the
+    fluid torque on the Wings, so that the controller's feedforward can cancel it. The
+    model returns that torque (N*m) about the flap axis, positive in the direction of
+    increasing flap angle. The prediction only sets the controller's feedforward. The
+    torque that acts on the Wings is always the one given to single_wing_dynamics.
+
+    time is the simulation time (s). wing_indices are the indices of the Wings that the
+    FlapDrive flaps, in the first Airplane's wings, so that one model can serve several
+    FlapDrives.
+
+    angleXRad_Gs_to_Wn_ixyz and angleDerivativeXRad_Gs_to_Wn_ixyz are the actual flap
+    angle (rad) and its time derivative (rad/s).
+    desiredAngleDerivativeXRad_Gs_to_Wn_ixyz and
+    desiredAngleSecondDerivativeXRad_Gs_to_Wn_ixyz are the desired flap angle's first
+    and second time derivatives (rad/s and rad/s^2) at the actual actuator position: J *
+    q'_desired and H * q'_desired^2 + J * q''_desired, using the reference state that
+    the feedforward uses (see the FlapDrive's use_position_lookup). The blade element
+    theory code's singleWingInverseDynamicsController evaluates its aerodynamic model at
+    the actual flap angle and the desired flap rate (wing_velo_des there).
+
+    actuator_position, actuator_velocity, desired_actuator_velocity,
+    desired_actuator_acceleration, jacobian, and hessian are the actuator's state, its
+    desired state, and the transmission's derivatives, as in FlapDriveInputs.
+    measured_fluid_torque is the latest fluid torque (N*m) the controller can measure,
+    in a simulation the previous time step's UVLM torque, which a model can use as a
+    correction or ignore.
+
+    operating_point is the OperatingPoint of the time step the measured fluid torque
+    comes from, held constant over the time step like the torque, or None outside a
+    simulation. It carries the freestream speed, the angles of attack and sideslip, the
+    density, and the body's angular velocity. In a free flight simulation, it is the
+    vehicle's actual state from the rigid body dynamics, so a model sees the airspeed
+    and body rates change as the vehicle flies.
+    """
+
+    time: float
+    wing_indices: tuple[int, ...]
+    angleXRad_Gs_to_Wn_ixyz: float
+    angleDerivativeXRad_Gs_to_Wn_ixyz: float
+    desiredAngleDerivativeXRad_Gs_to_Wn_ixyz: float
+    desiredAngleSecondDerivativeXRad_Gs_to_Wn_ixyz: float
+    actuator_position: float
+    actuator_velocity: float
+    desired_actuator_velocity: float
+    desired_actuator_acceleration: float
+    jacobian: float
+    hessian: float
+    measured_fluid_torque: float
+    operating_point: OperatingPoint | None
+
+
 class FlapDriveInputs(NamedTuple):
     """The state that a FlapDrive passes to its actuator function each time it is
     evaluated.
@@ -1214,8 +1275,9 @@ class FlapDriveInputs(NamedTuple):
     load at the desired, faster flap rate, while this one only asks for the load at the
     actual, slower rate from one step ago, so it is less aggressive, and it also lags
     where the load changes quickly, as near the turnarounds. To predict it instead, pass
-    your own aerodynamic model as the FlapDrive's feedforward_aerodynamic, which is then
-    evaluated at the actual flap angle and the desired flap rate, as in the blade
+    your own aerodynamic model as the FlapDrive's feedforward_aerodynamic. It receives
+    an AerodynamicModelInputs, which includes the desired flap rate and the current
+    OperatingPoint, so it can be evaluated at the desired motion, as in the blade
     element theory code.
 
     **The feedforward's terms:**
@@ -1400,7 +1462,7 @@ class FlapDrive:
         feedforward_damping: bool | np.bool = True,
         feedforward_passive: bool | np.bool = True,
         feedforward_aerodynamic: (
-            bool | np.bool | Callable[[float, float], float]
+            bool | np.bool | Callable[[AerodynamicModelInputs], float]
         ) = True,
     ) -> None:
         """The initialization method.
@@ -1459,8 +1521,13 @@ class FlapDrive:
             axis (kg*m^2). If not None, it must be a positive number (int or float) and
             will be converted internally to a float, and it replaces the inertia that
             the FlapDrivenAeroelasticUnsteadyProblem estimates from its wing density and
-            the Wings' geometry. Use it when the inertia is measured. WARNING: it is
-            used only in this FlapDrive's equation of motion. The problem's torsional
+            the Wings' geometry. Use it when the inertia is measured. It is the total
+            for all of this FlapDrive's Wings, not one Wing's: a FlapDrive with one Wing
+            gets that Wing's inertia, and a FlapDrive that flaps both halves of a
+            symmetric Wing gets twice one half's inertia (the problem's own estimate
+            sums its Wings the same way). Size the actuator for all of its Wings too,
+            since it also carries the sum of their fluid torques. WARNING: it is used
+            only in this FlapDrive's equation of motion. The problem's torsional
             springs, which deform the Wings, always use strip inertias from the
             problem's wing density. If this value disagrees with that estimate, the
             drive and the structure model Wings of different mass, and if this value is
@@ -1503,10 +1570,11 @@ class FlapDrive:
             Wings. If True, T_aero is the measured_fluid_torque given to
             inverse_dynamics_controller, which in a simulation is the previous time
             step's UVLM torque at the Wings' actual motion. If False, there is no
-            aerodynamic term. If a callable, it is your own aerodynamic model: it
-            accepts the actual flap angle (rad) and the desired flap rate, J *
-            q'_desired (rad/s), and returns the predicted aerodynamic torque on the
-            Wings about the flap axis (N*m), positive in the direction of increasing
+            aerodynamic term. If a callable, it is your own aerodynamic model, such as a
+            blade element theory model: it accepts an AerodynamicModelInputs (the actual
+            and desired flap motion, the actuator state, the measured fluid torque, and
+            the current OperatingPoint) and returns the predicted aerodynamic torque on
+            the Wings about the flap axis (N*m), positive in the direction of increasing
             flap angle, like the blade element theory code's
             singleWingInverseDynamicsController, which evaluates its aerodynamic model
             at the desired wing velocity. It must return a finite number. Whichever is
@@ -1626,9 +1694,9 @@ class FlapDrive:
             feedforward_passive, "feedforward_passive"
         )
         if callable(feedforward_aerodynamic):
-            self._feedforward_aerodynamic: bool | Callable[[float, float], float] = (
-                feedforward_aerodynamic
-            )
+            self._feedforward_aerodynamic: (
+                bool | Callable[[AerodynamicModelInputs], float]
+            ) = feedforward_aerodynamic
         else:
             self._feedforward_aerodynamic = _parameter_validation.boolLike_return_bool(
                 feedforward_aerodynamic, "feedforward_aerodynamic"
@@ -1696,7 +1764,9 @@ class FlapDrive:
         return self._feedforward_passive
 
     @property
-    def feedforward_aerodynamic(self) -> bool | Callable[[float, float], float]:
+    def feedforward_aerodynamic(
+        self,
+    ) -> bool | Callable[[AerodynamicModelInputs], float]:
         return self._feedforward_aerodynamic
 
     def _equation_of_motion_terms(
@@ -1809,6 +1879,7 @@ class FlapDrive:
         actuator_velocity: float | int,
         measured_fluid_torque: float | int,
         computed_wing_flap_inertia: float | int | None = None,
+        operating_point: OperatingPoint | None = None,
     ) -> FlapDriveInputs:
         """Builds the record that is passed to the actuator function, including the
         feedforward force from the inverse dynamics.
@@ -1847,6 +1918,11 @@ class FlapDrive:
             the flap axis (kg*m^2), as estimated by the caller. It is ignored if this
             FlapDrive has a wing_flap_inertia, and it is required if it does not. If not
             None, it must be a positive number (int or float). The default is None.
+        :param operating_point: None, or the OperatingPoint of the time step the
+            measured fluid torque comes from. It is only passed on to an aerodynamic
+            model given as feedforward_aerodynamic, in its AerodynamicModelInputs. In a
+            simulation, the problem passes the current time step's OperatingPoint. The
+            default is None.
         :return: A FlapDriveInputs holding the state at this instant.
         """
         # Choose the Wings' inertia about the flap axis. If the user gave one when
@@ -1984,7 +2060,9 @@ class FlapDrive:
         # motion. The blade element theory code instead predicts it at the desired wing
         # velocity (aerodynamicBladeElementTheoryCalc with wing_velo_des), which the
         # UVLM can't do cheaply. A user model passed as feedforward_aerodynamic does
-        # that prediction instead, at the actual flap angle and the desired flap rate.
+        # that prediction instead. It receives the actual and desired flap motion and
+        # the current OperatingPoint, so it can evaluate the load at the desired motion
+        # and at the vehicle's actual airspeed.
         #
         # The estimate stays inside the controller: it only sets this term and
         # feedforward_fluid_torque. The torque that acts on the Wings is passed to
@@ -1993,11 +2071,28 @@ class FlapDrive:
         # VALIDATED CORRECT
         if self._feedforward_aerodynamic is not False:
             if callable(self._feedforward_aerodynamic):
+                aerodynamic_inputs = AerodynamicModelInputs(
+                    time=float(time),
+                    wing_indices=self._wing_indices,
+                    angleXRad_Gs_to_Wn_ixyz=angle_rad,
+                    angleDerivativeXRad_Gs_to_Wn_ixyz=jacobian * velocity,
+                    desiredAngleDerivativeXRad_Gs_to_Wn_ixyz=desired_flap_rate,
+                    desiredAngleSecondDerivativeXRad_Gs_to_Wn_ixyz=(
+                        hessian * lookup_velocity**2 + jacobian * lookup_acceleration
+                    ),
+                    actuator_position=position,
+                    actuator_velocity=velocity,
+                    desired_actuator_velocity=lookup_velocity,
+                    desired_actuator_acceleration=lookup_acceleration,
+                    jacobian=jacobian,
+                    hessian=hessian,
+                    measured_fluid_torque=measured_fluid_torque,
+                    operating_point=operating_point,
+                )
                 feedforward_fluid_torque = _call_scalar_function(
                     self._feedforward_aerodynamic,
                     "feedforward_aerodynamic",
-                    angle_rad,
-                    desired_flap_rate,
+                    aerodynamic_inputs,
                 )
             else:
                 feedforward_fluid_torque = measured_fluid_torque

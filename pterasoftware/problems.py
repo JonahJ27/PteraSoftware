@@ -2173,7 +2173,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         integrator: str = "RK4",
         extra_xml: dict[str, str] | None = None,
         mujoco_assets: dict[str, bytes] | None = None,
-        
+        step_discards: int = 5,
     ) -> None:
         """The initialization method.
 
@@ -2241,6 +2241,11 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             supplied is left to MuJoCo, so this is an advanced-user parameter. The
             assets are serialized into saved files, so a FreeFlightUnsteadyProblem built
             with mujoco_assets saves and loads without touching the filesystem.
+        :param step_discards: The number of initial time steps to discard for numerical
+            stability (there are inconsistent startup effects from the UVLM solver).
+            During these time steps, the solver will run but the results will not be
+            applied to the deformation of the Wings. It is passed to
+            AeroelasticUnsteadyProblem. The default is 5.
         :return: None
         """
         if not isinstance(movement, free_flight_movement.FreeFlightAeroelasticMovement):
@@ -2266,6 +2271,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             wing_density = wing_density,
             spring_constant_rad = spring_constant_rad,
             damping_constant_rad = damping_constant_rad,
+            step_discards=step_discards,
 
             #initial_airplanes=[initial_airplane],
             #initial_operating_point=initial_operating_point,

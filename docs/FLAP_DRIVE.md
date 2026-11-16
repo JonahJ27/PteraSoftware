@@ -13,25 +13,31 @@ The feature was built to modify existing classes as little as possible. Everythi
 | File | Change |
 |------|--------|
 | `pterasoftware/movements/aeroelastic_wing_movement.py` | `AeroelasticWingMovement.generate_wing_at_time_step` gained one optional keyword, `overrideAngleX_Gs_to_Wn_ixyz=None`. When given, it replaces the x component of the prescribed `angles_Gs_to_Wn_ixyz` (the flap angle, in degrees) before the rotation point offset adjustment. When `None`, behavior is unchanged. |
-| `pterasoftware/_serialization.py` | Imports and registers `FlapTransmission`, `CrankLinkage`, `FlapReference`, `FlapDrive`, `FlapDrivenAeroelasticWingMovement`, and `FlapDrivenAeroelasticUnsteadyProblem` in `_CLASS_REGISTRY` and `_PUBLIC_SAVEABLE_CLASSES`. `_FORMAT_VERSION` went from 31 to 37. |
-| `pterasoftware/__init__.py` | Eagerly imports `crank_linkage`, `flap_drive`, `motor_saturation`, and `flap_driven_aeroelastic_unsteady_problem`. |
+| `pterasoftware/_serialization.py` | Imports and registers `FlapTransmission`, `CrankLinkage`, `FlapReference`, `FlapDrive`, `FlapDrivenAeroelasticWingMovement`, `FlapDrivenAeroelasticUnsteadyProblem`, and `FreeFlightFlapDrivenAeroelasticUnsteadyProblem` in `_CLASS_REGISTRY` and `_PUBLIC_SAVEABLE_CLASSES`. `_FORMAT_VERSION` went from 31 to 38. |
+| `pterasoftware/__init__.py` | Eagerly imports `crank_linkage`, `flap_drive`, `motor_saturation`, `flap_driven_aeroelastic_unsteady_problem`, and `free_flight_flap_driven_aeroelastic_unsteady_problem`. |
 | `pterasoftware/movements/__init__.py` | Imports `flap_driven_aeroelastic_wing_movement`. |
+| `pterasoftware/problems.py` | `FreeFlightAeroelasticUnsteadyProblem.__init__` gained a `step_discards=5` keyword, which it passes to `AeroelasticUnsteadyProblem`. Before, it always used the default of 5. |
 | `docs/website/examples.md` | Adds the new example to the solvers toctree. |
 
-`problems.py`, the solvers, and every other existing class are unchanged.
+The solvers and every other existing class are unchanged.
 
 ## New Files
 
 | File | Contents |
 |------|----------|
-| `pterasoftware/flap_drive.py` | The `Transmission` interface, `FlapTransmission`, `FlapReference`, `FlapDriveInputs`, `FlapDriveAccelerations`, and `FlapDrive`. Nothing in it knows about cranks. |
+| `pterasoftware/flap_drive.py` | The `Transmission` interface, `FlapTransmission`, `FlapReference`, `AerodynamicModelInputs`, `FlapDriveInputs`, `FlapDriveAccelerations`, and `FlapDrive`. Nothing in it knows about cranks. |
 | `pterasoftware/crank_linkage.py` | `CrankLinkage`, a motor, gearbox, and crank linkage powertrain with analytical kinematics. It implements the `Transmission` interface, so it is passed to a `FlapDrive` directly. |
 | `pterasoftware/motor_saturation.py` | `MotorSaturationController` and `SaturationInfo`, a port of the BET code's `motorSaturationController` |
 | `pterasoftware/movements/flap_driven_aeroelastic_wing_movement.py` | `FlapDrivenAeroelasticWingMovement` |
-| `pterasoftware/flap_driven_aeroelastic_unsteady_problem.py` | `FlapDrivenAeroelasticUnsteadyProblem` |
-| `examples/flap_driven_aeroelastic_unsteady_crank.py` | A 5 m wing driven by motor 9, a 15:1 gearbox, and a crank linkage, at 2 Hz, 10 m/s, and 10 degrees angle of attack |
+| `pterasoftware/flap_driven_aeroelastic_unsteady_problem.py` | `FlapDrivenAeroelasticUnsteadyProblem`, and the `_FlapDriveCoupling` mixin that holds the flap drive logic it shares with the free flight problem |
+| `pterasoftware/free_flight_flap_driven_aeroelastic_unsteady_problem.py` | `FreeFlightFlapDrivenAeroelasticUnsteadyProblem` |
+| `examples/flap_driven_aeroelastic_unsteady_crank.py` | The BET code's model 5 wing (4.3 m span), each half driven by its own motor 9, 15:1 gearbox, and crank linkage, at 2 Hz, 10 m/s, and 10 degrees angle of attack |
+| `examples/flap_driven_aeroelastic_unsteady_crank_shared_motor.py` | The crank example with one motor, gearbox, and crank linkage driving both halves of the wing through one `FlapDrive` (`wing_indices=(0, 1)`, twice one wing's inertia) |
+| `examples/flap_driven_aeroelastic_unsteady.py` | The same wing driven through a scotch yoke given as user functions wrapped in a `FlapTransmission` |
+| `examples/free_flight_flap_driven_aeroelastic_unsteady_crank.py` | The same wing, motors, and crank linkages on a vehicle with a V-tail that flies freely after a prescribed start |
+| `examples/flap_drive_parameters/model_5_wing.json`, `mad_m13_kv90_powertrain.json`, and `crank_linkage.json` | The hardware parameters that the four flap examples load: the model 5 wing's outline, mass, and meshing settings, the motor, motor controller, gearbox, and feedback gains, and the crank linkage's geometry |
 | `docs/website/examples/flap_driven_aeroelastic_unsteady_crank.md` and `docs/examples_expected_output/flap_driven_aeroelastic_unsteady_crank/flap_drive.png` | The example's documentation page and its plot |
-| `tests/unit/test_flap_drive.py`, `tests/unit/test_crank_linkage.py`, `tests/unit/test_flap_trajectories.py`, `tests/unit/test_motor_saturation.py`, `tests/unit/test_flap_driven_aeroelastic_unsteady_problem.py`, `tests/unit/fixtures/flap_drive_fixtures.py` | Unit tests and fixtures |
+| `tests/unit/test_flap_drive.py`, `tests/unit/test_crank_linkage.py`, `tests/unit/test_flap_trajectories.py`, `tests/unit/test_motor_saturation.py`, `tests/unit/test_flap_driven_aeroelastic_unsteady_problem.py`, `tests/unit/test_free_flight_flap_driven_aeroelastic_unsteady_problem.py`, `tests/unit/fixtures/flap_drive_fixtures.py` | Unit tests and fixtures |
 
 Run the example from the repository root with `python -m examples.flap_driven_aeroelastic_unsteady_crank`.
 
@@ -104,7 +110,7 @@ One actuator, its transmission, and the `Wing`s it flaps. It holds:
 - `reference`, the `FlapReference` it follows, the only definition of its flap trajectory. It is a required keyword argument with no default. Whether the position lookup works with it is checked at construction.
 - Optional `initial_actuator_position` and `initial_actuator_velocity`. They default to the reference's first sample, as the BET code starts the motor on its desired trajectory.
 - Optional `passive_wing_torque_function(phi, phi_dot)` and `passive_actuator_force_function(q, q_dot)`, for springs like the BET code's `spring_params`.
-- Optional `wing_flap_inertia`, a user given (for example measured) inertia of its `Wing`s about the flap axis. Without it, the problem estimates the inertia from its `wing_density` and the `Wing`s' panel geometry, by summing the same strip flapping-axis inertias that its torsional springs use.
+- Optional `wing_flap_inertia`, a user given (for example measured) inertia of its `Wing`s about the flap axis. It is the combined inertia of all of the drive's `Wing`s: one `Wing`'s inertia for a per-wing drive, and twice one half's inertia for a drive that flaps both halves of a symmetric `Wing` (see `examples/flap_driven_aeroelastic_unsteady_crank_shared_motor.py`). A shared drive's actuator also carries the sum of its `Wing`s' fluid torques, so size it for all of them. Without it, the problem estimates the inertia from its `wing_density` and the `Wing`s' panel geometry, by summing the same strip flapping-axis inertias that its torsional springs use.
 
   **Warning:** a user given `wing_flap_inertia` is used only in the drive's equation of motion. The torsional springs that deform the `Wing`s always use the strip inertias from `wing_density`, including their inertial forcing from the flap acceleration. If the two disagree, the drive and the structure model `Wing`s of different mass. If the user given value is the true inertia, the drive moves the wing correctly, but the wing deformation is computed for the wrong mass and is likely invalid. To keep them consistent, leave `wing_flap_inertia` unset and choose `wing_density` so that the estimate is the true inertia. The estimate scales linearly with `wing_density`, and it carries the triple counted mass described under Known Limitations.
 
@@ -157,7 +163,24 @@ Each term of the feedforward can be switched on or off on the `FlapDrive`, and `
 | `feedforward_passive` (`True`) | `-F_p - J T_p`, at the actual position and the desired velocity | `feedforward_passive_force` | `motor_spring_torque`, `tau_spring_wing_motor` |
 | `feedforward_aerodynamic` (`True`) | `-J T_aero` | `feedforward_aerodynamic_force` | `tau_aero_motor` |
 
-`feedforward_aerodynamic` also chooses the aerodynamic model. `True` uses the lagged UVLM torque, `False` leaves the term out, and a callable `model(flap_angle_rad, desired_flap_rate_rad)` that returns the torque on the wing (N*m, positive toward increasing flap angle) is your own model, evaluated at the actual flap angle and the desired flap rate `J * q'_des`, like `singleWingInverseDynamicsController`. The switches only change the feedforward. The equation of motion that is integrated always has every term.
+`feedforward_aerodynamic` also chooses the aerodynamic model. `True` uses the lagged UVLM torque, `False` leaves the term out, and a callable `model(aerodynamic_inputs)` that returns the torque on the wing (N*m, positive toward increasing flap angle) is your own model, such as a BET model. The switches only change the feedforward. The equation of motion that is integrated always has every term.
+
+#### `AerodynamicModelInputs`: what an aerodynamic model receives
+
+A model passed as `feedforward_aerodynamic` receives one `AerodynamicModelInputs` record, so fields can be added later without breaking it:
+
+| Field | Meaning |
+|---|---|
+| `time` | The simulation time (s) |
+| `wing_indices` | The drive's `Wing`s, so one model can serve several drives |
+| `angleXRad_Gs_to_Wn_ixyz`, `angleDerivativeXRad_Gs_to_Wn_ixyz` | The actual flap angle (rad) and rate (rad/s) |
+| `desiredAngleDerivativeXRad_Gs_to_Wn_ixyz` | The desired flap rate `J * q'_des` at the actual position, which the BET's `singleWingInverseDynamicsController` evaluates its model at (`wing_velo_des`) |
+| `desiredAngleSecondDerivativeXRad_Gs_to_Wn_ixyz` | The desired flap acceleration `H * q'_des^2 + J * q''_des` |
+| `actuator_position`, `actuator_velocity`, `desired_actuator_velocity`, `desired_actuator_acceleration`, `jacobian`, `hessian` | The actuator's actual and desired state, and the transmission's derivatives |
+| `measured_fluid_torque` | The previous step's UVLM torque, which a model can use as a correction or ignore |
+| `operating_point` | The `OperatingPoint` of the time step the measured torque comes from: freestream speed, angles of attack and sideslip, density, and body rates. In free flight it is the vehicle's actual state from the rigid body dynamics, so a model sees the airspeed change as the vehicle flies. It is `None` when `inverse_dynamics_controller` is called outside a simulation. |
+
+Like the measured torque, the `OperatingPoint` is held constant over each time step.
 
 A controller like the BET one is then just:
 
@@ -229,6 +252,41 @@ A subclass of `AeroelasticUnsteadyProblem` that takes `flap_drives`. It is solve
 - `_generate_inertial_moment_function`, so the torsional spring model's inertial forcing uses the wing's actual flap acceleration.
 
 The results are stored per drive and per time step in `flap_actuator_positions`, `flap_actuator_velocities`, `flap_actuator_forces`, `flap_fluid_torques`, `flap_transmission_torques`, `flap_angles_rad`, and `flap_angle_derivatives_rad`. All are saved and loaded with the problem. The actuator callable comes back from a saved file as an inert placeholder, so a loaded problem can be inspected but not rerun unless you pass the function to `load`.
+
+#### The `_FlapDriveCoupling` mixin
+
+The flap drive logic lives in a mixin, `_FlapDriveCoupling`, that both this problem and `FreeFlightFlapDrivenAeroelasticUnsteadyProblem` inherit, so it is written once. Both parent problems declare `__slots__`, and Python won't let a class have two parents that do, so the mixin has no slots and no `__init__`. Each problem declares the flap drive slots (`_FLAP_DRIVE_SLOTS`) itself, and its `__init__` calls the mixin's `_prepare_flap_drives` before its parent's `__init__` and `_initialize_flap_drives` after it. The mixin's `initialize_next_problem` advances the drives and then calls the next class's, which is `AeroelasticUnsteadyProblem`'s here and `FreeFlightAeroelasticUnsteadyProblem`'s in free flight.
+
+### `FreeFlightFlapDrivenAeroelasticUnsteadyProblem`
+
+A subclass of `FreeFlightAeroelasticUnsteadyProblem` that takes `flap_drives`, through the same mixin. It takes the free flight parameters (`mass`, `I_BP1_CgP1`, `external_loads_fn`, `k_max`, `integrator`, `extra_xml`, `mujoco_assets`) plus `flap_drives` and `step_discards`, and it has the same flap histories. It is solved by the unchanged `FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver`, and its movement is a `FreeFlightAeroelasticMovement` whose driven `Wing`s are moved by `FlapDrivenAeroelasticWingMovement`s.
+
+Each time step has three stages, all inside `initialize_next_problem(solver, s)`:
+
+```
+solver solves step s (body state x_s, flap angle phi_s)
+  -> FreeFlightFlapDrivenAeroelasticUnsteadyProblem.initialize_next_problem(step = s)
+       1. _advance_flap_drives: fluid torque and OperatingPoint from step s, integrate each drive to t_(s+1), record phi_(s+1)
+       2. FreeFlightAeroelasticUnsteadyProblem.initialize_next_problem (unchanged):
+            a. torsional spring ODEs over [t_s, t_(s+1)], forced by the drives' actual phi''(t)
+            b. generate_airplane_at_time_step(s + 1) at phi_(s+1) and the new deformation
+            c. prescribed phase: the body coasts at its initial state
+               free flight phase: the strongly coupled sub-iteration drives the loads on that Airplane
+               and the rigid body state to agreement, with the geometry held fixed
+solver sheds the wake and solves step s + 1
+```
+
+The flap drives and the torsional springs run once per time step, before the sub-iteration. So the rigid body is coupled strongly, the flap and the deformation loosely (one step late, as in the non free flight problem), and no flap state, including a `MotorSaturationController`'s buckets, has to be saved and restored inside the sub-iteration. The `OperatingPoint` an aerodynamic model receives is the accepted body state at step `s`, never a trial state from the sub-iteration.
+
+#### What the rigid body dynamics don't include
+
+MuJoCo models the vehicle as one rigid body with the constant `mass` and `I_BP1_CgP1` given to the problem. The flap drives' dynamics don't reach it. The body feels the aerodynamic loads on the flapping wings, gravity, and `external_loads_fn`, but not:
+
+- The actuators' reaction torques on the airframe. Each motor's stator pushes back on the airframe with the motor's torque, and a spinning rotor adds a gyroscopic torque when the body rotates. For a left and right pair of drives the reactions largely cancel, but not when one saturates or the two differ.
+- The flapping wings' inertial loads on the airframe. Swinging the wings' mass back and forth shakes a real vehicle at the flap frequency.
+- The changing mass distribution. The CG and inertia stay fixed while the wings flap. Give `mass` and `I_BP1_CgP1` that include the wings and the motors, for example at the mean flap angle.
+
+"Planned: Actuator and Wing Inertia in Free Flight" below describes how these could be added.
 
 ## How It Plugs Into the Solver
 
@@ -328,12 +386,35 @@ Each iteration costs one extra UVLM solve. With Aitken relaxation, expect 2 to 5
 - **Extrapolate the torque.** Use `T(t) = T_s + (T_s - T_(s-1)) * (t - t_s) / delta_time` over the interval instead of a constant. This needs no extra solves and cuts most of the phase error for a smooth periodic load, but it doesn't fix the added mass instability, and it amplifies the UVLM's step to step noise.
 - **Treat added mass implicitly.** Give `FlapDrive` an added flap inertia `I_added`, use `I_w + I_added` in the effective inertia, and pass `T_s + I_added * phi''_s` as the fluid torque. This is the standard fix for the added mass instability in loosely coupled fluid structure solvers, and it needs no extra solves. `I_added` can come from thin plate theory (`(pi / 8) * rho * c^2 * r^2` per strip, summed along the span) or from two UVLM solves at different flap accelerations at the start of a run. The circulatory part of the torque is still one step late.
 
+## Planned: Actuator and Wing Inertia in Free Flight
+
+This is not implemented. It records two ways to make the free flight rigid body feel the flap drives' dynamics, so they can be built later.
+
+### Apply the reaction loads to the body
+
+Keep the drives integrated by `solve_ivp` and the body as one MuJoCo body. Each step, turn the drives' results into the loads the moving parts put on the airframe, and add them to the interval loads in `_assemble_interval_loads`, next to the aerodynamic loads and `external_loads_fn`:
+
+- For each wing, with mass `m_w`, center of mass `r_w`, and inertia `I_w` relative to the airframe: the force `-m_w * a_w`, where `a_w` is the wing's center of mass acceleration from `phi''` and `phi'^2` about the shoulder, and the moment `-(r_w x m_w * a_w) - I_w * phi'' * e_flap` plus the gyroscopic terms from the body's rotation.
+- For each motor: the stator's reaction `-F_a` about the motor's shaft, plus the rotor's gyroscopic torque `I_a * q' * (e_shaft x omega_body)`. The linkage's pin loads balance the wing's inertia, which the wing's reaction already counts.
+
+Every input already comes out of the drives (`phi`, `phi'`, `phi''`, `q'`, `q''`, `F_a`). The new inputs are each wing's mass and center of mass offset, and each motor's shaft axis. This captures the airframe shaking at the flap frequency and an unbalanced motor reaction. It doesn't capture the moving CG or the changing inertia, which is a small error when the wings are light relative to the body, and the loads are one step late, like the fluid torque.
+
+### Model the wings and rotors as MuJoCo bodies
+
+Change the generated MuJoCo model from one body to a tree: the airframe with a free joint, each rotor on a hinge about its shaft, and each wing on a hinge about its flap axis at the shoulder. The motor torque acts on the rotor joint and the UVLM flap torque on the wing joint, and MuJoCo then handles the reaction torques, the inertial loads, the moving CG, and the gyroscopic effects. MuJoCo would replace `solve_ivp` as the drive integrator, so this is where a controller that varies the flap to reach body states would live.
+
+The crank linkage is the hard part. MuJoCo's polynomial joint coupling only goes to fourth order and can't wrap a continuously turning crank. Either model the linkage's bars as bodies with a closed loop `connect` constraint, or keep `CrankLinkage` and apply the transmission through a MuJoCo control callback at every MuJoCo substep: wing joint torque `T_transmission`, rotor joint torque `F_a - J * T_transmission`.
+
+Because the free flight sub-iteration already saves and restores the MuJoCo state for every trial, the wing and rotor joints would be sub-iterated with the body automatically, which also gives the flap strong coupling (see "Planned: Strongly Coupling the Flap" above). Only the `MotorSaturationController`'s buckets would need their own save and restore. This changes `_mujoco_model.py`, the state vector and weights of the sub-iteration, how the geometry gets its flap angle, serialization, and rendering.
+
 ## Known Limitations
+
+[Flap Drive TODO](FLAP_DRIVE_TODO.md) lists every known issue and planned rework, with priorities and fixes. The main ones are:
 
 - `AeroelasticUnsteadyProblem._calculate_mass_matrix` copies each panel's mass into three components, and `_calculate_strip_inertias` sums all three, so strip masses and inertias are three times too large. The flap drive uses that estimate only when `wing_flap_inertia` isn't given. This bug is in existing code and is not fixed.
 - The flap is coupled to the fluid loosely, so the fluid torque acts one step late, which causes a phase error and can make a light wing's flap unstable. See "Planned: Strongly Coupling the Flap" above.
 - The feedforward's aerodynamic torque is the previous step's UVLM torque at the actual motion, not a prediction at the desired motion as in the BET code's `singleWingInverseDynamicsController`. See `FlapDriveInputs` above.
 - The example's torsional spring model is Ptera Software's strip model, not the BET code's torsional deformation, so deformation results won't match.
 - A `FlapReference` whose trajectory doesn't repeat with a fixed period (`period=None`) gives inaccurate cycle averaged results, and if nothing else moves, the simulation is treated as static. The problem warns about it. See "The period and cycle averaged results" above.
-- `FreeFlightAeroelasticUnsteadyProblem` doesn't support flap drives yet. It overrides `initialize_next_problem` itself, and a drive there must advance once per accepted step, not once per strong-coupling sub-iteration.
+- In `FreeFlightFlapDrivenAeroelasticUnsteadyProblem`, the rigid body doesn't feel the motors' reaction torques, the wings' inertial loads, or the moving CG, and its mass and inertia are constant. See "What the rigid body dynamics don't include" above.
 - `CLASSES_AND_IMMUTABILITY.md` doesn't describe the new classes yet, and the slot tests in `test_slots.py` don't cover them.

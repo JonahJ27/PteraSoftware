@@ -1,7 +1,7 @@
 """Demonstrates running Ptera Software's
-AeroelasticUnsteadyRingVortexLatticeMethodSolver with a 5 meter span flapping wing that
-is driven by motors through a transmission that you define yourself, with a few
-functions, instead of by a prescribed flap angle.
+AeroelasticUnsteadyRingVortexLatticeMethodSolver with the blade element theory code's
+model 5 (4.3 meter span) flapping wing that is driven by motors through a transmission
+that you define yourself, with a few functions, instead of by a prescribed flap angle.
 
 It is the companion of the flap_driven_aeroelastic_unsteady_crank example. That example
 passes a crank_linkage.CrankLinkage, a powertrain with its own class, to each FlapDrive.
@@ -17,7 +17,10 @@ gearbox all limit the torque that it can apply, so the wing can fall behind its 
 flap trajectory.
 """
 
+import json
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +29,27 @@ import numpy as np
 # software into another package, you would first install it by running "pip install
 # pterasoftware" in your terminal.
 import pterasoftware as ps
+
+# Load the hardware's parameters from the JSON files in the flap_drive_parameters
+# directory next to this script, which the flap driven examples share: the model 5
+# wing's outline and mass (model_5_wing.json), the powertrain's motor, motor controller,
+# gearbox, and feedback gains (mad_m13_kv90_powertrain.json). Edit those files to change
+# the hardware. The flight condition and the simulation's settings are defined in this
+# script, below.
+PARAMETERS_DIRECTORY = Path(__file__).resolve().parent / "flap_drive_parameters"
+
+
+def load_parameters(file_name: str) -> dict[str, Any]:
+    """Loads one of the JSON files of parameters in PARAMETERS_DIRECTORY."""
+    with open(PARAMETERS_DIRECTORY / file_name, encoding="utf-8") as file:
+        parameters: dict[str, Any] = json.load(file)
+    return parameters
+
+
+wing_parameters = load_parameters("model_5_wing.json")
+powertrain_parameters = load_parameters("mad_m13_kv90_powertrain.json")
+motor_parameters = powertrain_parameters["motor"]
+motor_controller_parameters = powertrain_parameters["motor_controller"]
 
 # Define the flight condition, the flap frequency, and the simulation's time steps.
 FLAP_FREQUENCY = 2.0
@@ -46,7 +70,7 @@ DURATION = NUM_STEPS * DELTA_TIME
 # Its first and second derivatives with respect to the motor angle are the
 # transmission's Jacobian and Hessian, which a FlapDrive's equation of motion uses at
 # every evaluation.
-GEAR_RATIO = 15.0
+GEAR_RATIO = powertrain_parameters["gearbox"]["gear_ratio"]
 WING_BEAT_AMPLITUDE_RAD = 1.0
 DIHEDRAL_RAD = 0.0
 HALF_AMPLITUDE_RAD = WING_BEAT_AMPLITUDE_RAD / 2.0
@@ -215,41 +239,63 @@ else:
         period=FLAP_PERIOD,
     )
 
-# Define the wing's planform from its leading and trailing edge points (in millimeters,
-# for a wingspan of 1.2 meters). The x axis points aft and the y axis points out along
-# the span. The points are scaled to the desired wingspan below. Each WingCrossSection
-# sits at a station where a trailing edge point is defined, and its leading edge is
-# interpolated from the leading edge points.
-WINGSPAN = 5.0
-SCALE_M_PER_MM = WINGSPAN / 5.0 * 5.0 / 1.2 / 1000.0
-leading_edge_y_mm = [0, 22, 71, 120, 170, 245, 318, 366, 415, 464, 512, 563, 611]
-leading_edge_x_mm = [
-    0,
-    -20,
-    -25.6,
-    -29,
-    -32,
-    -34,
-    -35,
-    -34.5,
-    -33.4,
-    -31.7,
-    -29.7,
-    -27.5,
-    -25,
-]
-station_y_mm = [52, 148, 255, 367, 494, 611]
-station_trailing_edge_x_mm = [208, 175, 123, 73, 23, -16]
+# Define the main Wing as the blade element theory code's model 5 wing (calcWingGeom
+# with model_type = 5), whose outline and mass are in model_5_wing.json. calcWingGeom
+# gives the wing's leading and trailing edge points in millimeters, for a wing of the
+# outline reference length (1.2 meters), with the shoulder at the origin, the x axis
+# pointing aft, and the y axis pointing out along the span. That code scales them to its
+# wingspan of 2 * (spar length + shoulder offset) meters (the 2.09 meter spar plus its
+# 7.5 centimeter offset from the shoulder, per side), so SCALE_M_PER_MM converts them to
+# meters at that wingspan. The trailing edge runs from the shoulder to the wing's
+# connection point and then out to the tip, and the tip is closed by a chordwise edge
+# from the last trailing edge point to the last leading edge point.
+MODEL_5_WINGSPAN = 2.0 * (
+    wing_parameters["spar_length_m"] + wing_parameters["shoulder_offset_m"]
+)
+SCALE_M_PER_MM = (
+    MODEL_5_WINGSPAN / wing_parameters["outline_reference_length_m"] / 1000.0
+)
+leading_edge_x_mm = wing_parameters["leading_edge_x_mm"]
+leading_edge_y_mm = wing_parameters["leading_edge_y_mm"]
+trailing_edge_x_mm = wing_parameters["trailing_edge_x_mm"]
+trailing_edge_y_mm = wing_parameters["trailing_edge_y_mm"]
+
+# Put a WingCrossSection at every spanwise station where the leading or the trailing
+# edge has a point, so that the Wing's straight edges between WingCrossSections trace
+# the model 5 outline exactly. The leading edge points at 71 and 366 millimeters are 1
+# millimeter from the trailing edge points at 70 and 367 millimeters, so they are merged
+# into those stations instead of making WingCrossSections a few millimeters wide. That
+# moves the leading edge by at most 0.1 millimeters (0.4 millimeters at full scale)
+# there.
+MERGE_TOLERANCE_MM = wing_parameters["meshing"]["merge_tolerance_mm"]
+station_y_mm = sorted(
+    set(trailing_edge_y_mm)
+    | {
+        y
+        for y in leading_edge_y_mm
+        if min(abs(y - other) for other in trailing_edge_y_mm) > MERGE_TOLERANCE_MM
+    }
+)
 station_leading_edge_x_mm = np.interp(
     station_y_mm, leading_edge_y_mm, leading_edge_x_mm
 )
+station_trailing_edge_x_mm = np.interp(
+    station_y_mm, trailing_edge_y_mm, trailing_edge_x_mm
+)
 
-NUM_SPANWISE_PANELS = 2
+# The model 5 wing's chord is zero at the shoulder, where its leading and trailing edges
+# meet, but a WingCrossSection's chord must be positive, so the root WingCrossSection
+# gets a small chord instead. Each section between WingCrossSections gets spanwise
+# panels about SPANWISE_PANEL_WIDTH wide.
+ROOT_CHORD = wing_parameters["meshing"]["root_chord_m"]
+SPANWISE_PANEL_WIDTH = wing_parameters["meshing"]["spanwise_panel_width_m"]
 wing_cross_sections = []
 for i, y_mm in enumerate(station_y_mm):
-    chord = (station_trailing_edge_x_mm[i] - station_leading_edge_x_mm[i]) * (
-        SCALE_M_PER_MM
+    chord = max(
+        (station_trailing_edge_x_mm[i] - station_leading_edge_x_mm[i]) * SCALE_M_PER_MM,
+        ROOT_CHORD,
     )
+    last = i == len(station_y_mm) - 1
     if i == 0:
         Lp_Wcsp_Lpp = (0.0, 0.0, 0.0)
     else:
@@ -259,10 +305,13 @@ for i, y_mm in enumerate(station_y_mm):
             (y_mm - station_y_mm[i - 1]) * SCALE_M_PER_MM,
             0.0,
         )
-    last = i == len(station_y_mm) - 1
+    num_spanwise_panels = None
+    if not last:
+        section_width = (station_y_mm[i + 1] - y_mm) * SCALE_M_PER_MM
+        num_spanwise_panels = max(1, round(section_width / SPANWISE_PANEL_WIDTH))
     wing_cross_sections.append(
         ps.geometry.wing_cross_section.WingCrossSection(
-            num_spanwise_panels=None if last else NUM_SPANWISE_PANELS,
+            num_spanwise_panels=num_spanwise_panels,
             chord=chord,
             Lp_Wcsp_Lpp=Lp_Wcsp_Lpp,
             angles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
@@ -270,16 +319,42 @@ for i, y_mm in enumerate(station_y_mm):
             control_surface_hinge_point=0.75,
             control_surface_deflection=0.0,
             spanwise_spacing=None if last else "uniform",
-            airfoil=ps.geometry.airfoil.Airfoil(name="naca0004"),
+            airfoil=ps.geometry.airfoil.Airfoil(name=wing_parameters["airfoil"]),
         )
     )
 
-# The wing's root starts 52 mm (scaled) out from the shoulder. The Wing flaps about the
-# shoulder, so the rotation point offset below moves the flap axis back to the
-# airplane's plane of symmetry. The Wing's base flap angle is the stroke's middle. The
-# first time step's Wings start at the flap angle of the drives' starting motor
-# positions instead.
-root_offset_y = station_y_mm[0] * SCALE_M_PER_MM
+# Define the model 5 wing's mass properties, from the blade element theory code's
+# precomputeWingGeometry with runSim's settings: a carbon fiber leading edge tube
+# (leading_edge_shape = 6, a 2.5 millimeter wall, with a 36 millimeter outer diameter
+# and a density of 1500.0 kg/m^3) along the leading edge points, and no membrane mass
+# (include_membrane_mass = false). WING_FLAP_INERTIA is the tube's inertia about the
+# flap axis at the shoulder (its Ixx), which is what that code's
+# inertialBladeElementTheoryCalc uses. The torsional spring model spreads a Wing's mass
+# over its panels by area instead, so its wing_density is the tube's mass divided by one
+# Wing's planform area. See docs/FLAP_DRIVE_TODO.md about the two inertias.
+WING_FLAP_INERTIA = wing_parameters["flap_inertia_kg_m2"]
+WING_MASS = wing_parameters["mass_kg"]
+station_chords = (
+    station_trailing_edge_x_mm - station_leading_edge_x_mm
+) * SCALE_M_PER_MM
+station_widths = np.diff(station_y_mm) * SCALE_M_PER_MM
+wing_planform_area = float(
+    np.sum(0.5 * (station_chords[:-1] + station_chords[1:]) * station_widths)
+)
+WING_DENSITY = WING_MASS / wing_planform_area
+
+# The model 5 wing flaps about an axis through its shoulder, the origin of its points,
+# parallel to the x axis. Both Wings' shoulders are on the airplane's plane of symmetry,
+# as in the blade element theory code, whose wingspan is twice the shoulder to tip
+# length. Each Wing's root starts ROOT_GAP out from the plane of symmetry, so that the
+# Airplane splits the symmetric Wing into two Wings that can flap separately (with the
+# root on the plane, it would stay one Wing, mirrored about it). The rotation point
+# offset below moves each Wing's flap axis back to the shoulder, on the plane of
+# symmetry.
+ROOT_GAP = wing_parameters["meshing"]["root_gap_m"]
+
+# The Wing's base flap angle is the stroke's middle. The first time step's Wings start
+# at the flap angle of the drives' starting motor positions instead.
 example_airplane = ps.geometry.airplane.Airplane(
     wings=[
         ps.geometry.wing.Wing(
@@ -287,7 +362,7 @@ example_airplane = ps.geometry.airplane.Airplane(
             name="Main Wing",
             Ler_Gs_Cgs=(
                 station_leading_edge_x_mm[0] * SCALE_M_PER_MM,
-                root_offset_y,
+                ROOT_GAP,
                 0.0,
             ),
             angles_Gs_to_Wn_ixyz=(np.rad2deg(DIHEDRAL_RAD), 0.0, 0.0),
@@ -328,7 +403,7 @@ for wing in example_airplane.wings:
         ps.movements.flap_driven_aeroelastic_wing_movement.FlapDrivenAeroelasticWingMovement(
             base_wing=wing,
             wing_cross_section_movements=wing_cross_section_movements,
-            rotationPointOffset_Gs_Ler=(0.0, -root_offset_y, 0.0),
+            rotationPointOffset_Gs_Ler=(0.0, -ROOT_GAP, 0.0),
         )
     )
 
@@ -364,32 +439,41 @@ example_movement = ps.movements.aeroelastic_movement.AeroelasticMovement(
 # line and its torque-current line are fit to the same two measured points as in the
 # blade element theory motor limit simulation, with each value divided by the test
 # voltage before fitting, and the torque-speed line's intercept is then scaled back up
-# to the supply voltage.
-TEST_VOLTAGE = 48.0
-SUPPLY_VOLTAGE = 48.0
-measured_speeds = np.array([4300.0, 3424.0]) / TEST_VOLTAGE / 60.0 * 2.0 * np.pi
-measured_torques = np.array([0.0, 8.85]) / TEST_VOLTAGE
-measured_currents = np.array([2.0 * 48.0 / 20.0, 88.0]) / TEST_VOLTAGE
+# to the supply voltage. The motor's, motor controller's, and gearbox's values are in
+# mad_m13_kv90_powertrain.json.
+TEST_VOLTAGE = motor_parameters["test_voltage_V"]
+SUPPLY_VOLTAGE = motor_parameters["supply_voltage_V"]
+measured_speeds = (
+    np.array(motor_parameters["measured_speeds_rpm"])
+    / TEST_VOLTAGE
+    / 60.0
+    * 2.0
+    * np.pi
+)
+measured_torques = np.array(motor_parameters["measured_torques_N_m"]) / TEST_VOLTAGE
+measured_currents = np.array(motor_parameters["measured_currents_A"]) / TEST_VOLTAGE
 speed_torque_coefficients = np.polyfit(measured_speeds, measured_torques, 1)
 speed_torque_coefficients[1] *= SUPPLY_VOLTAGE
 torque_current_coefficients = np.polyfit(measured_currents, measured_torques, 1)
-ROTOR_INERTIA = 0.0004158
-MOTOR_CONTINUOUS_TORQUE = 8.8
-MOTOR_PEAK_DURATION = 0.5
+ROTOR_INERTIA = motor_parameters["rotor_inertia_kg_m2"]
+MOTOR_CONTINUOUS_TORQUE = motor_parameters["continuous_torque_N_m"]
+MOTOR_PEAK_DURATION = motor_parameters["peak_duration_s"]
+ESC_PEAK_CURRENT = motor_controller_parameters["peak_current_A"]
+ESC_CONTINUOUS_CURRENT = motor_controller_parameters["continuous_current_A"]
+ESC_PEAK_DURATION = motor_controller_parameters["peak_duration_s"]
+ESC_MAX_BRAKE_CURRENT = motor_controller_parameters["max_brake_current_A"]
+GEARBOX_MAX_TORQUE = powertrain_parameters["gearbox"]["max_torque_N_m"]
 
-# Define the motor controller (an ODrive Pro) and the gearbox.
-ESC_PEAK_CURRENT = 150.0
-ESC_CONTINUOUS_CURRENT = 100.0
-ESC_PEAK_DURATION = 0.1
-ESC_MAX_BRAKE_CURRENT = 1000.0
-GEARBOX_MAX_TORQUE = 225.0
-
-# Define the controller's gains, the motor's damping, and each wing's measured inertia
-# about the flap axis.
-PROPORTIONAL_GAIN = 5.0
-DERIVATIVE_GAIN = 0.5
-MOTOR_DAMPING = 1e-3
-WING_FLAP_INERTIA = 1.461
+# Define the controller's gains and the motor's damping. Each wing's inertia about the
+# flap axis, WING_FLAP_INERTIA, is the model 5 wing's, defined with the wing above. It
+# is one Wing's inertia because each FlapDrive below flaps one Wing. A FlapDrive's
+# wing_flap_inertia is the combined inertia of all of its Wings, so a single motor that
+# flaps both Wings would get 2 * WING_FLAP_INERTIA, and that motor would also carry both
+# Wings' fluid torques, so size it for both. See the
+# flap_driven_aeroelastic_unsteady_crank_shared_motor example.
+PROPORTIONAL_GAIN = powertrain_parameters["feedback_gains"]["proportional"]
+DERIVATIVE_GAIN = powertrain_parameters["feedback_gains"]["derivative"]
+MOTOR_DAMPING = motor_parameters["damping_N_m_s_per_rad"]
 
 
 def make_motor() -> tuple[
@@ -479,7 +563,7 @@ for wing_index in range(2):
 example_problem = (
     ps.flap_driven_aeroelastic_unsteady_problem.FlapDrivenAeroelasticUnsteadyProblem(
         movement=example_movement,
-        wing_density=0.055,
+        wing_density=WING_DENSITY,
         spring_constant_rad=1000.0,
         damping_constant_rad=1000.0,
         flap_drives=example_flap_drives,

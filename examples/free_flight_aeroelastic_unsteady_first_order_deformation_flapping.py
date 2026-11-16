@@ -37,16 +37,16 @@ wing_cross_sections = []
 ROBOT_WEIGHT = 420 #in newtons
 
 #DEFINE FLAP PARAMS
-FLAP_PERIOD = 1.0
-FLAP_AMPLITUDE = 30
-FLAP_CYCLES = 6
+FLAP_PERIOD = 1/2
+FLAP_AMPLITUDE = 15
+FLAP_CYCLES = 6*1/FLAP_PERIOD
 dt_des = .03
 PRESCRIBED_RIGID_STEPS = 10
 
 #WING PARAMS
 WING_DENSITY = 6
-SPRING_CONSTANT_RAD = 1000.0
-DAMPING_CONSTANT_RAD =  1000.0
+SPRING_CONSTANT_RAD = 10000.0
+DAMPING_CONSTANT_RAD =  10000.0
 
 # Define WingCrossSections with a variable set of chords. All WingCrossSections for the
 # deformation simulation have num_spanwise_panels = 2 (except the wing tip, which is

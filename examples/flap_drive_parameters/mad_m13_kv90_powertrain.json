@@ -1,0 +1,31 @@
+{
+  "description": "One flap drive's powertrain: the MAD M13 EEE KV90 motor (motor 9 in the blade element theory code), an ODrive Pro motor controller, a gearbox, and the controller's feedback gains. The measured points are the ones the blade element theory motor limit simulation fits its torque-speed and torque-current lines to. The first measured current is the no-load current, 2 * 48 / 20 A.",
+  "motor": {
+    "name": "MAD M13 EEE KV90",
+    "test_voltage_V": 48.0,
+    "supply_voltage_V": 48.0,
+    "measured_speeds_rpm": [4300.0, 3424.0],
+    "measured_torques_N_m": [0.0, 8.85],
+    "measured_currents_A": [4.8, 88.0],
+    "rotor_inertia_kg_m2": 0.0004158,
+    "continuous_torque_N_m": 8.8,
+    "peak_duration_s": 0.5,
+    "damping_N_m_s_per_rad": 0.001
+  },
+  "motor_controller": {
+    "name": "ODrive Pro",
+    "peak_current_A": 150.0,
+    "continuous_current_A": 100.0,
+    "peak_duration_s": 0.1,
+    "max_brake_current_A": 1000.0
+  },
+  "gearbox": {
+    "gear_ratio": 15.0,
+    "max_torque_N_m": 225.0
+  },
+  "feedback_gains": {
+    "description": "Gains on the motor's position error (N*m/rad) and velocity error (N*m*s/rad), added to the feedforward torque.",
+    "proportional": 5.0,
+    "derivative": 0.5
+  }
+}

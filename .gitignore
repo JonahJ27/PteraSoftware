@@ -188,5 +188,10 @@ draw.webp
 # parameters, so re-include it past the *.json rule above.
 !/validation/validation_convergence_cache.json
 
+# The flap driven examples load their hardware parameters (the wing, the powertrain,
+# and the crank linkage) from these files, so re-include them past the *.json rule
+# above.
+!/examples/flap_drive_parameters/*.json
+
 # These are the Claude's documentation files to ignore.
 /docs/CLAUDE_*.md

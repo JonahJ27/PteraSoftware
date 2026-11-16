@@ -1,0 +1,20 @@
+{
+  "description": "The blade element theory code's model 5 wing (calcWingGeom with model_type = 5), the first wing Enrico built. The outline points are calcWingGeom's, in millimeters, for a wing of outline_reference_length_m, with the shoulder at the origin, the x axis pointing aft, and the y axis pointing out along the span. They are scaled to a wingspan of 2 * (spar_length_m + shoulder_offset_m). The mass properties are from precomputeWingGeometry with runSim's settings: a carbon fiber leading edge tube (leading_edge_shape = 6, 36 mm outer diameter, 2.5 mm wall, 1500 kg/m^3) and no membrane mass. flap_inertia_kg_m2 is the tube's inertia about the flap axis at the shoulder (its Ixx), for one wing.",
+  "spar_length_m": 2.09,
+  "shoulder_offset_m": 0.075,
+  "outline_reference_length_m": 1.2,
+  "leading_edge_x_mm": [0.0, -20.0, -25.6, -29.0, -32.0, -34.0, -35.0, -34.5, -33.4, -31.7, -29.7, -27.5, -25.0],
+  "leading_edge_y_mm": [0.0, 22.0, 71.0, 120.0, 170.0, 245.0, 318.0, 366.0, 415.0, 464.0, 512.0, 563.0, 611.0],
+  "trailing_edge_x_mm": [0.0, 208.0, 217.0, 175.0, 123.0, 73.0, 23.0, -16.0],
+  "trailing_edge_y_mm": [0.0, 52.0, 70.0, 148.0, 255.0, 367.0, 494.0, 611.0],
+  "airfoil": "naca0004",
+  "flap_inertia_kg_m2": 1.411,
+  "mass_kg": 0.882,
+  "meshing": {
+    "description": "How the outline becomes Ptera Software WingCrossSections. Leading edge points within merge_tolerance_mm of a trailing edge point share its station. The root chord replaces the outline's zero chord at the shoulder. root_gap_m is how far each half's root sits from the plane of symmetry, so the halves can flap separately.",
+    "merge_tolerance_mm": 1.5,
+    "root_chord_m": 0.005,
+    "spanwise_panel_width_m": 0.1,
+    "root_gap_m": 0.001
+  }
+}
