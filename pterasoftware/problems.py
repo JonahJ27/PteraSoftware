@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.linalg import expm
 
 from . import (
     _core,
@@ -34,11 +35,11 @@ if TYPE_CHECKING:
     from .aeroelastic_unsteady_ring_vortex_lattice_method import (
         AeroelasticUnsteadyRingVortexLatticeMethodSolver,
     )
+    from .free_flight_aeroelastic_unsteady_ring_vortex_lattice_method import (
+        FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
+    )
     from .free_flight_unsteady_ring_vortex_lattice_method import (
         FreeFlightUnsteadyRingVortexLatticeMethodSolver,
-    )
-    from .free_flight_aeroelastic_unsteady_ring_vortex_lattice_method import (
-            FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
     )
 
 _logger = _logging.get_logger("problems")
@@ -75,6 +76,67 @@ _SUBITERATION_INITIAL_RELAXATION_FACTOR = 0.5
 # makes the ODE stiff and the strict tolerances expensive).
 _SPRING_ODE_RELATIVE_TOLERANCE = 1e-6
 _SPRING_ODE_ABSOLUTE_TOLERANCE_RAD = 1e-9
+
+# This is the number of evenly spaced samples of the forcing that _spring_analytical_ode
+# takes within a time step. It treats the forcing as linear between them, so its error
+# on a smooth forcing shrinks with the square of this count. A FlapDrive's flap angular
+# acceleration is sampled at the same points and is linear between them, so the
+# analytical solve is exact for it. flap_driven_aeroelastic_unsteady_problem.py defines
+# its _FLAP_ACCELERATION_SAMPLES as this constant, so changing this one changes both.
+_SPRING_FORCING_SAMPLES = 100
+
+
+def _spring_piece_map(
+    spring_constant_rad: float,
+    damping_constant_rad: float,
+    torsional_inertia: float,
+    piece_duration: float,
+) -> np.ndarray:
+    """Returns the exact map of the torsional spring-damper ODE across one piece of
+    time over which the forcing changes linearly.
+
+    Within the piece, the forcing is M(s) = M_start + dM * s / h, where s is the time
+    since the piece started, h is the piece's duration, and dM = M_end - M_start is the
+    piece's change in forcing. Augmenting the state (theta, d(theta)/dt) with two
+    states that carry the forcing, M(s) and dM, gives z = (theta, d(theta)/dt, M, dM),
+    which obeys z' = A @ z with
+
+        [   0       1      0     0   ]   d(theta)/dt = d(theta)/dt
+        [ -k / I  -c / I  1 / I  0   ]   d^2(theta)/dt^2 = (M - k * theta - c *
+        [   0       0      0   1 / h ]                      d(theta)/dt) / I
+        [   0       0      0     0   ]   dM/dt = dM / h, so M ramps by dM over h
+                                          d(dM)/dt = 0, so dM stays constant
+
+    where k, c, and I are the spring constant, the damping constant, and the torsional
+    inertia. The system is linear with constant coefficients, so the exponential of A *
+    h maps z at the start of the piece to z at its end exactly. Only its top two rows
+    are returned, because the bottom two only carry the forcing along.
+
+    The matrix exponential's rounding error grows with the size of A * h's entries, so
+    it grows roughly in proportion to c / I for a light, strongly overdamped strip.
+    Across a time step of 99 pieces, the relative error in theta is about 1e-14 for I
+    = 1e-3 kg*m^2, 9e-12 for I = 1e-5 kg*m^2, 6e-10 for I = 1e-7 kg*m^2, and 8e-8 for I
+    = 1e-9 kg*m^2 (with k = c = 1000.0 and a 0.005 s time step). That is far below the
+    numerical solver's 1e-6 tolerance for real wings (the lightest strips of the FAAV's
+    small wing are about 3e-9 kg*m^2), but it reaches about 1e-6 for strips near 1e-10
+    kg*m^2. For strips that light, the closed form two-rate solution of the overdamped
+    ODE would keep the error at rounding level.
+
+    :param spring_constant_rad: The spring constant k (N*m/rad).
+    :param damping_constant_rad: The damping constant c (N*m*s/rad).
+    :param torsional_inertia: The strip's torsional inertia I (kg*m^2).
+    :param piece_duration: The piece's duration h (s).
+    :return: A (2, 4) ndarray of floats. Its rows give theta (radians) and
+        d(theta)/dt (rad/s) at the end of the piece as linear combinations of theta,
+        d(theta)/dt, M_start (N*m), and dM (N*m) at the start of the piece.
+    """
+    augmented_matrix = np.zeros((4, 4), dtype=float)
+    augmented_matrix[0, 1] = 1.0
+    augmented_matrix[1, 0] = -spring_constant_rad / torsional_inertia
+    augmented_matrix[1, 1] = -damping_constant_rad / torsional_inertia
+    augmented_matrix[1, 2] = 1.0 / torsional_inertia
+    augmented_matrix[2, 3] = 1.0 / piece_duration
+    return expm(augmented_matrix * piece_duration)[:2]
 
 
 class SteadyProblem:
@@ -1325,6 +1387,7 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         "_spring_constant_rad",
         "_damping_constant_rad",
         "_step_discards",
+        "_use_analytical_spring_solver",
         "listDeformationAnglesYRad_Wcsp_to_Wcs_ixyz",
         "_listDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz",
     )
@@ -1336,6 +1399,7 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         spring_constant_rad: float,
         damping_constant_rad: float,
         step_discards: int = 5,
+        use_analytical_spring_solver: bool | np.bool = False,
     ) -> None:
         """The initialization method.
 
@@ -1355,9 +1419,29 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             stability (there are inconsistent startup effects from the UVLM solver).
             During these time steps, the solver will run but the results will not be
             applied to the deformation of the Wings. The default is 5.
+        :param use_analytical_spring_solver: Determines how each strip's torsional
+            spring-damper ODE is solved over a time step. If False, it is integrated
+            numerically with scipy's solve_ivp (_spring_numerical_ode). If True, it is
+            solved exactly with a matrix exponential, treating the forcing as linear
+            between evenly spaced samples (_spring_analytical_ode). The analytical solve
+            costs the same for any strip inertia, while the numerical one slows down
+            sharply for light strips, whose ODEs are stiff. The analytical solve is
+            exact for a FlapDrive's sampled flap acceleration. For a prescribed
+            sinusoidal flap motion, the straight lines between samples miss the forcing
+            by about (omega * h)^2 / 8 of its amplitude, where omega is the flap's
+            angular frequency and h is the time step divided by (_SPRING_FORCING_SAMPLES
+            - 1). That is about 5e-6 for a 10 Hz flap at a 0.01 s time step, and much
+            less for slower flaps or shorter time steps. Can be a bool or a numpy bool.
+            The default is False.
         :return: None
         """
-        if not isinstance(movement, (aeroelastic_movement_mod.AeroelasticMovement,movements.free_flight_movement.FreeFlightAeroelasticMovement)):
+        if not isinstance(
+            movement,
+            (
+                aeroelastic_movement_mod.AeroelasticMovement,
+                movements.free_flight_movement.FreeFlightAeroelasticMovement,
+            ),
+        ):
             raise TypeError("movement must be an AeroelasticMovement.")
 
         # Generate the initial Airplane at step 0 with no deformation.
@@ -1375,9 +1459,12 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         self._wing_density = wing_density  # This is per unit height, in kg/m^2.
         self._spring_constant_rad = spring_constant_rad
         self._damping_constant_rad = damping_constant_rad
-        
+
         # These are the permanent parameters.
         self._step_discards = step_discards
+        self._use_analytical_spring_solver = _parameter_validation.boolLike_return_bool(
+            use_analytical_spring_solver, "use_analytical_spring_solver"
+        )
 
         # This is the per-wing time series of the cumulative torsional deformation
         # state, indexed as [wing_idx][entry], where entry 0 is the zero-valued initial
@@ -1429,6 +1516,10 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
     @property
     def step_discards(self) -> int:
         return self._step_discards
+
+    @property
+    def use_analytical_spring_solver(self) -> bool:
+        return self._use_analytical_spring_solver
 
     def _initialize_per_wing_state(self, airplane: geometry.airplane.Airplane) -> None:
         """Allocate per-wing time series lists sized to the Airplane's geometry.
@@ -1979,8 +2070,15 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         """
         t = np.linspace(dt * (step - 1), dt * step, num_steps)
 
-        # Perform the forced numerical integration of the spring-damper ODE.
-        return self._spring_numerical_ode(
+        # Solve the forced spring-damper ODE, either exactly (for any strip inertia) or
+        # by numerical integration, as use_analytical_spring_solver chooses. Both take
+        # the same arguments and return the same state.
+        spring_solver = (
+            self._spring_analytical_ode
+            if self.use_analytical_spring_solver
+            else self._spring_numerical_ode
+        )
+        return spring_solver(
             t,
             self.spring_constant_rad,
             self.damping_constant_rad,
@@ -2134,6 +2232,81 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
 
         return final_theta_rad, final_theta_derivative_rad
 
+    @staticmethod
+    def _spring_analytical_ode(
+        t: np.ndarray,
+        spring_constant_rad: float,
+        damping_constant_rad: float,
+        torsional_inertia: float,
+        theta0_rad: float,
+        theta_derivative0_rad: float,
+        aero_moment: float,
+        inertial_moment_func: Callable[[float], float],
+    ) -> tuple[float, float]:
+        """Solve the torsional spring-damper ODE exactly over a time step.
+
+        Solves the same second-order forced ODE as _spring_numerical_ode: I *
+        d^2(theta)/dt^2 = M_aero + M_inertial(t) - k * theta - c * d(theta)/dt
+
+        The ODE is linear with constant coefficients, so it has an exact solution. The
+        inertial moment is sampled at _SPRING_FORCING_SAMPLES evenly spaced times across
+        the time step and treated as linear between them, and over each of those pieces
+        the solution is advanced exactly with a matrix exponential. Unlike numerical
+        integration, this costs the same for any torsional inertia: a light strip, whose
+        ODE is stiff (its fastest mode decays at about c / I), needs no smaller step. A
+        FlapDrive's flap angular acceleration is linear between samples at the same
+        times, so for it the solve is exact. For a smooth forcing, such as a prescribed
+        sinusoidal flap, the linear pieces are the only approximation.
+
+        :param t: A (N,) ndarray of time points. Only its first and last elements are
+            used, as the start and end of the time step.
+        :param spring_constant_rad: The spring constant (N*m/rad), the k in the ODE
+            above.
+        :param damping_constant_rad: The damping constant (N*m*s/rad), the c in the ODE
+            above.
+        :param torsional_inertia: The strip's torsional rotational inertia (kg*m^2),
+            the I in the ODE above.
+        :param theta0_rad: Initial angular displacement (radians).
+        :param theta_derivative0_rad: The initial angular displacement's time
+            derivative (rad/s).
+        :param aero_moment: Constant aerodynamic moment acting on the section (N*m).
+        :param inertial_moment_func: A callable function of time that returns the
+            inertial moment from prescribed motion acceleration (N*m).
+        :return: A tuple of two floats: the final angle (radians) and its time
+            derivative (rad/s) at the last time point in t.
+        """
+        # Sample the total forcing (the constant aerodynamic moment plus the inertial
+        # moment) at evenly spaced times across the time step.
+        sample_times = np.linspace(t[0], t[-1], _SPRING_FORCING_SAMPLES)
+        piece_duration = float(sample_times[1] - sample_times[0])
+        moments = [
+            float(aero_moment + inertial_moment_func(float(sample_time)))
+            for sample_time in sample_times
+        ]
+
+        # Every piece has the same duration, so one piece map serves them all.
+        piece_map = _spring_piece_map(
+            spring_constant_rad,
+            damping_constant_rad,
+            torsional_inertia,
+            piece_duration,
+        )
+
+        # Advance the state across each piece in turn. piece_map (2 x 4) takes (theta,
+        # d(theta)/dt, M_start, dM) at the start of a piece, where M_start is the
+        # piece's starting moment and dM is its change in moment across the piece, to
+        # (theta, d(theta)/dt) at the end of the piece (see _spring_piece_map).
+        state = np.array([theta0_rad, theta_derivative0_rad], dtype=float)
+        for piece in range(_SPRING_FORCING_SAMPLES - 1):
+            start_moment = moments[piece]
+            moment_change = moments[piece + 1] - start_moment
+            state = piece_map @ np.array(
+                [state[0], state[1], start_moment, moment_change], dtype=float
+            )
+
+        return float(state[0]), float(state[1])
+
+
 class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
     """A class used to contain problems with aeroelastic unsteady aerodynamics and rigid
     body dynamics."""
@@ -2148,7 +2321,6 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         "_external_loads_validated",
         "_k_max",
         "_mujoco_model",
-        
     )
 
     def __init__(
@@ -2174,14 +2346,16 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         extra_xml: dict[str, str] | None = None,
         mujoco_assets: dict[str, bytes] | None = None,
         step_discards: int = 5,
+        use_analytical_spring_solver: bool | np.bool = False,
     ) -> None:
         """The initialization method.
 
-        :param movement: The FreeFlightAeroelasticMovement that defines the prescribed Airplane
-            geometry for this FreeFlightUnsteadyProblem. The initial Airplane and
-            OperatingPoint are derived from the FreeFlightAeroelasticMovement at the first time
-            step. The FreeFlightAeroelasticMovement must contain exactly one AirplaneMovement;
-            multi-airplane free flight is not supported in this release.
+        :param movement: The FreeFlightAeroelasticMovement that defines the prescribed
+            Airplane geometry for this FreeFlightUnsteadyProblem. The initial Airplane
+            and OperatingPoint are derived from the FreeFlightAeroelasticMovement at the
+            first time step. The FreeFlightAeroelasticMovement must contain exactly one
+            AirplaneMovement; multi-airplane free flight is not supported in this
+            release.
         :param mass: A number (int or float) representing the mass of the Airplane. It
             must be greater than zero and will be converted internally to a float. The
             units are in kilograms. It must satisfy weight == mass * np.linalg.norm(g_E)
@@ -2246,6 +2420,11 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             During these time steps, the solver will run but the results will not be
             applied to the deformation of the Wings. It is passed to
             AeroelasticUnsteadyProblem. The default is 5.
+        :param use_analytical_spring_solver: Determines whether each strip's torsional
+            spring-damper ODE is solved exactly (True) or integrated numerically
+            (False). It is passed to AeroelasticUnsteadyProblem, whose initialization
+            method describes the two. Can be a bool or a numpy bool. The default is
+            False.
         :return: None
         """
         if not isinstance(movement, free_flight_movement.FreeFlightAeroelasticMovement):
@@ -2268,13 +2447,13 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         initial_operating_point = movement.operating_point_movement.operating_points[0]
         super().__init__(
             movement=movement,
-            wing_density = wing_density,
-            spring_constant_rad = spring_constant_rad,
-            damping_constant_rad = damping_constant_rad,
+            wing_density=wing_density,
+            spring_constant_rad=spring_constant_rad,
+            damping_constant_rad=damping_constant_rad,
             step_discards=step_discards,
-
-            #initial_airplanes=[initial_airplane],
-            #initial_operating_point=initial_operating_point,
+            use_analytical_spring_solver=use_analytical_spring_solver,
+            # initial_airplanes=[initial_airplane],
+            # initial_operating_point=initial_operating_point,
         )
 
         I_BP1_CgP1 = _parameter_validation.m_by_n_number_arrayLike_return_float(
@@ -2289,7 +2468,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             mass,
             "mass",
             min_val=0.0,
-            min_inclusive=False,                                    
+            min_inclusive=False,
         )
 
         # The Airplane's weight, the supplied mass, and the gravitational field must be
@@ -2477,12 +2656,14 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         return self._external_loads_fn
 
     @property
-    def _free_flight_movement(self) -> free_flight_movement.FreeFlightAeroelasticMovement:
+    def _free_flight_movement(
+        self,
+    ) -> free_flight_movement.FreeFlightAeroelasticMovement:
         """Type narrowed view of the inherited _movement attribute.
 
         The parent stores _movement as a CoreMovement (widened to let subclasses pass
-        their own variants). __init__ accepts only a FreeFlightAeroelasticMovement, so the cast
-        here is safe.
+        their own variants). __init__ accepts only a FreeFlightAeroelasticMovement, so
+        the cast here is safe.
 
         :return: The _movement narrowed to FreeFlightAeroelasticMovement.
         """
@@ -2870,7 +3051,6 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             next_operating_point
         )
 
-
         next_steady_problem = SteadyProblem(
             airplanes=[next_airplane],
             operating_point=next_operating_point,
@@ -2881,7 +3061,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         self,
         solver: FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver,
         current_airplane: geometry.airplane.Airplane,
-        next_airplane : geometry.airplane.Airplane,
+        next_airplane: geometry.airplane.Airplane,
         current_operating_point: operating_point_mod.OperatingPoint,
         step: int,
     ) -> None:
@@ -2899,8 +3079,8 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         step's. The solver's current-step state is then restored for the inherited run
         loop's official wake build.
 
-        :param solver: The FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver providing the
-            aerodynamic evaluation at each trial state.
+        :param solver: The FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+            providing the aerodynamic evaluation at each trial state.
         :param current_airplane: The first Airplane at the current step, carrying the
             current step's solved aerodynamic loads, used to seed the iteration.
         :param next_airplane: The next airplane from the aeroelastic model
@@ -3019,7 +3199,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         accepted_operating_point = self._operating_point_from_state(
             self._mujoco_model.get_state(), current_operating_point
         )
-        self._commit_next_problem(accepted_operating_point,next_airplane, step)
+        self._commit_next_problem(accepted_operating_point, next_airplane, step)
         solver.restore_substep(step)
 
     def initialize_next_problem(
@@ -3100,10 +3280,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 next_operating_point = self._operating_point_from_state(
                     new_state, current_operating_point
                 )
-                self._commit_next_problem(next_operating_point,next_airplane, step)
-
-
-
+                self._commit_next_problem(next_operating_point, next_airplane, step)
 
 
 def _get_mujoco_model(

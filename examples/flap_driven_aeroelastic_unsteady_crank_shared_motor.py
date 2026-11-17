@@ -16,10 +16,10 @@ conforms to the flap_drive.Transmission protocol, so it is passed to each FlapDr
 directly. The companion flap_driven_aeroelastic_unsteady example shows the other way to
 supply a transmission: as your own functions, wrapped in a flap_drive.FlapTransmission.
 
-The motor is the FAAV's T-Motor AT2303 1500KV. Its torque-speed curve, its peak and continuous torques, its motor
-controller's peak and continuous currents, its brake current, and its gearbox all limit
-the torque that it can apply, so the Wings can fall behind their desired flap
-trajectory.
+The motor is the FAAV's T-Motor AT2303 1500KV. Its torque-speed curve, its peak and
+continuous torques, its motor controller's peak and continuous currents, its brake
+current, and its gearbox all limit the torque that it can apply, so the Wings can fall
+behind their desired flap trajectory.
 """
 
 import json
@@ -59,13 +59,19 @@ motor_controller_parameters = powertrain_parameters["motor_controller"]
 crank_parameters = load_parameters("faav_crank_linkage.json")
 
 # Define the flight condition, the flap frequency, and the simulation's time steps. The
-# time step gives 40 time steps per flap, and the simulation runs for three flaps.
+# time step is set by the number of time steps per flap, STEPS_PER_FLAP, so the flap
+# stays equally well resolved at any flap frequency. Keep it at about 20 or more: each
+# time step sheds one row of wake panels, and the torsional springs' sampled forcing
+# loses accuracy as the time step grows relative to the flap period. The simulation runs
+# for NUM_FLAPS flaps.
 FLAP_FREQUENCY = 5.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 6.0
 ANGLE_OF_ATTACK = 10.0
-DELTA_TIME = 0.005
-NUM_STEPS = 120
+STEPS_PER_FLAP = 40
+NUM_FLAPS = 3
+DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
+NUM_STEPS = NUM_FLAPS * STEPS_PER_FLAP
 DURATION = NUM_STEPS * DELTA_TIME
 
 # Define the powertrain. A motor turns a gearbox, whose output turns the gearbox crank

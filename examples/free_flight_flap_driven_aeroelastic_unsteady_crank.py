@@ -61,15 +61,22 @@ motor_controller_parameters = powertrain_parameters["motor_controller"]
 crank_parameters = load_parameters("pterosaur_crank_linkage.json")
 
 # Define the initial flight condition, the flap frequency, and the simulation's time
-# steps. The vehicle holds its initial state for PRESCRIBED_NUM_STEPS time steps (one
-# wingbeat), so the wake can develop, and then flies freely for the rest.
+# steps. The time step is set by the number of time steps per flap, STEPS_PER_FLAP, so
+# the flap stays equally well resolved at any flap frequency. Keep it at about 20 or
+# more: each time step sheds one row of wake panels, and the torsional springs' sampled
+# forcing loses accuracy as the time step grows relative to the flap period. The vehicle
+# holds its initial state for PRESCRIBED_NUM_FLAPS flaps (one wingbeat), so the wake can
+# develop, and then flies freely for FREE_NUM_FLAPS flaps.
 FLAP_FREQUENCY = 3.5
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 20.0
 ANGLE_OF_ATTACK = 10.0
-DELTA_TIME = 0.01
-PRESCRIBED_NUM_STEPS = 50
-FREE_NUM_STEPS = 100
+STEPS_PER_FLAP = 40
+PRESCRIBED_NUM_FLAPS = 1
+FREE_NUM_FLAPS = 3
+DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
+PRESCRIBED_NUM_STEPS = PRESCRIBED_NUM_FLAPS * STEPS_PER_FLAP
+FREE_NUM_STEPS = FREE_NUM_FLAPS * STEPS_PER_FLAP
 NUM_STEPS = PRESCRIBED_NUM_STEPS + FREE_NUM_STEPS
 DURATION = NUM_STEPS * DELTA_TIME
 
@@ -523,7 +530,7 @@ for wing_index in main_wing_indices:
 # don't act on it.
 example_problem = ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
     movement=example_movement,
-    wing_density=WING_DENSITY * 1000,
+    wing_density=WING_DENSITY,
     spring_constant_rad=1000.0,
     damping_constant_rad=1000.0,
     mass=ROBOT_MASS,

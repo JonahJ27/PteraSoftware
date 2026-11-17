@@ -32,7 +32,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 18 | The controller doesn't see the OperatingPoint | Control | Low |
 | 19 | The "quasi_square" trajectory style isn't ported | Trajectories | Low |
 | 20 | Documentation and test coverage gaps | Docs | Low |
-| 21 | The torsional spring ODE is stiff for light or narrow strips, and is integrated explicitly | Structure | Medium |
+| 21 | The torsional spring constants are placeholders, and the analytical spring solver has a light strip limit | Structure | Medium |
 | 22 | A wing can't be driven by more than one FlapDrive | Control | Low |
 | 23 | The flap examples duplicate their wing and motor building code | Code health | Low |
 | 24 | The free wake is sensitive to the root spacing and passes through the V-tail | Geometry | Medium |
@@ -114,11 +114,11 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Priority:** Medium
 
-**Problem.** `free_flight_flap_driven_aeroelastic_unsteady_crank.py` uses a 30 kg mass and an inertia matrix scaled from another example, a V-tail sized by eye, and an initial state that isn't trimmed. In its run with the earlier wing, the vehicle sped up from 10 to 15.3 m/s over one second of free flight. It hasn't been run in full with the model 5 wing, 3 Hz, and 20 m/s. Its comment on `PRESCRIBED_NUM_STEPS` still says the prescribed start is one wingbeat, but at 3 Hz its 50 steps are 1.5 wingbeats.
+**Problem.** `free_flight_flap_driven_aeroelastic_unsteady_crank.py` uses a 30 kg mass and an inertia matrix scaled from another example, a V-tail sized by eye, and an initial state that isn't trimmed. In its run with the earlier wing, the vehicle sped up from 10 to 15.3 m/s over one second of free flight. It hasn't been run in full with the model 5 wing, 3.5 Hz, and 20 m/s.
 
 **Why it matters.** The example demonstrates the coupling, not a flyable vehicle. Its trajectory says nothing about the robot.
 
-**Fix.** Build `mass` and `I_BP1_CgP1` from parts instead of placeholders, in a `vehicle.json` in `examples/flap_drive_parameters/` like the wing and powertrain: the body (fuselage, motors, and gearboxes, with their CG and inertia from the CAD model) plus, for each wing, both of its mass parts from `pterosaur_model_5_wing.json` (the leading edge tube as a line mass along the leading edge points, and the membrane as an areal mass over the outline), placed at the 0.205 m root offset and the mean flap angle, with the parallel axis terms. The rigid body sees the whole wing's mass, spar and membrane, unlike the torsional springs (item 4). The inertia stays constant during a run (item 2). Fix the wingbeat comment, or set `PRESCRIBED_NUM_STEPS` from the flap period. Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
+**Fix.** Build `mass` and `I_BP1_CgP1` from parts instead of placeholders, in a `vehicle.json` in `examples/flap_drive_parameters/` like the wing and powertrain: the body (fuselage, motors, and gearboxes, with their CG and inertia from the CAD model) plus, for each wing, both of its mass parts from `pterosaur_model_5_wing.json` (the leading edge tube as a line mass along the leading edge points, and the membrane as an areal mass over the outline), placed at the 0.205 m root offset and the mean flap angle, with the parallel axis terms. The rigid body sees the whole wing's mass, spar and membrane, unlike the torsional springs (item 4). The inertia stays constant during a run (item 2). Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
 
 **Where.** The example, `trim.py`.
 
@@ -160,17 +160,27 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Where.** `flap_driven_aeroelastic_unsteady_problem.py` (`_calculate_wings_flap_inertia`), `problems.py` (strip inertias), the examples.
 
-### 21. The torsional spring ODE is stiff for light or narrow strips, and is integrated explicitly
+### 21. The torsional spring constants are placeholders, and the analytical spring solver has a light strip limit
 
 **Priority:** Medium
 
-**Problem.** `_spring_numerical_ode` integrates each strip's `I * theta'' + c * theta' + k * theta = M` with `solve_ivp`'s default explicit method (RK45). Its fastest mode decays at about `c / I`, so a strip with a small torsional inertia `I` (a narrow strip, a short chord near the tip or the root, or a low `wing_density`) and the examples' `damping_constant_rad` of 1000 N\*m\*s/rad is very stiff, and RK45 needs a tiny step to stay stable. With the blade element theory code's model 5 wing (about 23 strips per side, a 5 millimeter root chord, a 32 millimeter tip chord, and a `wing_density` of 0.888 kg/m^2), the flap driven examples spend almost all their time here: a profile of 8 time steps showed 4.3 million RK45 steps over 350 strip integrations, about 170 seconds for 9 time steps instead of about 1 minute for 150 with the earlier wing.
+**Background.** `_spring_numerical_ode` integrates each strip's `I * theta'' + c * theta' + k * theta = M` with `solve_ivp`'s default explicit method (RK45). Its fastest mode decays at about `c / I`, so a strip with a small torsional inertia `I` and the examples' `damping_constant_rad` of 1000 N\*m\*s/rad is very stiff, and RK45 needs a tiny step to stay stable. The model 5 wing took about 170 seconds for 9 time steps, and the FAAV small wing (strip inertias down to 3e-9 kg\*m^2) never finished.
 
-**Why it matters.** It makes realistic wing geometries impractical to run, and the cost doesn't come from the aerodynamics.
+**Done.** `AeroelasticUnsteadyProblem` has a `use_analytical_spring_solver` flag (False by default, so prescribed motion keeps `solve_ivp`, and True by default in both flap driven problems) that solves each strip's ODE exactly with `_spring_analytical_ode`. That solve treats the forcing as linear between `_SPRING_FORCING_SAMPLES` (100) evenly spaced samples per time step and advances the strip across each piece with one matrix exponential (`_spring_piece_map`). It costs about the same for any strip inertia. `_FLAP_ACCELERATION_SAMPLES` is defined as `_SPRING_FORCING_SAMPLES`, so the FlapDrives sample their accelerations at the same points and the solve is exact for them. The flap examples now run 120 time steps in about 15 to 25 s, and they set their time step from `STEPS_PER_FLAP` = 40.
 
-**Fix.** Integrate the spring ODE with an implicit method (`method="Radau"` or `"LSODA"` in `solve_ivp`), or solve it exactly over the time step, since it is linear with constant coefficients and only the inertial forcing varies. Choose physical damping values for the examples instead of the placeholder 1000.0, which interacts with item 3's inertia estimate.
+**Remaining problems.**
 
-**Where.** `problems.py`, `_spring_numerical_ode`.
+- The placeholder spring and damping constants: k = c = 1000.0 in every example, which interacts with item 3's inertia estimate. With them, the FAAV wing's twist is only around 1e-8 rad, so the wing is effectively rigid.
+- The light strip limit: the matrix exponential's rounding error grows roughly in proportion to `c / I`. With k = c = 1000.0 and a 0.005 s time step, the relative error in theta is about 6e-10 for I = 1e-7 kg\*m^2 and 8e-8 for I = 1e-9 kg\*m^2 (the FAAV's lightest strips are about 3e-9 kg\*m^2). It reaches the numerical solver's 1e-6 tolerance for strips near 1e-10 kg\*m^2.
+- The smooth forcing error: for a smooth prescribed flap, the straight lines miss the forcing by about (omega \* h)^2 / 8 of its amplitude, with h the time step / 99. That is about 3e-7 at 40 time steps per flap and 1.3e-6 at 20, at any flap frequency, so keep 20 or more time steps per flap.
+
+**Fix.**
+
+- Choose physical spring and damping values for the examples.
+- If a wing has strips lighter than about 1e-10 kg\*m^2, build `_spring_piece_map` from the closed form two-rate solution for strongly overdamped strips, which keeps the error at rounding level (a version of this was written and tested, then removed as unnecessary for current wings).
+- Optionally, size `_SPRING_FORCING_SAMPLES` from the FlapDrives' period and the time step, so a coarse time step can't push the sampling error above the solver tolerance.
+
+**Where.** `problems.py` (`_spring_analytical_ode`, `_spring_piece_map`, `_SPRING_FORCING_SAMPLES`), and the examples.
 
 ### 15. The torsional spring model differs from the blade element theory code's deformation model
 

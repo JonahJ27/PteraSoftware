@@ -1,4 +1,5 @@
 """Contains the FlapDrivenAeroelasticUnsteadyProblem class.
+
 ENTIRE SCRIPT VALIDATED CORRECT
 """
 
@@ -42,8 +43,14 @@ _FLAP_ODE_ABSOLUTE_TOLERANCE = 1e-9
 # This is the number of points at which a time step's flap angular acceleration is
 # sampled for the torsional spring's inertial forcing. The spring integration then reads
 # the samples by linear interpolation, instead of calling the user's actuator function
-# on every evaluation.
-_FLAP_ACCELERATION_SAMPLES = 21
+# on every evaluation. A saturating actuator can make the acceleration jump within a
+# time step, and the linear interpolation spreads that jump over one sample interval, so
+# more samples shrink that error. The analytical spring solver samples the forcing at
+# evenly spaced points over the same interval, and it is exact for these samples only
+# when every one of them is also one of its own. So this count is defined as the
+# solver's count, problems._SPRING_FORCING_SAMPLES, and changing that one constant
+# changes both.
+_FLAP_ACCELERATION_SAMPLES = problems._SPRING_FORCING_SAMPLES
 
 
 def _evaluate_flap_drive(
@@ -582,7 +589,7 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
         """Finds the aerodynamic torque on a Wing about its flap axis.
 
         VALIDATED CORRECT
-        
+
         The torque is taken about the Wing's rotation point and along the flap axis, and
         its sign is positive in the direction of increasing flap angle. It follows from
         the moment transport theorem: the sum of the Panels' moments about the first
@@ -712,9 +719,9 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
         Wings' movements, where the parent class reads them, and one new entry in each
         of this problem's flap histories.
 
-        This function is called in the FlapDrivenAeroelasticUnsteadyProblem
-        and FreeFlightFlapDrivenAeroelasticUnsteadyProblem class 
-        which uses the same coreproblem class
+        This function is called in the FlapDrivenAeroelasticUnsteadyProblem and
+        FreeFlightFlapDrivenAeroelasticUnsteadyProblem class which uses the same
+        coreproblem class
 
         :param solver: The solver that has just solved the current time step.
         :param step: The current time step index.
@@ -764,8 +771,8 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
             # the user's actuator function returns its force, and the equation of motion
             # gives the accelerations. The drive, the torque, and the inertia are bound
             # as default arguments so that each loop iteration's function keeps its own
-            # values instead of reading the loop variables after they change.
-            #VALIDATED CORRECT
+            # values instead of reading the loop variables after they change. VALIDATED
+            # CORRECT
             def evaluate(
                 time: float,
                 state: np.ndarray,
@@ -789,8 +796,7 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
             # derivative is (actuator velocity, actuator acceleration). The acceleration
             # comes from the full controller and equation of motion at this instant, so
             # the feedback, the feedforward, and the motor's limits all act continuously
-            # within the interval, not once per time step.
-            #VALIDATED CORRECT
+            # within the interval, not once per time step. VALIDATED CORRECT
             def derivative(time: float, state: np.ndarray) -> np.ndarray:
                 _, accelerations = evaluate(time, state)
                 return np.array(
@@ -801,8 +807,7 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
             # takes as many internal steps as the actuator's dynamics need, which can be
             # many when the motor saturates or the linkage nears a dead center. The
             # dense output is a continuous solution across the interval, which the
-            # sampling below reads.
-            #VALIDATED CORRECT
+            # sampling below reads. VALIDATED CORRECT
             solution = solve_ivp(
                 derivative,
                 (start_time, end_time),
@@ -821,8 +826,8 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
             # whatever times their own integrator chooses, so it is sampled at evenly
             # spaced times from the dense solution and later read by linear
             # interpolation. This also keeps the springs from calling the user's
-            # actuator function, which may log or keep its own records.
-            #VALIDATED CORRECT
+            # actuator function, which may log or keep its own records. VALIDATED
+            # CORRECT
             sample_times = np.linspace(start_time, end_time, _FLAP_ACCELERATION_SAMPLES)
             dense_solution = solution.sol
             assert dense_solution is not None
@@ -1043,6 +1048,7 @@ class FlapDrivenAeroelasticUnsteadyProblem(
         damping_constant_rad: float,
         flap_drives: Sequence[flap_drive_mod.FlapDrive],
         step_discards: int = 5,
+        use_analytical_spring_solver: bool | np.bool = True,
     ) -> None:
         """The initialization method.
 
@@ -1067,6 +1073,13 @@ class FlapDrivenAeroelasticUnsteadyProblem(
             During these time steps, the solver will run but the results will not be
             applied to the deformation of the Wings, and the FlapDrives act as if the
             fluid applied no torque. It must be a non negative int. The default is 5.
+        :param use_analytical_spring_solver: Determines whether each strip's torsional
+            spring-damper ODE is solved exactly (True) or integrated numerically
+            (False). It is passed to AeroelasticUnsteadyProblem, whose initialization
+            method describes the two. The exact solve is exact for the FlapDrives'
+            sampled flap accelerations and costs the same for any strip inertia, while
+            numerical integration slows down sharply for light Wings. Can be a bool or a
+            numpy bool. The default is True.
         :return: None
         """
         if not isinstance(movement, aeroelastic_movement_mod.AeroelasticMovement):
@@ -1084,6 +1097,7 @@ class FlapDrivenAeroelasticUnsteadyProblem(
             spring_constant_rad=spring_constant_rad,
             damping_constant_rad=damping_constant_rad,
             step_discards=step_discards,
+            use_analytical_spring_solver=use_analytical_spring_solver,
         )
 
         # Seed the FlapDrives' histories from the first time step.

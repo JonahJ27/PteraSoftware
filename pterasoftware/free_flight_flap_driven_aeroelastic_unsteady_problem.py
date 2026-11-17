@@ -113,6 +113,7 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
         extra_xml: dict[str, str] | None = None,
         mujoco_assets: dict[str, bytes] | None = None,
         step_discards: int = 5,
+        use_analytical_spring_solver: bool | np.bool = True,
     ) -> None:
         """The initialization method.
 
@@ -153,6 +154,8 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
             During these time steps, the solver will run but the results will not be
             applied to the deformation of the Wings, and the FlapDrives act as if the
             fluid applied no torque. It must be a non negative int. The default is 5.
+        :param use_analytical_spring_solver: See FlapDrivenAeroelasticUnsteadyProblem.
+            Can be a bool or a numpy bool. The default is True.
         :return: None
         """
         if not isinstance(
@@ -180,6 +183,7 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
             extra_xml=extra_xml,
             mujoco_assets=mujoco_assets,
             step_discards=step_discards,
+            use_analytical_spring_solver=use_analytical_spring_solver,
         )
 
         # Seed the FlapDrives' histories from the first time step.
