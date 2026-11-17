@@ -1,21 +1,22 @@
 """Demonstrates running Ptera Software's
-AeroelasticUnsteadyRingVortexLatticeMethodSolver with the blade element theory code's
-model 5 (4.3 meter span) flapping wing whose two halves are both driven by one motor,
-gearbox, and crank linkage instead of by a prescribed flap angle.
+AeroelasticUnsteadyRingVortexLatticeMethodSolver with the FAAV's small (0.86 meter span)
+flapping wing whose two halves are both driven by one motor, gearbox, and crank linkage
+instead of by a prescribed flap angle, as on the FAAV.
 
-This example is the flap_driven_aeroelastic_unsteady_crank example with one change: one
-FlapDrive flaps both Wings, instead of one FlapDrive per Wing. A shared FlapDrive has
-one actuator state, so both Wings always have the same flap angle. Its motor carries
-both Wings: the problem sums the two Wings' fluid torques about the flap axis, and the
-FlapDrive's wing_flap_inertia is the two Wings' combined inertia.
+This example is like the flap_driven_aeroelastic_unsteady_crank example, with two
+changes. First, one FlapDrive flaps both Wings, instead of one FlapDrive per Wing. A
+shared FlapDrive has one actuator state, so both Wings always have the same flap angle.
+Its motor carries both Wings: the problem sums the two Wings' fluid torques about the
+flap axis, and the FlapDrive's wing_flap_inertia is the two Wings' combined inertia.
+Second, the hardware is the FAAV's (its wing, powertrain, and crank linkage) instead of
+the pterosaur's.
 
 The crank linkage is a crank_linkage.CrankLinkage, a powertrain with its own class that
 conforms to the flap_drive.Transmission protocol, so it is passed to each FlapDrive
 directly. The companion flap_driven_aeroelastic_unsteady example shows the other way to
 supply a transmission: as your own functions, wrapped in a flap_drive.FlapTransmission.
 
-The motor is the same one that each Wing has in the crank example, so here it carries
-twice the load. Its torque-speed curve, its peak and continuous torques, its motor
+The motor is the FAAV's T-Motor AT2303 1500KV. Its torque-speed curve, its peak and continuous torques, its motor
 controller's peak and continuous currents, its brake current, and its gearbox all limit
 the torque that it can apply, so the Wings can fall behind their desired flap
 trajectory.
@@ -35,10 +36,11 @@ import numpy as np
 import pterasoftware as ps
 
 # Load the hardware's parameters from the JSON files in the flap_drive_parameters
-# directory next to this script, which the flap driven examples share: the model 5
-# wing's outline and mass (model_5_wing.json), the powertrain's motor, motor controller,
-# gearbox, and feedback gains (mad_m13_kv90_powertrain.json), and the crank linkage's
-# geometry (crank_linkage.json). Edit those files to change the hardware. The flight
+# directory next to this script, which the flap driven examples share: the FAAV small
+# wing's outline and mass (faav_small_wing.json), the powertrain's motor, motor
+# controller, gearbox, and feedback gains (faav_at2303_1500kv_powertrain.json), and the
+# crank linkage's geometry (faav_crank_linkage.json). Edit those files to change the
+# hardware, or load faav_large_wing.json for the FAAV's 530 millimeter wing. The flight
 # condition and the simulation's settings are defined in this script, below.
 PARAMETERS_DIRECTORY = Path(__file__).resolve().parent / "flap_drive_parameters"
 
@@ -50,19 +52,20 @@ def load_parameters(file_name: str) -> dict[str, Any]:
     return parameters
 
 
-wing_parameters = load_parameters("model_5_wing.json")
-powertrain_parameters = load_parameters("mad_m13_kv90_powertrain.json")
+wing_parameters = load_parameters("faav_small_wing.json")
+powertrain_parameters = load_parameters("faav_at2303_1500kv_powertrain.json")
 motor_parameters = powertrain_parameters["motor"]
 motor_controller_parameters = powertrain_parameters["motor_controller"]
-crank_parameters = load_parameters("crank_linkage.json")
+crank_parameters = load_parameters("faav_crank_linkage.json")
 
-# Define the flight condition, the flap frequency, and the simulation's time steps.
-FLAP_FREQUENCY = 2.0
+# Define the flight condition, the flap frequency, and the simulation's time steps. The
+# time step gives 40 time steps per flap, and the simulation runs for three flaps.
+FLAP_FREQUENCY = 5.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
-AIR_SPEED = 10.0
+AIR_SPEED = 6.0
 ANGLE_OF_ATTACK = 10.0
-DELTA_TIME = 0.01
-NUM_STEPS = 150
+DELTA_TIME = 0.005
+NUM_STEPS = 120
 DURATION = NUM_STEPS * DELTA_TIME
 
 # Define the powertrain. A motor turns a gearbox, whose output turns the gearbox crank
@@ -132,22 +135,20 @@ else:
         period=FLAP_PERIOD,
     )
 
-# Define the main Wing as the blade element theory code's model 5 wing (calcWingGeom
-# with model_type = 5), whose outline and mass are in model_5_wing.json. calcWingGeom
-# gives the wing's leading and trailing edge points in millimeters, for a wing of the
-# outline reference length (1.2 meters), with the shoulder at the origin, the x axis
-# pointing aft, and the y axis pointing out along the span. That code scales them to its
-# wingspan of 2 * (spar length + shoulder offset) meters (the 2.09 meter spar plus its
-# 7.5 centimeter offset from the shoulder, per side), so SCALE_M_PER_MM converts them to
-# meters at that wingspan. The trailing edge runs from the shoulder to the wing's
-# connection point and then out to the tip, and the tip is closed by a chordwise edge
-# from the last trailing edge point to the last leading edge point.
-MODEL_5_WINGSPAN = 2.0 * (
+# Define the main Wing as the FAAV's small wing (the blade element theory code's
+# calcFAAVWingGeom), whose outline and mass are in faav_small_wing.json. Its leading and
+# trailing edge points are in millimeters, for the code's base wing of the outline
+# reference length (two 330 millimeter wings), with the shoulder at the origin, the x
+# axis pointing aft, and the y axis pointing out along the span. That code scales them
+# to a wingspan of 2 * (spar length + shoulder offset) meters (here a 430 millimeter
+# spar per side, with no offset from the shoulder), so SCALE_M_PER_MM converts them to
+# meters at that wingspan. The leading edge is straight. The trailing edge starts half
+# the wing's length aft of the shoulder, runs straight out to half the wing's length,
+# and then curves around a quarter circle to the tip, where it meets the leading edge.
+WINGSPAN = 2.0 * (
     wing_parameters["spar_length_m"] + wing_parameters["shoulder_offset_m"]
 )
-SCALE_M_PER_MM = (
-    MODEL_5_WINGSPAN / wing_parameters["outline_reference_length_m"] / 1000.0
-)
+SCALE_M_PER_MM = WINGSPAN / wing_parameters["outline_reference_length_m"] / 1000.0
 leading_edge_x_mm = wing_parameters["leading_edge_x_mm"]
 leading_edge_y_mm = wing_parameters["leading_edge_y_mm"]
 trailing_edge_x_mm = wing_parameters["trailing_edge_x_mm"]
@@ -155,11 +156,10 @@ trailing_edge_y_mm = wing_parameters["trailing_edge_y_mm"]
 
 # Put a WingCrossSection at every spanwise station where the leading or the trailing
 # edge has a point, so that the Wing's straight edges between WingCrossSections trace
-# the model 5 outline exactly. The leading edge points at 71 and 366 millimeters are 1
-# millimeter from the trailing edge points at 70 and 367 millimeters, so they are merged
-# into those stations instead of making WingCrossSections a few millimeters wide. That
-# moves the leading edge by at most 0.1 millimeters (0.4 millimeters at full scale)
-# there.
+# the outline's points exactly. A leading edge point within MERGE_TOLERANCE_MM of a
+# trailing edge point is merged into that point's station instead of making a
+# WingCrossSection a few millimeters wide. (The FAAV wing's only leading edge points are
+# at its root and tip, which are also trailing edge points.)
 MERGE_TOLERANCE_MM = wing_parameters["meshing"]["merge_tolerance_mm"]
 station_y_mm = sorted(
     set(trailing_edge_y_mm)
@@ -176,10 +176,10 @@ station_trailing_edge_x_mm = np.interp(
     station_y_mm, trailing_edge_y_mm, trailing_edge_x_mm
 )
 
-# The model 5 wing's chord is zero at the shoulder, where its leading and trailing edges
-# meet, but a WingCrossSection's chord must be positive, so the root WingCrossSection
-# gets a small chord instead. Each section between WingCrossSections gets spanwise
-# panels about SPANWISE_PANEL_WIDTH wide.
+# The FAAV wing's chord is zero at the tip, where its leading and trailing edges meet,
+# but a WingCrossSection's chord must be positive, so the tip WingCrossSection gets a
+# small chord (ROOT_CHORD, the smallest chord a station can have) instead. Each section
+# between WingCrossSections gets spanwise panels about SPANWISE_PANEL_WIDTH wide.
 ROOT_CHORD = wing_parameters["meshing"]["root_chord_m"]
 SPANWISE_PANEL_WIDTH = wing_parameters["meshing"]["spanwise_panel_width_m"]
 wing_cross_sections = []
@@ -216,16 +216,17 @@ for i, y_mm in enumerate(station_y_mm):
         )
     )
 
-# Define the model 5 wing's mass properties, which have two parts (see
-# model_5_wing.json). The leading edge is a carbon fiber tube (the blade element theory
-# code's leading_edge_shape = 6), and the membrane has the measured areal density from
-# that code's runSim. Both parts' masses and inertias about the shoulder are computed as
-# in that code's precomputeWingGeometry. The motor flaps the whole wing, so each
-# FlapDrive's wing inertia, WING_FLAP_INERTIA, is the sum of the tube's and the
-# membrane's. The torsional springs twist each strip about its leading edge, where the
-# tube sits, so the tube adds almost nothing to their twist inertia, and the springs get
-# only the membrane: wing_density is the membrane's areal density. (The torsional spring
-# model currently triples every strip's mass. See item 3 of docs/FLAP_DRIVE_TODO.md.)
+# Define the FAAV wing's mass properties, which have two parts (see
+# faav_small_wing.json). The leading edge is a flat carbon fiber plate (the blade
+# element theory code's leading_edge_shape = 1), and the membrane has the FAAV membrane
+# areal density from that code's BET_plotter. Both parts' masses and inertias about the
+# shoulder are computed as in that code's precomputeWingGeometry. The motor flaps the
+# whole wing, so each Wing's inertia, WING_FLAP_INERTIA, is the sum of the plate's and
+# the membrane's. The torsional springs twist each strip about its leading edge, where
+# the plate sits, so the plate adds almost nothing to their twist inertia, and the
+# springs get only the membrane: wing_density is the membrane's areal density. (The
+# torsional spring model currently triples every strip's mass. See item 3 of
+# docs/FLAP_DRIVE_TODO.md.)
 leading_edge_parameters = wing_parameters["leading_edge"]
 membrane_parameters = wing_parameters["membrane"]
 WING_FLAP_INERTIA = (
@@ -234,14 +235,15 @@ WING_FLAP_INERTIA = (
 )
 WING_DENSITY = membrane_parameters["areal_density_kg_m2"]
 
-# The model 5 wing flaps about an axis through its shoulder, the origin of its points,
-# parallel to the x axis. As in the CAD model, the two Wings' roots, and so their
-# shoulders, are 410 millimeters apart, so each root is ROOT_OFFSET_Y from the plane of
-# symmetry, and each Wing flaps about its own root's leading edge point (the default
-# rotation point). Because the root is off the plane, the Airplane splits the symmetric
-# Wing into two Wings that can flap separately. Don't move the roots much closer
-# together: the two roots' bound vortices spin in opposite directions, and within a few
-# centimeters of each other they throw the free wake's root vertices far out of place.
+# The FAAV wing flaps about an axis through its shoulder, the origin of its points,
+# parallel to the x axis. As on the FAAV, the two Wings' roots, and so their shoulders,
+# are 25.3 millimeters apart (center to center), so each root is ROOT_OFFSET_Y from the
+# plane of symmetry, and each Wing flaps about its own root's leading edge point (the
+# default rotation point). Because the root is off the plane, the Airplane splits the
+# symmetric Wing into two Wings that can flap separately. The two roots' bound vortices
+# spin in opposite directions, and close together they can throw the free wake's root
+# vertices out of place (see item 24 of docs/FLAP_DRIVE_TODO.md), so check the wake near
+# the plane of symmetry if you move the roots closer together.
 ROOT_OFFSET_Y = wing_parameters["meshing"]["root_offset_y_m"]
 
 # The Wing's base flap angle is the stroke's middle. The first time step's Wings start
@@ -325,12 +327,12 @@ example_movement = ps.movements.aeroelastic_movement.AeroelasticMovement(
     num_steps=NUM_STEPS,
 )
 
-# Define the motor. This is the MAD M13 EEE KV90 (motor 9) at 48 V. Its torque-speed
-# line and its torque-current line are fit to the same two measured points as in the
-# blade element theory motor limit simulation, with each value divided by the test
-# voltage before fitting, and the torque-speed line's intercept is then scaled back up
-# to the supply voltage. The motor's, motor controller's, and gearbox's values are in
-# mad_m13_kv90_powertrain.json.
+# Define the motor. This is the T-Motor AT2303 1500KV (motor 4), measured at 7.2 V and
+# run at 16 V. Its torque-speed line and its torque-current line are fit to the same two
+# measured points as in the blade element theory motor limit simulation, with each value
+# divided by the test voltage before fitting, and the torque-speed line's intercept is
+# then scaled up to the supply voltage. The motor's, motor controller's, and gearbox's
+# values are in faav_at2303_1500kv_powertrain.json.
 TEST_VOLTAGE = motor_parameters["test_voltage_V"]
 SUPPLY_VOLTAGE = motor_parameters["supply_voltage_V"]
 measured_speeds = (
@@ -355,7 +357,7 @@ ESC_MAX_BRAKE_CURRENT = motor_controller_parameters["max_brake_current_A"]
 GEARBOX_MAX_TORQUE = powertrain_parameters["gearbox"]["max_torque_N_m"]
 
 # Define the controller's gains and the motor's damping. Each wing's inertia about the
-# flap axis, WING_FLAP_INERTIA, is the model 5 wing's, defined with the wing above. The
+# flap axis, WING_FLAP_INERTIA, is the FAAV wing's, defined with the wing above. The
 # motor drives both Wings, so its FlapDrive gets their combined inertia below.
 PROPORTIONAL_GAIN = powertrain_parameters["feedback_gains"]["proportional"]
 DERIVATIVE_GAIN = powertrain_parameters["feedback_gains"]["derivative"]
@@ -387,15 +389,27 @@ def make_motor() -> tuple[
     def motor(inputs: ps.flap_drive.FlapDriveInputs) -> float:
         """The torque that the motor applies: a feedforward torque plus feedback on the
         motor's position and velocity, limited by the saturation controller."""
-        # NO BLADE ELEMENT THEORY MODEL IS USED IN THIS EXAMPLE. The feedforward's
-        # aerodynamic part is the previous time step's UVLM torque at the wing's actual
-        # motion (feedforward_aerodynamic=True below), so the controller and the wing
-        # see the same UVLM torque. The blade element theory code's feedforward instead
-        # predicts it at the desired wing velocity. To do that here, pass a blade
-        # element theory model as the FlapDrive's feedforward_aerodynamic below. The
-        # FlapDrive's feedforward_inertial, feedforward_damping, feedforward_passive,
-        # and feedforward_aerodynamic switches turn each term of the feedforward on or
-        # off.
+        # The desired torque is the feedforward torque plus feedback on the motor's
+        # position and velocity errors. The FlapDrive computes the feedforward torque,
+        # inputs.feedforward_force, as the motor torque needed to follow the desired
+        # trajectory. It is the sum of four terms, each of which the FlapDrive switch of
+        # the same name turns on or off:
+        #
+        #   1. inertial (feedforward_inertial): accelerates the rotor and the Wings
+        #   2. damping (feedforward_damping): cancels the motor's damping
+        #   3. passive (feedforward_passive): cancels any passive springs (none here)
+        #   4. aerodynamic (feedforward_aerodynamic): cancels the fluid torque on the
+        #      Wings, which comes from one of two sources:
+        #      - True (used here): the previous time step's UVLM torque at the Wings'
+        #        actual motion. No blade element theory model is used.
+        #      - A callable, such as a blade element theory model: it predicts the
+        #        torque, for example at the desired wing velocity, like the blade
+        #        element theory code's feedforward.
+        #
+        # Each term is also available on its own, for example as
+        # inputs.feedforward_aerodynamic_force. Whichever aerodynamic source is chosen
+        # only changes what the controller asks for. The Wings always feel the UVLM
+        # torque.
         torque_desired = (
             inputs.feedforward_force
             + PROPORTIONAL_GAIN
@@ -429,7 +443,7 @@ def make_motor() -> tuple[
 #
 # wing_flap_inertia is the combined inertia of all of the drive's Wings, so it is twice
 # one Wing's. It reflects through the linkage to the motor as J^2 * wing_flap_inertia,
-# so the motor sees twice the reflected inertia of the per-wing example.
+# so the motor sees twice the reflected inertia that one Wing would give it.
 #
 # The drive starts at its reference's first motor position and velocity. Its feedforward
 # reads the reference at the entry nearest the motor's actual position

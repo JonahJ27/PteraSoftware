@@ -39,10 +39,11 @@ import pterasoftware as ps
 
 # Load the hardware's parameters from the JSON files in the flap_drive_parameters
 # directory next to this script, which the flap driven examples share: the model 5
-# wing's outline and mass (model_5_wing.json), the powertrain's motor, motor controller,
-# gearbox, and feedback gains (mad_m13_kv90_powertrain.json), and the crank linkage's
-# geometry (crank_linkage.json). Edit those files to change the hardware. The flight
-# condition and the simulation's settings are defined in this script, below.
+# wing's outline and mass (pterosaur_model_5_wing.json), the powertrain's motor, motor
+# controller, gearbox, and feedback gains (pterosaur_mad_m13_kv90_powertrain.json), and
+# the crank linkage's geometry (pterosaur_crank_linkage.json). Edit those files to
+# change the hardware. The flight condition and the simulation's settings are defined in
+# this script, below.
 PARAMETERS_DIRECTORY = Path(__file__).resolve().parent / "flap_drive_parameters"
 
 
@@ -53,11 +54,11 @@ def load_parameters(file_name: str) -> dict[str, Any]:
     return parameters
 
 
-wing_parameters = load_parameters("model_5_wing.json")
-powertrain_parameters = load_parameters("mad_m13_kv90_powertrain.json")
+wing_parameters = load_parameters("pterosaur_model_5_wing.json")
+powertrain_parameters = load_parameters("pterosaur_mad_m13_kv90_powertrain.json")
 motor_parameters = powertrain_parameters["motor"]
 motor_controller_parameters = powertrain_parameters["motor_controller"]
-crank_parameters = load_parameters("crank_linkage.json")
+crank_parameters = load_parameters("pterosaur_crank_linkage.json")
 
 # Define the initial flight condition, the flap frequency, and the simulation's time
 # steps. The vehicle holds its initial state for PRESCRIBED_NUM_STEPS time steps (one
@@ -124,15 +125,15 @@ flap_reference = ps.flap_drive.FlapReference.constant_velocity(
 )
 
 # Define the main Wing as the blade element theory code's model 5 wing (calcWingGeom
-# with model_type = 5), whose outline and mass are in model_5_wing.json. calcWingGeom
-# gives the wing's leading and trailing edge points in millimeters, for a wing of the
-# outline reference length (1.2 meters), with the shoulder at the origin, the x axis
-# pointing aft, and the y axis pointing out along the span. That code scales them to its
-# wingspan of 2 * (spar length + shoulder offset) meters (the 2.09 meter spar plus its
-# 7.5 centimeter offset from the shoulder, per side), so SCALE_M_PER_MM converts them to
-# meters at that wingspan. The trailing edge runs from the shoulder to the wing's
-# connection point and then out to the tip, and the tip is closed by a chordwise edge
-# from the last trailing edge point to the last leading edge point.
+# with model_type = 5), whose outline and mass are in pterosaur_model_5_wing.json.
+# calcWingGeom gives the wing's leading and trailing edge points in millimeters, for a
+# wing of the outline reference length (1.2 meters), with the shoulder at the origin,
+# the x axis pointing aft, and the y axis pointing out along the span. That code scales
+# them to its wingspan of 2 * (spar length + shoulder offset) meters (the 2.09 meter
+# spar plus its 7.5 centimeter offset from the shoulder, per side), so SCALE_M_PER_MM
+# converts them to meters at that wingspan. The trailing edge runs from the shoulder to
+# the wing's connection point and then out to the tip, and the tip is closed by a
+# chordwise edge from the last trailing edge point to the last leading edge point.
 MODEL_5_WINGSPAN = 2.0 * (
     wing_parameters["spar_length_m"] + wing_parameters["shoulder_offset_m"]
 )
@@ -208,11 +209,11 @@ for i, y_mm in enumerate(station_y_mm):
     )
 
 # Define the model 5 wing's mass properties, which have two parts (see
-# model_5_wing.json). The leading edge is a carbon fiber tube (the blade element theory
-# code's leading_edge_shape = 6), and the membrane has the measured areal density from
-# that code's runSim. Both parts' masses and inertias about the shoulder are computed as
-# in that code's precomputeWingGeometry. The motor flaps the whole wing, so each
-# FlapDrive's wing inertia, WING_FLAP_INERTIA, is the sum of the tube's and the
+# pterosaur_model_5_wing.json). The leading edge is a carbon fiber tube (the blade
+# element theory code's leading_edge_shape = 6), and the membrane has the measured areal
+# density from that code's runSim. Both parts' masses and inertias about the shoulder
+# are computed as in that code's precomputeWingGeometry. The motor flaps the whole wing,
+# so each FlapDrive's wing inertia, WING_FLAP_INERTIA, is the sum of the tube's and the
 # membrane's. The torsional springs twist each strip about its leading edge, where the
 # tube sits, so the tube adds almost nothing to their twist inertia, and the springs get
 # only the membrane: wing_density is the membrane's areal density. (The torsional spring
@@ -381,7 +382,8 @@ example_movement = ps.movements.free_flight_movement.FreeFlightAeroelasticMoveme
 
 # Define the motor (the MAD M13 EEE KV90 at 48 V), its motor controller (an ODrive Pro),
 # and its gearbox, as in the flap_driven_aeroelastic_unsteady_crank example. The
-# motor's, motor controller's, and gearbox's values are in mad_m13_kv90_powertrain.json.
+# motor's, motor controller's, and gearbox's values are in
+# pterosaur_mad_m13_kv90_powertrain.json.
 TEST_VOLTAGE = motor_parameters["test_voltage_V"]
 SUPPLY_VOLTAGE = motor_parameters["supply_voltage_V"]
 measured_speeds = (
@@ -521,7 +523,7 @@ for wing_index in main_wing_indices:
 # don't act on it.
 example_problem = ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
     movement=example_movement,
-    wing_density=WING_DENSITY * 10,
+    wing_density=WING_DENSITY * 1000,
     spring_constant_rad=1000.0,
     damping_constant_rad=1000.0,
     mass=ROBOT_MASS,

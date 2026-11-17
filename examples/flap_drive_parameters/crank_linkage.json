@@ -1,9 +1,0 @@
-{
-  "description": "The crank linkage between the gearbox output and the wing, in the plane of the flap. The gearbox crank turns with the gearbox output, a rigid link joins it to the wing crank, and the wing crank turns with the wing about the shoulder. The gear ratio is the powertrain's.",
-  "gearbox_to_shoulder_y_m": 0.11,
-  "gearbox_to_shoulder_z_m": -0.05,
-  "wing_crank_length_m": 0.065,
-  "wing_crank_angle_offset_deg": 90.0,
-  "gearbox_crank_length_m": 0.032,
-  "linkage_length_m": 0.11
-}

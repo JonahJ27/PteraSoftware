@@ -36,6 +36,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 22 | A wing can't be driven by more than one FlapDrive | Control | Low |
 | 23 | The flap examples duplicate their wing and motor building code | Code health | Low |
 | 24 | The free wake is sensitive to the root spacing and passes through the V-tail | Geometry | Medium |
+| 25 | The flap drives ignore the wings' weight, and the feedforward has no gravity term | Control | Medium |
 
 ## Coupling
 
@@ -117,7 +118,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Why it matters.** The example demonstrates the coupling, not a flyable vehicle. Its trajectory says nothing about the robot.
 
-**Fix.** Build `mass` and `I_BP1_CgP1` from parts instead of placeholders, in a `vehicle.json` in `examples/flap_drive_parameters/` like the wing and powertrain: the body (fuselage, motors, and gearboxes, with their CG and inertia from the CAD model) plus, for each wing, both of its mass parts from `model_5_wing.json` (the leading edge tube as a line mass along the leading edge points, and the membrane as an areal mass over the outline), placed at the 0.205 m root offset and the mean flap angle, with the parallel axis terms. The rigid body sees the whole wing's mass, spar and membrane, unlike the torsional springs (item 4). The inertia stays constant during a run (item 2). Fix the wingbeat comment, or set `PRESCRIBED_NUM_STEPS` from the flap period. Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
+**Fix.** Build `mass` and `I_BP1_CgP1` from parts instead of placeholders, in a `vehicle.json` in `examples/flap_drive_parameters/` like the wing and powertrain: the body (fuselage, motors, and gearboxes, with their CG and inertia from the CAD model) plus, for each wing, both of its mass parts from `pterosaur_model_5_wing.json` (the leading edge tube as a line mass along the leading edge points, and the membrane as an areal mass over the outline), placed at the 0.205 m root offset and the mean flap angle, with the parallel axis terms. The rigid body sees the whole wing's mass, spar and membrane, unlike the torsional springs (item 4). The inertia stays constant during a run (item 2). Fix the wingbeat comment, or set `PRESCRIBED_NUM_STEPS` from the flap period. Find a trimmed initial state for a flapping vehicle, which needs a cycle averaged trim (the existing `trim.py` finds trim for prescribed motion and would need to work with flap drives). Size the tail for static stability.
 
 **Where.** The example, `trim.py`.
 
@@ -151,7 +152,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Priority:** Medium
 
-**Problem.** The model 5 wing's mass has two parts in `model_5_wing.json`: the leading edge tube (0.882 kg, 1.411 kg\*m^2 about the shoulder) and the membrane (0.0546 kg, 0.0500 kg\*m^2, from the blade element theory code's measured areal density). The examples give each `FlapDrive` both parts' inertia (1.461 kg\*m^2 per wing, twice that for the shared motor) and give the torsional springs only the membrane (`wing_density` = 0.0550 kg/m^2), because the strips twist about the leading edge, where the tube sits. Nothing in the package knows about the split: the problem only takes one `wing_density`, and a `FlapDrive` without `wing_flap_inertia` estimates its inertia from that density, which leaves out the spar. The free flight example also multiplies the density by 10 (a user setting).
+**Problem.** The model 5 wing's mass has two parts in `pterosaur_model_5_wing.json`: the leading edge tube (0.882 kg, 1.411 kg\*m^2 about the shoulder) and the membrane (0.0546 kg, 0.0500 kg\*m^2, from the blade element theory code's measured areal density). The examples give each `FlapDrive` both parts' inertia (1.461 kg\*m^2 per wing, twice that for the shared motor) and give the torsional springs only the membrane (`wing_density` = 0.0550 kg/m^2), because the strips twist about the leading edge, where the tube sits. Nothing in the package knows about the split: the problem only takes one `wing_density`, and a `FlapDrive` without `wing_flap_inertia` estimates its inertia from that density, which leaves out the spar. The free flight example also multiplies the density by 10 (a user setting).
 
 **Why it matters.** The split is correct only as long as each example passes both values by hand. A drive that relies on the estimate would miss most of the wing's inertia (about 97% of it for model 5). The torsional springs also triple the membrane's mass (item 3).
 
@@ -251,6 +252,23 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Where.** `flap_drive.py`, `_FlapDriveCoupling._prepare_flap_drives`.
 
+### 25. The flap drives ignore the wings' weight, and the feedforward has no gravity term
+
+**Priority:** Medium
+
+**Problem.** A wing's weight acts at its center of mass, which is outboard of the shoulder, so gravity puts a torque on the wing about the flap axis: about -m_w * g * r_cg * cos(phi) for a level body, where m_w is the wing's mass, r_cg is its center of mass's spanwise distance from the shoulder, and phi is the flap angle. Neither the flap drive's equation of motion nor its feedforward includes this torque. `single_wing_dynamics` sums only the fluid torque, the passive torques, and the inertial terms. The feedforward has inertial, damping, passive, and aerodynamic terms, but no gravity term. The blade element theory code's `singleWingDynamics` and its controllers leave gravity out too. In free flight, MuJoCo applies gravity to the rigid body, but not to the drives.
+
+**Why it matters.** For the pterosaur wing, the weight torque is roughly 10 N\*m per wing (the 0.88 kg leading edge tube has its center of mass about 1.1 m out), which the motor must carry through the downstroke and which helps it on the upstroke. That is a sizable fraction of the motor's torque reflected through the gearbox and the linkage. Leaving it out makes the downstroke look easier than it is and the upstroke look harder. For the FAAV wing, the torque is small (a few hundredths of a N\*m), but not zero.
+
+**Fix.**
+
+1. Add the weight torque to the wing side torque in `single_wing_dynamics`, so the wings feel it. It enters like the passive wing torque, multiplied by J when it is reflected to the actuator.
+2. Add a `feedforward_gravity` switch to `FlapDrive`, with a `feedforward_gravity_force` term in `FlapDriveInputs`, that cancels -J * T_gravity at the actual or desired flap angle, like the passive term.
+3. The torque needs each wing's mass and center of mass, which a `FlapDrive` doesn't have. Add them as `FlapDrive` arguments (summed over the drive's wings, like `wing_flap_inertia`), or derive them from the leading edge and membrane parts once item 4 moves that split into the package. The parameter JSON files would need each part's center of mass (the blade element theory code's `precomputeWingGeometry` already computes `leading_edge_COM` and `membrane_COM`).
+4. Take the gravity direction from the body's attitude: from the `OperatingPoint` in a prescribed run, and from MuJoCo's state in free flight (see item 18 for the controller's access to the `OperatingPoint`). For a mirrored wing, the sign follows the same flip as its fluid torque.
+
+**Where.** `flap_drive.py` (`single_wing_dynamics`, `FlapDrive`, `FlapDriveInputs`, the inverse dynamics controller), `_FlapDriveCoupling`, and the parameter JSON files.
+
 ## Averaging and Code Health
 
 ### 9. Cycle averaged results need a fixed period
@@ -303,13 +321,13 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Priority:** Medium
 
-**Problem.** To flap separately, the two halves of the main wing are split into two Wings whose roots are off the plane of symmetry. Each root edge then carries a bound vortex leg, and the two legs spin in opposite directions. Bound vortex legs have no core, so a free wake vertex near both sees a nearly singular velocity. With the roots 2 mm apart (an earlier version of the model 5 examples), the newest root wake vertices moved up to 208 m/s faster than the rest of the wake at a 20 m/s airspeed, ended up meters out of place, and dragged the first wingbeat's wake corners out to 12 m from the centerline. With the CAD model's 410 mm root spacing (`root_offset_y_m` = 0.205 in `model_5_wing.json`), the worst vertex moves 23 m/s faster than the rest of the wake and the wake stays within the span. The remaining hot spot is where the main wing's inner wake passes through the V-tail, whose bound legs also have no core.
+**Problem.** To flap separately, the two halves of the main wing are split into two Wings whose roots are off the plane of symmetry. Each root edge then carries a bound vortex leg, and the two legs spin in opposite directions. Bound vortex legs have no core, so a free wake vertex near both sees a nearly singular velocity. With the roots 2 mm apart (an earlier version of the model 5 examples), the newest root wake vertices moved up to 208 m/s faster than the rest of the wake at a 20 m/s airspeed, ended up meters out of place, and dragged the first wingbeat's wake corners out to 12 m from the centerline. With the CAD model's 410 mm root spacing (`root_offset_y_m` = 0.205 in `pterosaur_model_5_wing.json`), the worst vertex moves 23 m/s faster than the rest of the wake and the wake stays within the span. The remaining hot spot is where the main wing's inner wake passes through the V-tail, whose bound legs also have no core.
 
 **Why it matters.** The wing and tail loads come from the same velocity field, so a wake vertex thrown near a surface corrupts the loads, not only the picture. Runs of the model 5 examples made with the 2 mm root spacing shouldn't be trusted near the root.
 
 **Fix.** Keep the roots at the real body's spacing, never a token gap. For the tail, give bound vortex legs a small core when they act on wake points, or truncate or cut the wake where it meets a downstream surface. A prescribed wake (`prescribed_wake=True`) avoids both, at the cost of the wake's rollup.
 
-**Where.** The examples and `model_5_wing.json`. A core on bound legs would be in `unsteady_ring_vortex_lattice_method.py`, where `_current_bound_r_c0s` is zero except for the trailing legs.
+**Where.** The examples and `pterosaur_model_5_wing.json`. A core on bound legs would be in `unsteady_ring_vortex_lattice_method.py`, where `_current_bound_r_c0s` is zero except for the trailing legs.
 
 ### 17. A saved problem can't be rerun
 
