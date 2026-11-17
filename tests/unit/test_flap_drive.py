@@ -7,11 +7,101 @@ from typing import Any
 import numpy as np
 import numpy.testing as npt
 
-from pterasoftware import flap_drive
+from pterasoftware import crank_linkage, flap_drive
 from pterasoftware import operating_point as operating_point_mod
 from tests.unit.fixtures import flap_drive_fixtures
 
 WING_INERTIA = 0.4
+
+# These are cases computed with the blade element theory code's MATLAB
+# singleWingDynamics (MATLAB R2025b), for a cross check of
+# FlapDrive.single_wing_dynamics. The setup is the pterosaur crank linkage (gearbox to
+# shoulder offsets 0.11 m and -0.05 m, a 0.065 m wing crank at pi / 2 to the wing, a
+# 0.032 m gearbox crank, and a 0.11 m link) with a 15:1 gearbox, a 0.0004158 kg*m^2
+# rotor with 0.001 N*m*s/rad of damping, a motor spring of 0.3 N*m/rad about 0.1 rad, a
+# wing spring of 5.0 N*m/rad about -0.2 rad, and the model 5 wing, whose inertia about
+# the flap axis that code computes as _MATLAB_WING_INERTIA. Each case is (motor position
+# (rad), motor velocity (rad/s), applied motor torque (N*m), the aerodynamic reaction
+# torque on the wing that its blade element theory model computed (N*m), and its
+# outputs: the motor acceleration (rad/s^2), the flap acceleration (rad/s^2), and
+# wing_torques.total, the torque the linkage supplies to the wing (N*m)). That code's
+# torques are reaction torques, so the fluid torque on the wing is the negative of the
+# aerodynamic reaction torque.
+_MATLAB_WING_INERTIA = 1.46104774864228
+_MATLAB_SINGLE_WING_DYNAMICS_CASES = (
+    (
+        0.3,
+        373.25131775386097,
+        -0.98009024549762802,
+        -23.091272511606999,
+        -1228.1299227500999,
+        472.25359547361899,
+        665.33527599096396,
+    ),
+    (
+        32.153094636450199,
+        -109.351603019656,
+        -0.87062078862560799,
+        -66.689097230038897,
+        -5349.4718137604495,
+        -160.072308327071,
+        -298.13498499815103,
+    ),
+    (
+        64.0061892729004,
+        501.45025341865102,
+        2.4815680635814501,
+        -238.42918963465999,
+        -28892.674426150599,
+        319.51098026136202,
+        231.07006938728401,
+    ),
+    (
+        95.859283909350594,
+        352.98659660359903,
+        1.36428401567644,
+        5.0722052374009499,
+        -68726.299552950994,
+        195.860905526636,
+        289.68124184093699,
+    ),
+    (
+        127.712378545801,
+        250.86163937199601,
+        6.2544520405727804,
+        104.45758069530299,
+        -23098.841106787699,
+        -676.29424039542596,
+        -881.03904473400496,
+    ),
+    (
+        143.63892586402599,
+        -6.99568241924867,
+        -5.7820089147411302,
+        -13.9235079708256,
+        -116261.086664348,
+        202.05996959501701,
+        284.88842016224498,
+    ),
+    (
+        159.565473182251,
+        275.44147921764801,
+        5.4514760957385997,
+        -138.93225679528501,
+        -39056.970278010798,
+        843.20504011574997,
+        1095.5564722531201,
+    ),
+    (
+        191.41856781870101,
+        265.34576067823502,
+        -4.85447599310067,
+        19.716261191079798,
+        -132747.10844267701,
+        -723.79906628244999,
+        -1039.3088586086001,
+    ),
+)
 
 
 class TestFlapTransmission(unittest.TestCase):
@@ -1931,3 +2021,75 @@ class TestFeedforwardTerms(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSingleWingDynamicsMatchesMatlab(unittest.TestCase):
+    """This is a class with functions to test that FlapDrive.single_wing_dynamics
+    reproduces the blade element theory code's MATLAB singleWingDynamics."""
+
+    def test_matches_matlab_single_wing_dynamics(self) -> None:
+        """Test that, given the same motor state, applied torque, aerodynamic torque,
+        linkage, wing inertia, damping, and springs, single_wing_dynamics gives the same
+        motor acceleration, flap acceleration, and wing side torque as the MATLAB code,
+        to near machine precision."""
+        transmission = crank_linkage.CrankLinkage(
+            gearbox_to_shoulder_y=0.11,
+            gearbox_to_shoulder_z=-0.05,
+            wing_crank_length=0.065,
+            wing_crank_angle_offset_rad=np.pi / 2.0,
+            gearbox_crank_length=0.032,
+            linkage_length=0.11,
+            gear_ratio=15.0,
+        )
+        for case in _MATLAB_SINGLE_WING_DYNAMICS_CASES:
+            (
+                motor_position,
+                motor_velocity,
+                motor_torque,
+                aerodynamic_reaction_torque,
+                expected_motor_acceleration,
+                expected_flap_acceleration,
+                expected_wing_side_torque,
+            ) = case
+            with self.subTest(motor_position=motor_position):
+
+                def actuator(
+                    inputs: flap_drive.FlapDriveInputs, torque: float = motor_torque
+                ) -> float:
+                    return torque
+
+                drive = flap_drive.FlapDrive(
+                    wing_indices=(0,),
+                    transmission=transmission,
+                    actuator=actuator,
+                    actuator_inertia=0.0004158,
+                    actuator_damping=0.001,
+                    passive_wing_torque_function=lambda angle, rate: -5.0
+                    * (angle + 0.2),
+                    passive_actuator_force_function=lambda position, rate: -0.3
+                    * (position - 0.1),
+                    wing_flap_inertia=_MATLAB_WING_INERTIA,
+                    reference=flap_drive_fixtures.make_hold_reference_fixture(),
+                    use_position_lookup=False,
+                )
+                inputs = drive.inverse_dynamics_controller(
+                    0.0,
+                    motor_position,
+                    motor_velocity,
+                    measured_fluid_torque=-aerodynamic_reaction_torque,
+                    computed_wing_flap_inertia=_MATLAB_WING_INERTIA,
+                )
+                accelerations = drive.single_wing_dynamics(
+                    inputs, fluid_torque=-aerodynamic_reaction_torque
+                )
+                for actual, expected in (
+                    (accelerations.actuator_acceleration, expected_motor_acceleration),
+                    (
+                        accelerations.angleSecondDerivativeXRad_Gs_to_Wn_ixyz,
+                        expected_flap_acceleration,
+                    ),
+                    (accelerations.transmission_torque, expected_wing_side_torque),
+                ):
+                    self.assertAlmostEqual(
+                        actual, expected, delta=1e-10 * abs(expected)
+                    )

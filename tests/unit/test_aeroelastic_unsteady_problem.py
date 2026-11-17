@@ -3,7 +3,7 @@
 import time
 import unittest
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import numpy as np
@@ -143,13 +143,13 @@ def _spring_method_errors(
     duration: float = 0.005,
 ) -> dict[str, tuple[float, float, float]]:
     """Solves one strip's time step with several methods, under a moment that ramps
-    linearly so that the exact answer is known in closed form, and returns each
-    method's error.
+    linearly so that the exact answer is known in closed form, and returns each method's
+    error.
 
     The methods are the analytical solve (_spring_analytical_ode), the existing
     numerical solve (_spring_numerical_ode, which uses solve_ivp's default RK45), and
-    solve_ivp's Radau and LSODA methods with the same tolerances as the existing one
-    and the exact Jacobian.
+    solve_ivp's Radau and LSODA methods with the same tolerances as the existing one and
+    the exact Jacobian.
 
     Each error is measured against the closed form solution and divided by a scale for
     the solution, instead of by the exact value itself, which can be near zero. The
@@ -191,12 +191,16 @@ def _spring_method_errors(
         angle_scale_rad * float(np.sqrt(k / inertia)),
     )
 
-    def solve_ivp_method(method: str) -> tuple[float, float]:
+    def derivative(time_s: float, state: np.ndarray) -> list[float]:
+        """Returns the time derivative of the state (theta, d(theta)/dt)."""
+        return [state[1], (forcing(time_s) - c * state[1] - k * state[0]) / inertia]
+
+    def solve_ivp_method(method: Literal["Radau", "LSODA"]) -> tuple[float, float]:
         """Integrates the time step with one of solve_ivp's implicit methods."""
         solution = solve_ivp(
-            lambda s, y: [y[1], (forcing(s) - c * y[1] - k * y[0]) / inertia],
-            (t[0], t[-1]),
-            [theta0_rad, theta_derivative0_rad],
+            derivative,
+            (float(t[0]), float(t[-1])),
+            np.array([theta0_rad, theta_derivative0_rad], dtype=float),
             method=method,
             jac=[[0.0, 1.0], [-k / inertia, -c / inertia]],
             rtol=problems_module._SPRING_ODE_RELATIVE_TOLERANCE,
@@ -1366,8 +1370,8 @@ class TestSpringAnalyticalOde(unittest.TestCase):
     def test_more_accurate_than_numerical_methods(self) -> None:
         """Test that, against the exact solution, the analytical solve is at least as
         accurate as the existing numerical solve (RK45) and as solve_ivp's Radau and
-        LSODA methods at the same tolerances, for heavy to light strips in every
-        damping regime that RK45 can finish quickly."""
+        LSODA methods at the same tolerances, for heavy to light strips in every damping
+        regime that RK45 can finish quickly."""
         for inertia in (10.0, 1e-1, 1e-3):
             for name, (k, c) in self._damping_cases(inertia).items():
                 with self.subTest(inertia=inertia, damping=name):

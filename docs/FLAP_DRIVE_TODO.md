@@ -17,7 +17,6 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 3 | The strip mass and inertia estimate is three times too large | Inertia | High |
 | 4 | A measured wing inertia and the torsional springs' strip inertia can disagree | Inertia | High |
 | 5 | The free flight aeroelastic code is unverified work in progress | Free flight | High |
-| 6 | There are no integration tests or regression results for flap driven runs | Testing | High |
 | 7 | The example airframe is untrimmed and uses placeholder mass properties | Free flight | Medium |
 | 8 | The flap trajectory is a precomputed table, not a controller | Control | Medium |
 | 9 | Cycle averaged results need a fixed period | Averaging | Medium |
@@ -351,26 +350,12 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 ## Testing and Documentation
 
-### 6. There are no integration tests or regression results for flap driven runs
-
-**Priority:** High
-
-**Problem.** The flap drive feature has unit tests, but no integration tests in `tests/integration/`, and no saved expected results. When the trajectory handling was reworked, no before and after comparison was possible, because the old code was untracked. Every later refactor (the y and z only movement arguments, the separate controller and physics torques, the mixin) is covered only by unit tests and short runs.
-
-**Why it matters.** A change that shifts results slightly would go unnoticed.
-
-**Fix.** Add integration tests for `FlapDrivenAeroelasticUnsteadyProblem` and `FreeFlightFlapDrivenAeroelasticUnsteadyProblem` that solve a small case and compare the flap histories and the cycle averaged loads with stored values. Rerun the four flap examples and store their outputs in `docs/examples_expected_output/`. Add the cross check against the MATLAB `singleWingDynamics` on identical inputs that the original plan called for.
-
-Also add a test that one shared drive and one drive per wing agree. A one-off script checked this: on a symmetric airplane, a shared drive with twice the actuator inertia, twice the wing inertia, and twice the actuator force matched two per-wing drives. The flap angles agreed to 1e-8 rad in a prescribed run and 1e-5 rad in free flight, the shared drive's fluid torque was the sum of the per-wing torques, and the left and right per-wing drives matched each other. That comparison isn't in the test suite yet.
-
-**Where.** `tests/integration/`, `docs/examples_expected_output/`.
-
 ### 20. Documentation and test coverage gaps
 
 **Priority:** Low
 
 - `CLASSES_AND_IMMUTABILITY.md` doesn't describe the flap drive classes, and `test_slots.py` doesn't cover them.
 - `CLAUDE.md`'s architecture list doesn't list `flap_drive.py`, `crank_linkage.py`, `motor_saturation.py`, `flap_driven_aeroelastic_unsteady_problem.py`, `free_flight_flap_driven_aeroelastic_unsteady_problem.py`, or `movements/flap_driven_aeroelastic_wing_movement.py`.
-- The free flight crank example, the shared motor example, and the scotch yoke example have no pages on the documentation website and no expected output. The crank example's stored output predates the model 5 wing.
-- `_advance_flap_drives`'s docstring still has a note to check that it works with one drive per wing and with one drive for both wings. That has been checked (see item 6), so the note can be removed.
+- The flap examples have no pages on the documentation website. Their outputs are stored in `docs/examples_expected_output/` (the three prescribed flap examples save their wing kinematics, motor dynamics, and motor operating point figures, and the free flight example saves its drawings, animation, and result plots).
+- `_advance_flap_drives`'s docstring still has a note to check that it works with one drive per wing and with one drive for both wings. That has been checked (`test_shared_drive_matches_per_wing_drives` in `tests/integration/test_flap_driven_aeroelastic_unsteady_ring_vortex_lattice_method.py`), so the note can be removed.
 - The development environment has pyvista 0.49.0 installed while `requirements_dev.txt` pins 0.48.4, so the `pinned-versions` hook fails.

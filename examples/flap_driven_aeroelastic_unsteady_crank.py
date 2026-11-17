@@ -619,4 +619,9 @@ limits_axis.legend(loc="best")
 limits_axis.grid(True)
 limits_figure.tight_layout()
 
+# Save the figures as PNG files, then show them.
+wing_figure.savefig("wing_kinematics.png", dpi=100)
+motor_figure.savefig("motor_dynamics.png", dpi=100)
+limits_figure.savefig("motor_operating_points.png", dpi=100)
+
 plt.show()
