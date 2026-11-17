@@ -64,10 +64,10 @@ crank_parameters = load_parameters("faav_crank_linkage.json")
 # time step sheds one row of wake panels, and the torsional springs' sampled forcing
 # loses accuracy as the time step grows relative to the flap period. The simulation runs
 # for NUM_FLAPS flaps.
-FLAP_FREQUENCY = 5.0
+FLAP_FREQUENCY = 6.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 6.0
-ANGLE_OF_ATTACK = 10.0
+ANGLE_OF_ATTACK = 20.0
 STEPS_PER_FLAP = 40
 NUM_FLAPS = 3
 DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP

@@ -3,6 +3,12 @@
 import pterasoftware as ps
 from tests.integration.fixtures import airplane_fixtures, operating_point_fixtures
 
+# These are the flapping free flight aeroelastic fixtures' time step (s) and their
+# prescribed and free time step counts, which match the flapping free flight fixtures'.
+FLAPPING_FREE_FLIGHT_DELTA_TIME = 0.01292
+FLAPPING_FREE_FLIGHT_PRESCRIBED_NUM_STEPS = 5
+FLAPPING_FREE_FLIGHT_FREE_NUM_STEPS = 10
+
 
 def make_static_validation_movement() -> ps.movements.movement.Movement:
     """This function creates a Movement with static geometry to be used as a fixture.
@@ -652,9 +658,9 @@ def make_simple_glider_free_flight_movement() -> (
     return simple_glider_free_flight_movement
 
 
-def make_flapping_free_flight_movement() -> (
-    ps.movements.free_flight_movement.FreeFlightMovement
-):
+def make_flapping_free_flight_movement(
+    explode_into_strips: bool = False,
+) -> ps.movements.free_flight_movement.FreeFlightMovement:
     """This function creates the flapping-wing FreeFlightMovement to be used as a
     fixture.
 
@@ -670,10 +676,14 @@ def make_flapping_free_flight_movement() -> (
     wake and exercise the strongly coupled free flight phase under oscillatory flapping
     loads while keeping the integration test affordable.
 
+    :param explode_into_strips: Whether the main Wing is exploded into one
+        WingCrossSection per spanwise strip. The default is False.
     :return flapping_free_flight_movement: FreeFlightMovement This is the flapping-wing
         FreeFlightMovement fixture.
     """
-    flapping_airplane = airplane_fixtures.make_flapping_free_flight_airplane()
+    flapping_airplane = airplane_fixtures.make_flapping_free_flight_airplane(
+        explode_into_strips
+    )
     flapping_operating_point = (
         operating_point_fixtures.make_flapping_free_flight_operating_point()
     )
@@ -775,3 +785,109 @@ def make_formation_validation_movement() -> ps.movements.movement.Movement:
     )
 
     return formation_validation_movement
+
+
+def make_flapping_aeroelastic_airplane_movement() -> (
+    ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement
+):
+    """This function creates the aeroelastic version of the flapping free flight
+    fixtures' AirplaneMovement.
+
+    It flaps the same Airplane (with its main Wing exploded into strips, which the
+    torsional springs need) through the same symmetric 15 degree, 1 Hz flap, but the two
+    halves of the main Wing are moved by AeroelasticWingMovements, so they deform. The
+    V-tail stays rigid and static.
+
+    :return flapping_aeroelastic_airplane_movement: AeroelasticAirplaneMovement This is
+        the AeroelasticAirplaneMovement fixture.
+    """
+    flapping_airplane = airplane_fixtures.make_flapping_free_flight_airplane(
+        explode_into_strips=True
+    )
+    wing_movements: list[
+        ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement
+        | ps.movements.wing_movement.WingMovement
+    ] = []
+    for wing_index, wing in enumerate(flapping_airplane.wings):
+        if wing_index in (0, 1):
+            wing_movements.append(
+                ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement(
+                    base_wing=wing,
+                    wing_cross_section_movements=[
+                        ps.movements.aeroelastic_wing_cross_section_movement.AeroelasticWingCrossSectionMovement(
+                            base_wing_cross_section=wing_cross_section
+                        )
+                        for wing_cross_section in wing.wing_cross_sections
+                    ],
+                    ampAngles_Gs_to_Wn_ixyz=(15.0, 0.0, 0.0),
+                    periodAngles_Gs_to_Wn_ixyz=(1.0, 0.0, 0.0),
+                )
+            )
+        else:
+            wing_movements.append(
+                ps.movements.wing_movement.WingMovement(
+                    base_wing=wing,
+                    wing_cross_section_movements=[
+                        ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                            base_wing_cross_section=wing_cross_section
+                        )
+                        for wing_cross_section in wing.wing_cross_sections
+                    ],
+                )
+            )
+
+    flapping_aeroelastic_airplane_movement = (
+        ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement(
+            base_airplane=flapping_airplane, wing_movements=wing_movements
+        )
+    )
+
+    return flapping_aeroelastic_airplane_movement
+
+
+def make_flapping_free_flight_aeroelastic_movement() -> (
+    ps.movements.free_flight_movement.FreeFlightAeroelasticMovement
+):
+    """This function creates the flapping free flight aeroelastic movement to be used as
+    a fixture.
+
+    It is the aeroelastic version of the flapping free flight movement fixture, with the
+    same initial OperatingPoint, time step, and prescribed and free time step counts.
+
+    :return flapping_free_flight_aeroelastic_movement: FreeFlightAeroelasticMovement
+        This is the FreeFlightAeroelasticMovement fixture.
+    """
+    flapping_free_flight_aeroelastic_movement = ps.movements.free_flight_movement.FreeFlightAeroelasticMovement(
+        airplane_movements=[make_flapping_aeroelastic_airplane_movement()],
+        operating_point_movement=ps.movements.free_flight_operating_point_movement.FreeFlightOperatingPointMovement(
+            base_operating_point=operating_point_fixtures.make_flapping_free_flight_operating_point()
+        ),
+        delta_time=FLAPPING_FREE_FLIGHT_DELTA_TIME,
+        prescribed_num_steps=FLAPPING_FREE_FLIGHT_PRESCRIBED_NUM_STEPS,
+        free_num_steps=FLAPPING_FREE_FLIGHT_FREE_NUM_STEPS,
+    )
+
+    return flapping_free_flight_aeroelastic_movement
+
+
+def make_flapping_held_aeroelastic_movement(
+    num_steps: int,
+) -> ps.movements.aeroelastic_movement.AeroelasticMovement:
+    """This function creates an AeroelasticMovement that flaps the flapping free flight
+    aeroelastic fixtures' Airplane while holding it at their initial OperatingPoint, as
+    the free flight fixture's prescribed time steps do.
+
+    :param num_steps: The number of time steps.
+    :return flapping_held_aeroelastic_movement: AeroelasticMovement This is the
+        AeroelasticMovement fixture.
+    """
+    flapping_held_aeroelastic_movement = ps.movements.aeroelastic_movement.AeroelasticMovement(
+        airplane_movements=[make_flapping_aeroelastic_airplane_movement()],
+        operating_point_movement=ps.movements.operating_point_movement.OperatingPointMovement(
+            base_operating_point=operating_point_fixtures.make_flapping_free_flight_operating_point()
+        ),
+        delta_time=FLAPPING_FREE_FLIGHT_DELTA_TIME,
+        num_steps=num_steps,
+    )
+
+    return flapping_held_aeroelastic_movement

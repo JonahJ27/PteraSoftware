@@ -666,7 +666,9 @@ def make_simple_glider_airplane() -> ps.geometry.airplane.Airplane:
     return simple_glider_airplane
 
 
-def make_flapping_free_flight_airplane() -> ps.geometry.airplane.Airplane:
+def make_flapping_free_flight_airplane(
+    explode_into_strips: bool = False,
+) -> ps.geometry.airplane.Airplane:
     """This function creates the flapping-wing Airplane used for free flight testing.
 
     This is the same airframe as the flapping-wing free flight example: a cambered main
@@ -687,6 +689,11 @@ def make_flapping_free_flight_airplane() -> ps.geometry.airplane.Airplane:
     test is a property of the continuous geometry and mass properties, not of the
     discretization.
 
+    :param explode_into_strips: Whether the main Wing is exploded into one
+        WingCrossSection per spanwise strip, which the aeroelastic structural model
+        needs. Exploding needs uniform spanwise spacing, so the main Wing's strips are
+        spaced uniformly when this is True and with cosine spacing otherwise. The
+        default is False.
     :return flapping_free_flight_airplane: Airplane This is the flapping-wing Airplane
         fixture.
     """
@@ -701,7 +708,9 @@ def make_flapping_free_flight_airplane() -> ps.geometry.airplane.Airplane:
                         Lp_Wcsp_Lpp=(0.0, 0.0, 0.0),
                         control_surface_symmetry_type="symmetric",
                         control_surface_hinge_point=0.75,
-                        spanwise_spacing="cosine",
+                        spanwise_spacing=(
+                            "uniform" if explode_into_strips else "cosine"
+                        ),
                     ),
                     ps.geometry.wing_cross_section.WingCrossSection(
                         airfoil=ps.geometry.airfoil.Airfoil(name="naca2412"),
@@ -721,6 +730,7 @@ def make_flapping_free_flight_airplane() -> ps.geometry.airplane.Airplane:
                 mirror_only=False,
                 symmetryNormal_G=(0.0, 1.0, 0.0),
                 symmetryPoint_G_Cg=(0.0, 0.0, 0.0),
+                explode_into_strips=explode_into_strips,
                 num_chordwise_panels=6,
                 chordwise_spacing="uniform",
             ),

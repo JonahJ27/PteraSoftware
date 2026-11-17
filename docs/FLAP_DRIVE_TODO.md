@@ -16,7 +16,6 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 2 | The free flight rigid body doesn't feel the motors' reaction torques, the wings' inertial loads, or the moving CG | Free flight | High |
 | 3 | The strip mass and inertia estimate is three times too large | Inertia | High |
 | 4 | A measured wing inertia and the torsional springs' strip inertia can disagree | Inertia | High |
-| 5 | The free flight aeroelastic code is unverified work in progress | Free flight | High |
 | 7 | The example airframe is untrimmed and uses placeholder mass properties | Free flight | Medium |
 | 8 | The flap trajectory is a precomputed table, not a controller | Control | Medium |
 | 9 | Cycle averaged results need a fixed period | Averaging | Medium |
@@ -36,6 +35,8 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 23 | The flap examples duplicate their wing and motor building code | Code health | Low |
 | 24 | The free wake is sensitive to the root spacing and passes through the V-tail | Geometry | Medium |
 | 25 | The flap drives ignore the wings' weight, and the feedforward has no gravity term | Control | Medium |
+| 26 | The wings' leading edge and membrane mass properties are computed, not measured | Inertia | Medium |
+| 27 | The flap examples' discretization hasn't been checked for convergence, nor their spring constants for sensitivity | Geometry | Medium |
 
 ## Coupling
 
@@ -91,24 +92,6 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Where.** `_assemble_interval_loads` in `problems.py` for the first level. `_mujoco_model.py`, the sub-iteration's state vector and weights, serialization, and rendering for the second.
 
-### 5. The free flight aeroelastic code is unverified work in progress
-
-**Priority:** High
-
-**Problem.** `FreeFlightAeroelasticUnsteadyProblem`, `FreeFlightAeroelasticMovement`, and `FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver` were committed as "BELIEVED WORKING, NEED TO DOUBLE CHECK". The flap driven free flight problem inherits from them unchanged. Known signs that they need review:
-
-- mypy reports errors in them: `free_flight_movement.py` uses `np` without importing it (line 397), assigns an `AirplaneMovement` to a variable typed `AeroelasticAirplaneMovement`, and passes `deformationAngles_Wcsp_to_Wcs_ixyz` to a method whose type doesn't accept it. `problems.py` passes a `FreeFlightAeroelasticMovement` where `AeroelasticMovement` is expected, and `AeroelasticUnsteadyProblem.__init__` accepts it through an `isinstance` check against both types.
-- `FreeFlightAeroelasticUnsteadyProblem.__slots__` declares `_wing_density`, `_spring_constant_rad`, and `_damping_constant_rad` again, which its parent already declares.
-- Its `__init__` has commented out arguments, and the file isn't formatted. Running the formatters on `problems.py` rewrites about 70 lines of it, so they are being kept off that file for now.
-- Its docstrings still describe the non aeroelastic free flight classes in places.
-- There are no unit tests for any of the three classes. The only tests that exercise them are the flap driven free flight tests.
-
-**Why it matters.** Every free flight result, with or without flap drives, depends on this code.
-
-**Fix.** Review it against `FreeFlightUnsteadyProblem` and `AeroelasticUnsteadyProblem` (with Jonah), fix the type errors and the duplicate slots, give the free flight aeroelastic movement a proper base class or protocol shared with `AeroelasticMovement` instead of the `isinstance` pair, format the file, update the docstrings, and add unit tests and an integration test.
-
-**Where.** `problems.py`, `movements/free_flight_movement.py`, `free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.py`, `output.py`.
-
 ### 7. The example airframe is untrimmed and uses placeholder mass properties
 
 **Priority:** Medium
@@ -158,6 +141,40 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 **Fix.** Let the problem take the spar separately (for example, a spar mass per unit span, or a callable that returns a strip's spar inertia about its leading edge), use spar plus membrane for the estimate of a drive's wing inertia, and use the membrane alone, plus the spar's small twist inertia about its own axis, for the springs. Fix item 3 first.
 
 **Where.** `flap_driven_aeroelastic_unsteady_problem.py` (`_calculate_wings_flap_inertia`), `problems.py` (strip inertias), the examples.
+
+### 26. The wings' leading edge and membrane mass properties are computed, not measured
+
+**Priority:** Medium
+
+**Problem.** Every wing's mass and inertia in `examples/flap_drive_parameters/` comes from the blade element theory code's `precomputeWingGeometry`, which models the wing from a few assumed dimensions rather than the built hardware:
+
+| Wing | Leading edge | Membrane |
+|---|---|---|
+| `pterosaur_model_5_wing.json` | 0.882 kg, 1.411 kg\*m^2 | 0.0550 kg/m^2, 0.0546 kg, 0.0500 kg\*m^2 |
+| `faav_small_wing.json` | 0.00484 kg, 0.000298 kg\*m^2 | 0.17 kg/m^2, 0.0140 kg, 0.000706 kg\*m^2 |
+| `faav_large_wing.json` | 0.00596 kg, 0.000558 kg\*m^2 | 0.17 kg/m^2, 0.0212 kg, 0.00164 kg\*m^2 |
+
+The inertias are about the flap axis at the shoulder. The assumptions behind them are uncertain:
+
+- The pterosaur's leading edge is modeled as a uniform 36 mm tube with a 2.5 mm wall. The real spar tapers from a 52.4 mm outer diameter with a 1.95 mm wall at the root to 28.1 mm with a 3.05 mm wall at the tip, and the BET code's comments give its measured weight as 0.858 kg without the 7.5 cm shoulder offset. The tube's inertia depends on where along the span its mass sits, which the taper moves inboard.
+- The FAAV's leading edge is modeled as a flat 5 mm by 1.5 mm carbon plate (BET_plotter's FAAV parameters). The FAAV's actual spar hasn't been checked.
+- The FAAV membrane density is 0.17 kg/m^2 from BET_plotter, but runSim labels 0.0550 kg/m^2 as approximately the FAAV membrane's density, a factor of 3 apart.
+- The membrane is a 0 thickness sheet over the outline, summed in 1 cm strips as point masses. Grommets, edge reinforcements, attachments, and the shoulder hardware aren't included. The BET code's strips also stop one strip short of the tip.
+- None of the wings' centers of mass are stored, though item 25 (gravity) needs them.
+
+**Why it matters.** The leading edge and membrane inertias set each FlapDrive's wing inertia, which the motor must accelerate (`wing_flap_inertia`), and the membrane's areal density sets the torsional springs' strip inertias (`wing_density`). An error here goes straight into the motor's required torque and its saturation, and into the wing's twist.
+
+**Fix.** For each wing (the pterosaur model 5 wing and both FAAV wings):
+
+1. Weigh the leading edge and the membrane separately, or the whole wing and one part.
+2. Measure the whole wing's inertia about the flap axis, for example with a bifilar or compound pendulum about the shoulder axis, or take it from a CAD model with the materials' measured densities.
+3. Find each part's spanwise center of mass (for example by balancing it).
+4. Compare all three with the JSON files, and update the files (adding the centers of mass).
+5. If the pterosaur's taper matters, replace the uniform tube with the tapered one in the inertia calculation.
+
+Item 4 (passing the split into the package) and item 7 (building the vehicle's mass properties from parts) both rely on these numbers.
+
+**Where.** `examples/flap_drive_parameters/` (the three wing files), and the examples that read them.
 
 ### 21. The torsional spring constants are placeholders, and the analytical spring solver has a light strip limit
 
@@ -338,6 +355,39 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 
 **Where.** The examples and `pterosaur_model_5_wing.json`. A core on bound legs would be in `unsteady_ring_vortex_lattice_method.py`, where `_current_bound_r_c0s` is zero except for the trailing legs.
 
+### 27. The flap examples' discretization hasn't been checked for convergence, nor their spring constants for sensitivity
+
+**Priority:** Medium
+
+**Problem.** The time step and the mesh of every flap example were chosen by hand, and no run has checked that refining them leaves the results unchanged. The two wings' meshes are equally fine relative to their spans (strips about 4.6 percent of the half span wide, with 6 chordwise panels), but the pterosaur's has weak spots that the FAAV's doesn't:
+
+| | Pterosaur model 5 | FAAV small |
+|---|---|---|
+| Panels per wing | 25 strips x 6 chordwise = 150 | 23 strips x 6 chordwise = 138 |
+| Strip width (spanwise_panel_width_m) | 100 mm target, 36 to 114 mm actual | 20 mm target, 2 to 30 mm actual |
+| Panel chordwise length | 0.8 to 146 mm, median 71 mm | 5 to 36 mm, median 36 mm |
+| Panel aspect ratio (span / chord) | median 1.3, 19 panels above 5, worst 313 | median 0.5, worst 4 |
+| Wake row length (air speed * time step) at 40 time steps per flap | 125 mm at 4 Hz and 20 m/s, about 1.8 times the trailing edge panels | 30 mm at 5 Hz and 6 m/s, about 0.8 times the trailing edge panels |
+
+- At the pterosaur's root, the model 5 chord grows from 5 mm (the 5 mm root_chord_m stand-in for the shoulder's zero chord) to 835 mm only 0.22 m outboard, so the first strip's panels are 0.8 mm long and 107 mm wide, and the trailing edge is steeply swept across the first two strips.
+- At the pterosaur's tip, the chord shrinks to 66 mm, so the last four strips' panels have aspect ratios of 4 to 8.
+- The pterosaur's wake rows are coarser than the panels that shed them, while the FAAV's are well matched.
+
+**Why it matters.** Every result the examples show (the lift, the fluid torque that loads the motor, whether the motor saturates, the twist, and in free flight the vehicle's motion) depends on the discretization. Without a convergence check, a difference between two designs could be a meshing artifact.
+
+**Fix.** For each wing (`pterosaur_model_5_wing.json`, `faav_small_wing.json`, and `faav_large_wing.json`), run the prescribed flap driven example with that wing and refine one parameter at a time:
+
+- STEPS_PER_FLAP (for example 40, 70, and 100), which also sets the wake row length.
+- num_chordwise_panels (for example 6, 9, and 12).
+- spanwise_panel_width_m in the wing's meshing settings (for example the current width, half of it, and a quarter of it).
+- For the pterosaur, also the root treatment: root_chord_m, and whether the first two strips need more panels or a different station layout near the shoulder.
+- The number of flaps before averaging (for example 3 and 5), so the startup transient is out of the averages.
+- The torsional spring_constant_rad and damping_constant_rad. Unlike the settings above, these are physical properties, not discretization, so this is a sensitivity sweep rather than a convergence check: every example uses the placeholder k = c = 1000.0 (item 21), which leaves the twist tiny (around 1e-8 rad on the FAAV wing), so the wings are effectively rigid. Sweep each over a few decades (for example 1, 10, 100, and 1000) on its own and together, to see where the twist starts to change the lift, the motor torque, and the saturation, and check the discretization again at the stiffness and damping finally chosen, because a flexible wing may need a finer time step than a rigid one.
+
+Compare the cycle averaged lift and thrust, the peak and cycle averaged motor torque, whether and where the motor saturates, and the tip twist. For the discretization settings, keep the coarsest setting at which each changes by less than a few percent from the finest, record the chosen settings (for example in each wing's meshing settings), and update the examples. For the spring constant and damping, record how sensitive each result is, and replace the placeholders with values measured on the wings (for example from the tip twist in flapping video, or a static twist and ring-down test) or tuned to match them. Free flight then needs one confirming run at the chosen settings, because its sub-iteration and body motion add their own sensitivity. ps.convergence.analyze_unsteady_convergence can't do this yet, because it rejects aeroelastic problems, so the sweep is manual (or that function could be extended to flap driven problems).
+
+**Where.** The flap examples, the `meshing` settings in `examples/flap_drive_parameters/`, and possibly `convergence.py`.
+
 ### 17. A saved problem can't be rerun
 
 **Priority:** Low
@@ -359,3 +409,8 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 - The flap examples have no pages on the documentation website. Their outputs are stored in `docs/examples_expected_output/` (the three prescribed flap examples save their wing kinematics, motor dynamics, and motor operating point figures, and the free flight example saves its drawings, animation, and result plots).
 - `_advance_flap_drives`'s docstring still has a note to check that it works with one drive per wing and with one drive for both wings. That has been checked (`test_shared_drive_matches_per_wing_drives` in `tests/integration/test_flap_driven_aeroelastic_unsteady_ring_vortex_lattice_method.py`), so the note can be removed.
 - The development environment has pyvista 0.49.0 installed while `requirements_dev.txt` pins 0.48.4, so the `pinned-versions` hook fails.
+- The free flight aeroelastic code (`FreeFlightAeroelasticUnsteadyProblem`, `FreeFlightAeroelasticMovement`, and `FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver`) is now covered by `tests/unit/test_free_flight_aeroelastic_unsteady_problem.py` and `tests/integration/test_free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.py`, but still has code cleanup left, none of which changes results:
+    - mypy errors: `movements/free_flight_movement.py` uses `np` without importing it, assigns an `AirplaneMovement` to a variable typed `AeroelasticAirplaneMovement`, and passes `deformationAngles_Wcsp_to_Wcs_ixyz` to a method whose type doesn't accept it. `problems.py` passes a `FreeFlightAeroelasticMovement` where `AeroelasticMovement` is expected, and `AeroelasticUnsteadyProblem.__init__` accepts it through an `isinstance` check against both types. A base class or protocol shared by the two movements would replace that pair.
+    - `FreeFlightAeroelasticUnsteadyProblem.__slots__` declares `_wing_density`, `_spring_constant_rad`, and `_damping_constant_rad` again, which its parent already declares.
+    - Its `__init__` has commented out arguments, and that part of `problems.py` isn't formatted (running the formatters on `problems.py` rewrites about 70 lines of it, so they are being kept off that file for now).
+    - Its docstrings still describe the non aeroelastic free flight classes in places.

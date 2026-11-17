@@ -9,6 +9,13 @@ from tests.integration.fixtures import (
     operating_point_fixtures,
 )
 
+# These are the flapping free flight aeroelastic fixtures' torsional spring parameters
+# and step discards. With them, the main Wing twists by up to about 0.6 rad.
+FLAPPING_AEROELASTIC_WING_DENSITY = 0.5
+FLAPPING_AEROELASTIC_SPRING_CONSTANT_RAD = 20.0
+FLAPPING_AEROELASTIC_DAMPING_CONSTANT_RAD = 1.0
+FLAPPING_AEROELASTIC_STEP_DISCARDS = 2
+
 
 def make_steady_validation_problem() -> ps.problems.SteadyProblem:
     """This function creates a SteadyProblem to be used as a fixture.
@@ -356,7 +363,9 @@ def make_simple_glider_free_flight_problem(
     return simple_glider_free_flight_problem
 
 
-def make_flapping_free_flight_problem() -> ps.problems.FreeFlightUnsteadyProblem:
+def make_flapping_free_flight_problem(
+    explode_into_strips: bool = False,
+) -> ps.problems.FreeFlightUnsteadyProblem:
     """This function creates the flapping-wing FreeFlightUnsteadyProblem to be used as a
     fixture.
 
@@ -367,11 +376,13 @@ def make_flapping_free_flight_problem() -> ps.problems.FreeFlightUnsteadyProblem
     terms are the body-axes products of inertia. No external loads are applied, so the
     airplane is driven only by its flapping aerodynamics, gravity, and inertia.
 
+    :param explode_into_strips: Whether the main Wing is exploded into one
+        WingCrossSection per spanwise strip. The default is False.
     :return flapping_free_flight_problem: FreeFlightUnsteadyProblem This is the
         flapping-wing FreeFlightUnsteadyProblem fixture.
     """
     flapping_free_flight_movement = (
-        movement_fixtures.make_flapping_free_flight_movement()
+        movement_fixtures.make_flapping_free_flight_movement(explode_into_strips)
     )
 
     # Derive the mass from the airplane's weight and gravitational field so that the
@@ -418,3 +429,63 @@ def make_unsteady_formation_validation_problem() -> ps.problems.UnsteadyProblem:
     )
 
     return unsteady_formation_validation_problem
+
+
+def make_flapping_free_flight_aeroelastic_problem(
+    spring_constant_rad: float = FLAPPING_AEROELASTIC_SPRING_CONSTANT_RAD,
+    damping_constant_rad: float = FLAPPING_AEROELASTIC_DAMPING_CONSTANT_RAD,
+    use_analytical_spring_solver: bool = False,
+) -> ps.problems.FreeFlightAeroelasticUnsteadyProblem:
+    """This function creates the flapping FreeFlightAeroelasticUnsteadyProblem to be
+    used as a fixture.
+
+    It has the same mass and inertia as the flapping free flight problem fixture, so
+    with very stiff springs it should fly the same way.
+
+    :param spring_constant_rad: The torsional spring constant (N*m/rad). The default is
+        FLAPPING_AEROELASTIC_SPRING_CONSTANT_RAD.
+    :param damping_constant_rad: The torsional damping constant (N*m*s/rad). The default
+        is FLAPPING_AEROELASTIC_DAMPING_CONSTANT_RAD.
+    :param use_analytical_spring_solver: Whether the torsional springs are solved
+        analytically. The default is False, the problem's own default.
+    :return flapping_free_flight_aeroelastic_problem:
+        FreeFlightAeroelasticUnsteadyProblem This is the
+        FreeFlightAeroelasticUnsteadyProblem fixture.
+    """
+    rigid_problem = make_flapping_free_flight_problem(explode_into_strips=True)
+    flapping_free_flight_aeroelastic_problem = (
+        ps.problems.FreeFlightAeroelasticUnsteadyProblem(
+            movement=movement_fixtures.make_flapping_free_flight_aeroelastic_movement(),
+            wing_density=FLAPPING_AEROELASTIC_WING_DENSITY,
+            spring_constant_rad=spring_constant_rad,
+            damping_constant_rad=damping_constant_rad,
+            mass=rigid_problem.mass,
+            I_BP1_CgP1=rigid_problem.I_BP1_CgP1,
+            step_discards=FLAPPING_AEROELASTIC_STEP_DISCARDS,
+            use_analytical_spring_solver=use_analytical_spring_solver,
+        )
+    )
+
+    return flapping_free_flight_aeroelastic_problem
+
+
+def make_flapping_held_aeroelastic_problem(
+    num_steps: int,
+) -> ps.problems.AeroelasticUnsteadyProblem:
+    """This function creates an AeroelasticUnsteadyProblem that flaps the flapping free
+    flight aeroelastic fixtures' Airplane, with the same structure, while holding it at
+    their initial OperatingPoint.
+
+    :param num_steps: The number of time steps.
+    :return flapping_held_aeroelastic_problem: AeroelasticUnsteadyProblem This is the
+        AeroelasticUnsteadyProblem fixture.
+    """
+    flapping_held_aeroelastic_problem = ps.problems.AeroelasticUnsteadyProblem(
+        movement=movement_fixtures.make_flapping_held_aeroelastic_movement(num_steps),
+        wing_density=FLAPPING_AEROELASTIC_WING_DENSITY,
+        spring_constant_rad=FLAPPING_AEROELASTIC_SPRING_CONSTANT_RAD,
+        damping_constant_rad=FLAPPING_AEROELASTIC_DAMPING_CONSTANT_RAD,
+        step_discards=FLAPPING_AEROELASTIC_STEP_DISCARDS,
+    )
+
+    return flapping_held_aeroelastic_problem

@@ -67,13 +67,13 @@ crank_parameters = load_parameters("pterosaur_crank_linkage.json")
 # forcing loses accuracy as the time step grows relative to the flap period. The vehicle
 # holds its initial state for PRESCRIBED_NUM_FLAPS flaps (one wingbeat), so the wake can
 # develop, and then flies freely for FREE_NUM_FLAPS flaps.
-FLAP_FREQUENCY = 3.5
+FLAP_FREQUENCY = 3.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
-AIR_SPEED = 20.0
-ANGLE_OF_ATTACK = 10.0
+AIR_SPEED = 10.0
+ANGLE_OF_ATTACK = 20.0
 STEPS_PER_FLAP = 40
 PRESCRIBED_NUM_FLAPS = 1
-FREE_NUM_FLAPS = 3
+FREE_NUM_FLAPS = 10
 DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
 PRESCRIBED_NUM_STEPS = PRESCRIBED_NUM_FLAPS * STEPS_PER_FLAP
 FREE_NUM_STEPS = FREE_NUM_FLAPS * STEPS_PER_FLAP
