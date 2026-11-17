@@ -1,0 +1,31 @@
+{
+  "description": "The FAAV's powertrain, which flaps both wings with one motor: the T-Motor AT2303 1500KV motor (motor 4 in the blade element theory code), a motor controller, a gearbox, and the controller's feedback gains. The measured points are getMotorParams's, which it measured at test_voltage_V and fits its torque-speed and torque-current lines to. The supply voltage is a 4S battery's (the code's motor menu labels this motor's data as 16 V). The motor's peak duration, the motor controller, the gearbox's torque limit, the gains, and the damping are from the code's coupled wing simulation (bladeElementTheoryMotorLimitCoupledWingSim), which is set up for the FAAV.",
+  "motor": {
+    "name": "T-Motor AT2303 1500KV",
+    "test_voltage_V": 7.2,
+    "supply_voltage_V": 16.0,
+    "measured_speeds_rpm": [5870.0, 4908.0],
+    "measured_torques_N_m": [0.042, 0.050],
+    "measured_currents_A": [7.06, 8.20],
+    "rotor_inertia_kg_m2": 0.000001089,
+    "continuous_torque_N_m": 0.05938494167,
+    "peak_duration_s": 0.1,
+    "damping_N_m_s_per_rad": 0.000004
+  },
+  "motor_controller": {
+    "name": "FAAV motor controller (the coupled wing simulation's values, which its comments still call ODrive Pro limits, and whose brake current is a placeholder)",
+    "peak_current_A": 30.0,
+    "continuous_current_A": 15.0,
+    "peak_duration_s": 0.1,
+    "max_brake_current_A": 30.0
+  },
+  "gearbox": {
+    "gear_ratio": 23.04,
+    "max_torque_N_m": 20.0
+  },
+  "feedback_gains": {
+    "description": "Gains on the motor's position error (N*m/rad) and velocity error (N*m*s/rad), added to the feedforward torque.",
+    "proportional": 1.0,
+    "derivative": 0.01
+  }
+}

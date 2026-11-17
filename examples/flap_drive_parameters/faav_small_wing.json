@@ -1,0 +1,29 @@
+{
+  "description": "The FAAV's wing (the blade element theory code's calcFAAVWingGeom and the FAAV PARAMS block of its BET_plotter). The outline points are calcFAAVWingGeom's base wing, in millimeters, for a wing of outline_reference_length_m (two 330 mm wings), with the shoulder at the origin, the x axis pointing aft, and the y axis pointing out along the span. The leading edge is straight, and the trailing edge starts at the body attachment point, half the wing's length aft of the shoulder, runs straight out to half the wing's length, and then around a quarter circle to the tip (calcFAAVWingGeom steps it every millimeter; these are 11 equal angle steps). They are scaled to a wingspan of 2 * (spar_length_m + shoulder_offset_m), the FAAV's small, 430 mm wing (BET_plotter's wing; faav_large_wing.json is the 530 mm wing). The mass properties, for one wing, are in two parts, leading_edge and membrane, each computed as in that code's precomputeWingGeometry at this wingspan.",
+  "spar_length_m": 0.43,
+  "shoulder_offset_m": 0.0,
+  "outline_reference_length_m": 0.66,
+  "leading_edge_x_mm": [0.0, 0.0],
+  "leading_edge_y_mm": [0.0, 330.0],
+  "trailing_edge_x_mm": [165.0, 165.0, 163.3, 158.3, 150.1, 138.8, 124.7, 108.1, 89.2, 68.5, 46.5, 23.5, 0.0],
+  "trailing_edge_y_mm": [0.0, 165.0, 188.5, 211.5, 233.5, 254.2, 273.1, 289.7, 303.8, 315.1, 323.3, 328.3, 330.0],
+  "airfoil": "naca0004",
+  "leading_edge": {
+    "description": "A flat carbon fiber plate along the leading edge (leading_edge_shape = 1: 5 mm tall, 1.5 mm wide, and a density of 1500 kg/m^3). flap_inertia_kg_m2 is its inertia about the flap axis at the shoulder (its Ixx), from generateLeadingEdgeInertiaFlatPlate.",
+    "mass_kg": 0.004838,
+    "flap_inertia_kg_m2": 0.0002982
+  },
+  "membrane": {
+    "description": "The membrane, with BET_plotter's FAAV membrane areal density. (runSim instead labels 0.05503760903 kg/m^2 as approximately the FAAV membrane's density.) Its mass and its inertia about the flap axis at the shoulder are from generateWingMembraneInertiaScalar, which sums 1 cm spanwise strips over the outline as point masses at their midspans.",
+    "areal_density_kg_m2": 0.17,
+    "mass_kg": 0.01395,
+    "flap_inertia_kg_m2": 0.0007060
+  },
+  "meshing": {
+    "description": "How the outline becomes Ptera Software WingCrossSections. Leading edge points within merge_tolerance_mm of a trailing edge point share its station. The root chord replaces any zero chord (here only the tip's, as the root chord is half the wing's length). root_offset_y_m is each root's (and shoulder's) distance from the plane of symmetry, half of the FAAV's 25.30 mm center to center root spacing. Each wing flaps about its own root.",
+    "merge_tolerance_mm": 1.5,
+    "root_chord_m": 0.005,
+    "spanwise_panel_width_m": 0.02,
+    "root_offset_y_m": 0.01265
+  }
+}
