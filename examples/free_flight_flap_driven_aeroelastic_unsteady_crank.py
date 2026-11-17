@@ -24,7 +24,12 @@ docs/FLAP_DRIVE.md.
 The script will likely take a few minutes to run.
 """
 
+import datetime
+import importlib.metadata
 import json
+import shutil
+import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -47,10 +52,16 @@ import pterasoftware as ps
 PARAMETERS_DIRECTORY = Path(__file__).resolve().parent / "flap_drive_parameters"
 
 
+# This records every parameter file this script loads, by name, for the saved run's
+# metadata.
+loaded_parameters: dict[str, dict[str, Any]] = {}
+
+
 def load_parameters(file_name: str) -> dict[str, Any]:
     """Loads one of the JSON files of parameters in PARAMETERS_DIRECTORY."""
     with open(PARAMETERS_DIRECTORY / file_name, encoding="utf-8") as file:
         parameters: dict[str, Any] = json.load(file)
+    loaded_parameters[file_name] = parameters
     return parameters
 
 
@@ -79,6 +90,43 @@ PRESCRIBED_NUM_STEPS = PRESCRIBED_NUM_FLAPS * STEPS_PER_FLAP
 FREE_NUM_STEPS = FREE_NUM_FLAPS * STEPS_PER_FLAP
 NUM_STEPS = PRESCRIBED_NUM_STEPS + FREE_NUM_STEPS
 DURATION = NUM_STEPS * DELTA_TIME
+
+# Define how much wake to keep. Every time step sheds one row of wake ring vortices
+# behind each Wing, and each row interacts with every other, so without a limit each
+# time step costs more than the last, and a long run slows down sharply. Keeping only
+# the newest MAX_WAKE_FLAPS flaps of wake caps that cost, so the run time grows about
+# linearly with the flight time. The oldest rows, which are far behind the vehicle (or,
+# near hover, piled up under it), are dropped. Raise it for more accuracy, or set
+# MAX_WAKE_ROWS to None to keep the whole wake.
+MAX_WAKE_FLAPS = 2
+MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
+# MAX_WAKE_ROWS: int | None = None
+
+# Define whether to save each run. A run is saved right after the simulation, before any
+# plots open, in its own folder, saved_results/<this script's name>/<date and
+# time>_wake_<MAX_WAKE_ROWS>/, next to this script (git ignores saved_results), so no
+# run is ever overwritten. The folder always holds:
+#
+# - metadata.json, the run's settings: the flight condition, the time steps and the wake
+#   limit, the mass properties, the torsional springs, the FlapDrives' Wings, the
+#   hardware parameter files' contents, the simulation's run time, and the Ptera
+#   Software version and git commit.
+# - results.npz, the run's time histories, a few hundred kilobytes: each FlapDrive's
+#   flap and motor histories, its torque limit, and the fluid torque on its Wings, each
+#   main Wing's twist, the body's state, and the loads. Load it with numpy.load, or plot
+#   one or more runs with scripts/plot_saved_flap_runs.py.
+#
+# When the script runs through its windows, the folder also gets this script's figures
+# (wing_kinematics.png, motor_dynamics.png, motor_operating_points.png, and
+# vehicle_trajectory.png), the drawing (draw.webp), the animation (animate.webp), and
+# the result plots (named after the Airplane). The drawing, the animation, and the
+# result plots are also written to the current directory, as before.
+#
+# With SAVE_FULL_SOLVER, the folder also holds solver.psz, the whole solved solver (load
+# it with ps.load), which can redraw and reanimate the run but is large (it stores every
+# time step's Panels and wake).
+SAVE_RESULTS = True
+SAVE_FULL_SOLVER = False
 
 # Define the airframe's mass properties. These are placeholders: the inertia is the
 # free_flight_aeroelastic_unsteady_first_order_deformation_flapping example's, scaled by
@@ -385,6 +433,7 @@ example_movement = ps.movements.free_flight_movement.FreeFlightAeroelasticMoveme
     delta_time=DELTA_TIME,
     prescribed_num_steps=PRESCRIBED_NUM_STEPS,
     free_num_steps=FREE_NUM_STEPS,
+    max_wake_rows=MAX_WAKE_ROWS,
 )
 
 # Define the motor (the MAD M13 EEE KV90 at 48 V), its motor controller (an ODrive Pro),
@@ -544,8 +593,155 @@ example_solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.
     free_flight_unsteady_problem=example_problem,
 )
 
+simulation_start = time.perf_counter()
 example_solver.run(prescribed_wake=False, show_progress=True)
+simulation_run_time = time.perf_counter() - simulation_start
 print("The simulation has finished.")
+
+# Save the run (see SAVE_RESULTS above).
+if SAVE_RESULTS:
+    saved_at = datetime.datetime.now()
+    wake_label = "full" if MAX_WAKE_ROWS is None else str(MAX_WAKE_ROWS)
+    run_directory = (
+        Path(__file__).resolve().parent
+        / "saved_results"
+        / Path(__file__).stem
+        / f"{saved_at:%Y-%m-%d_%H-%M-%S}_wake_{wake_label}"
+    )
+    run_directory.mkdir(parents=True, exist_ok=True)
+    if SAVE_FULL_SOLVER:
+        ps.save(run_directory / "solver.psz", example_solver)
+
+    # Collect the run's time histories. The flap histories have one row per FlapDrive,
+    # the twist has one block per main Wing (one row per time step, one column per
+    # WingCrossSection, from root to tip), and the body states and loads have one row
+    # per time step. The body's state is from each time step's OperatingPoint, and the
+    # loads are the first Airplane's, in wind axes (relative to its CG for the moments).
+    times = np.arange(NUM_STEPS, dtype=float) * DELTA_TIME
+    operating_points = example_movement.operating_point_movement.operating_points
+    saved_airplanes = [
+        steady_problem.airplanes[0]
+        for steady_problem in example_problem.steady_problems
+    ]
+
+    def stacked_loads(name: str) -> np.ndarray:
+        """Stacks one of the first Airplane's load vectors over the time steps, with
+        NaNs for a time step that has none."""
+        return np.array(
+            [
+                (
+                    np.full(3, np.nan)
+                    if getattr(airplane, name) is None
+                    else getattr(airplane, name)
+                )
+                for airplane in saved_airplanes
+            ],
+            dtype=float,
+        )
+
+    np.savez_compressed(
+        run_directory / "results.npz",
+        times_s=times,
+        prescribed_num_steps=np.array(PRESCRIBED_NUM_STEPS),
+        flap_angles_rad=np.array(example_problem.flap_angles_rad, dtype=float),
+        flap_angle_derivatives_rad=np.array(
+            example_problem.flap_angle_derivatives_rad, dtype=float
+        ),
+        flap_angle_second_derivatives_rad=np.array(
+            example_problem.flap_angle_second_derivatives_rad, dtype=float
+        ),
+        motor_positions_rad=np.array(
+            example_problem.flap_actuator_positions, dtype=float
+        ),
+        motor_velocities_rad=np.array(
+            example_problem.flap_actuator_velocities, dtype=float
+        ),
+        motor_accelerations_rad=np.array(
+            example_problem.flap_actuator_accelerations, dtype=float
+        ),
+        motor_torques_N_m=np.array(example_problem.flap_actuator_forces, dtype=float),
+        motor_max_torques_N_m=np.array(
+            [[log[round(t, 9)] for t in times] for log in max_torque_possible_logs],
+            dtype=float,
+        ),
+        fluid_torques_N_m=np.array(example_problem.flap_fluid_torques, dtype=float),
+        deformation_angles_y_rad=np.array(
+            [
+                example_problem.listDeformationAnglesYRad_Wcsp_to_Wcs_ixyz[wing_index]
+                for wing_index in main_wing_indices
+            ],
+            dtype=float,
+        ),
+        speeds_m_per_s=np.array(
+            [point.vCg__E for point in operating_points], dtype=float
+        ),
+        alphas_deg=np.array([point.alpha for point in operating_points], dtype=float),
+        betas_deg=np.array([point.beta for point in operating_points], dtype=float),
+        angles_E_to_BP1_izyx_deg=np.array(
+            [point.angles_E_to_BP1_izyx for point in operating_points], dtype=float
+        ),
+        omegas_BP1__E_deg_per_s=np.array(
+            [point.omegas_BP1__E for point in operating_points], dtype=float
+        ),
+        positions_CgP1_E_Eo_m=np.array(
+            [point.CgP1_E_Eo for point in operating_points], dtype=float
+        ),
+        forces_W_N=stacked_loads("forces_W"),
+        moments_W_CgP1_N_m=stacked_loads("moments_W_CgP1"),
+        force_coefficients_W=stacked_loads("forceCoefficients_W"),
+        moment_coefficients_W_CgP1=stacked_loads("momentCoefficients_W_CgP1"),
+    )
+
+    # Record the git commit the run used, if this script is in a git repository.
+    try:
+        git_commit: str | None = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        git_commit = None
+
+    # Record the installed Ptera Software version, if it is installed.
+    try:
+        pterasoftware_version: str | None = importlib.metadata.version("pterasoftware")
+    except importlib.metadata.PackageNotFoundError:
+        pterasoftware_version = None
+
+    metadata = {
+        "example": Path(__file__).name,
+        "saved_at": saved_at.isoformat(timespec="seconds"),
+        "simulation_run_time_s": simulation_run_time,
+        "pterasoftware_version": pterasoftware_version,
+        "git_commit": git_commit,
+        "flap_frequency_hz": FLAP_FREQUENCY,
+        "air_speed_m_per_s": AIR_SPEED,
+        "angle_of_attack_deg": ANGLE_OF_ATTACK,
+        "steps_per_flap": STEPS_PER_FLAP,
+        "prescribed_num_flaps": PRESCRIBED_NUM_FLAPS,
+        "free_num_flaps": FREE_NUM_FLAPS,
+        "delta_time_s": DELTA_TIME,
+        "num_steps": NUM_STEPS,
+        "max_wake_flaps": MAX_WAKE_FLAPS,
+        "max_wake_rows": MAX_WAKE_ROWS,
+        "mass_kg": ROBOT_MASS,
+        "I_BP1_CgP1_kg_m2": [list(row) for row in I_BP1_CgP1],
+        "wing_density_kg_per_m2": example_problem.wing_density,
+        "spring_constant_rad": example_problem.spring_constant_rad,
+        "damping_constant_rad": example_problem.damping_constant_rad,
+        "use_analytical_spring_solver": example_problem.use_analytical_spring_solver,
+        "flap_drive_wing_indices": [
+            list(flap_drive.wing_indices) for flap_drive in example_problem.flap_drives
+        ],
+        "main_wing_indices": list(main_wing_indices),
+        "saved_full_solver": SAVE_FULL_SOLVER,
+        "parameter_files": loaded_parameters,
+    }
+    with open(run_directory / "metadata.json", "w", encoding="utf-8") as file:
+        json.dump(metadata, file, indent=2)
+    print(f"Saved the run to {run_directory}.")
 
 # Log the loads, and the vehicle's initial and final six-degree-of-freedom state.
 ps.output.log_results(solver=example_solver)
@@ -767,6 +963,17 @@ for axis in (flap_axis, speed_axis, altitude_axis, angle_axis, rate_axis):
     axis.grid(True)
 trajectory_figure.tight_layout()
 
+# Save this script's figures into the run's folder (see SAVE_RESULTS above), before the
+# drawing and the animation, which wait for key presses.
+if SAVE_RESULTS:
+    for figure, file_name in (
+        (wing_figure, "wing_kinematics.png"),
+        (motor_figure, "motor_dynamics.png"),
+        (limits_figure, "motor_operating_points.png"),
+        (trajectory_figure, "vehicle_trajectory.png"),
+    ):
+        figure.savefig(run_directory / file_name, dpi=100)
+
 # Draw the vehicle at its final pose. For a free flight solver, the geometry is drawn in
 # Earth axes where and how the vehicle ended up after the final time step. Press any key
 # to close the plotter after it draws the output.
@@ -777,16 +984,20 @@ ps.output.draw(
     show_wake_vortices=False,
     save=True,
 )
+if SAVE_RESULTS:
+    shutil.copy2("draw.webp", run_directory / "draw.webp")
 
 # Animate the vehicle flying along its computed trajectory, producing an animated WebP
-# saved in the same directory as this script. Press any key, after orienting the view,
-# to begin the animation.
+# saved in the current directory (and copied into the run's folder when the run is
+# saved). Press any key, after orienting the view, to begin the animation.
 ps.output.animate(
     unsteady_solver=example_solver,
     scalar_type="lift",
     show_wake_vortices=True,
     save=True,
 )
+if SAVE_RESULTS:
+    shutil.copy2("animate.webp", run_directory / "animate.webp")
 
 # Plot the loads and the vehicle's six-degree-of-freedom state against time, as the
 # other free flight examples do: the first Airplane's position, velocity, orientation,
@@ -797,3 +1008,9 @@ ps.output.plot_results_versus_time(
     show=True,
     save=True,
 )
+
+# Copy the result plots, which are named after the Airplane, into the run's folder.
+if SAVE_RESULTS:
+    airplane_file_name = example_airplane.name.lower().replace(" ", "_")
+    for plot_path in Path(".").glob(f"{airplane_file_name}_*.png"):
+        shutil.copy2(plot_path, run_directory / plot_path.name)

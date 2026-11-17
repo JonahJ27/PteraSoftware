@@ -37,6 +37,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 25 | The flap drives ignore the wings' weight, and the feedforward has no gravity term | Control | Medium |
 | 26 | The wings' leading edge and membrane mass properties are computed, not measured | Inertia | Medium |
 | 27 | The flap examples' discretization hasn't been checked for convergence, nor their spring constants for sensitivity | Geometry | Medium |
+| 28 | The wake length each flight condition needs hasn't been found | Geometry | High |
 
 ## Coupling
 
@@ -387,6 +388,34 @@ Item 4 (passing the split into the package) and item 7 (building the vehicle's m
 Compare the cycle averaged lift and thrust, the peak and cycle averaged motor torque, whether and where the motor saturates, and the tip twist. For the discretization settings, keep the coarsest setting at which each changes by less than a few percent from the finest, record the chosen settings (for example in each wing's meshing settings), and update the examples. For the spring constant and damping, record how sensitive each result is, and replace the placeholders with values measured on the wings (for example from the tip twist in flapping video, or a static twist and ring-down test) or tuned to match them. Free flight then needs one confirming run at the chosen settings, because its sub-iteration and body motion add their own sensitivity. ps.convergence.analyze_unsteady_convergence can't do this yet, because it rejects aeroelastic problems, so the sweep is manual (or that function could be extended to flap driven problems).
 
 **Where.** The flap examples, the `meshing` settings in `examples/flap_drive_parameters/`, and possibly `convergence.py`.
+
+### 28. The wake length each flight condition needs hasn't been found
+
+**Priority:** High
+
+**Problem.** The free flight examples keep only the newest MAX_WAKE_FLAPS flaps of wake (max_wake_rows), because a free wake's cost per time step grows with its length. The default of 2 flaps was chosen for speed, not accuracy, and the right length depends on the flight condition: in forward flight the old wake trails away behind the vehicle, but near hover it stays under the wing and keeps acting on it. A comparison of the FAAV free flight example near hover (10 Hz, 0.1 m/s, 80 degrees, 1 prescribed and 10 free flaps, 40 time steps per flap) shows how much it matters:
+
+| Wake kept | Run time | Mean free flight lift | Mean fluid torque on the wings | Final pitch | Final speed |
+|---|---|---|---|---|---|
+| Whole wake | 16.7 min | 1.71 N | 3.24 N\*m | 29 deg | 6.5 m/s |
+| 4 flaps (160 rows) | 7.8 min | 1.60 N (-7 percent) | 3.21 N\*m (-1 percent) | 59 deg | 5.5 m/s |
+| 2 flaps (80 rows) | 4.8 min | 1.39 N (-18 percent) | 3.17 N\*m (-2 percent) | 30 deg | 6.3 m/s |
+| 1 flap (40 rows) | 3.2 min | 1.29 N (-24 percent) | 3.18 N\*m (-2 percent) | 20 deg | 6.9 m/s |
+
+Each run matches the whole wake run exactly until its wake reaches its limit, and in the first flap after that its mean lift is already off by tens of percent. The lift depends strongly on the wake length here, while the fluid torque on the wings (the motor's load) barely does, so a short wake is enough to size the powertrain but not to predict the lift. The final states don't follow the wake length (the 4 flap run ends at 59 degrees of pitch, the others near 30), because free flight compounds small load differences into a different trajectory, so runs should be compared by their averaged loads, not their end states.
+
+At this low speed, the animation also shows the wake piling up into a tangle around the vehicle instead of trailing away, with a few wake vertices thrown far off, which is part of why the old wake keeps mattering.
+
+**Why it matters.** A wake that's too short changes the lift and the vehicle's motion by tens of percent near hover, while a whole wake makes long runs slow (the run time grows faster than the flight time). Low speed and hovering flight, likely the most important regime for a flapping vehicle, is where the needed wake is longest.
+
+**Fix.** For each wing (`pterosaur_model_5_wing.json`, `faav_small_wing.json`, `faav_large_wing.json`) and a range of flight conditions from hover to cruise (for example 0.1, 2, 6, and 20 m/s, at the flap frequencies and angles of attack of interest), sweep MAX_WAKE_FLAPS (for example 1, 2, 4, 8, and the whole wake):
+
+- Compare cycle averaged quantities flap by flap (the lift, the thrust, the fluid torque on the wings, and the motor torque), not their largest instantaneous difference, which free flight's diverging trajectories inflate. scripts/plot_saved_flap_runs.py compares saved runs, and a flap by flap table of means is easy to add to it.
+- Do most of the sweep with the vehicle held (the prescribed flap driven examples, or free flight with only prescribed flaps), so the trajectories can't diverge, and confirm the chosen length with one free flight run.
+- Express the result in a way that carries across conditions, for example in flaps near hover and in chord lengths traveled (air speed * time / chord) in forward flight, and pick the smallest length at which each quantity changes by less than a few percent.
+- Set each example's default from the result (or make it depend on the air speed), and note that item 27's discretization check should use a converged wake length.
+
+**Where.** The free flight examples' MAX_WAKE_FLAPS, and scripts/plot_saved_flap_runs.py.
 
 ### 17. A saved problem can't be rerun
 

@@ -195,3 +195,6 @@ draw.webp
 
 # These are the Claude's documentation files to ignore.
 /docs/CLAUDE_*.md
+
+# The free flight examples save their solved runs here.
+/examples/saved_results/
