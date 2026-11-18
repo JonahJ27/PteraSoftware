@@ -1638,46 +1638,99 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # cross r) at each leg center.
         bound_singularity_counts = np.zeros(3, dtype=np.int64)
         wake_singularity_counts = np.zeros(3, dtype=np.int64)
+
+        # Changed for speed: the four leg center stacks used to be passed to
+        # calculate_solution_velocity in four separate calls (the commented out block
+        # below), each evaluating every bound and wake ring vortex at its points.
+        # Neighboring ring vortices share legs (a Panel's right leg is the left leg of
+        # the Panel to its right, and its back leg is the front leg of the Panel behind
+        # it), so about 40% of these points appear twice, with exactly the same
+        # coordinates. The Biot-Savart kernel computes each point's velocity on its own,
+        # summing the vortices in a fixed order that doesn't depend on the other points,
+        # so a repeated point always gets exactly the same velocity. The four stacks are
+        # therefore evaluated together, once per distinct point, and each result is
+        # copied back to every leg that uses that point. The results are bit-identical
+        # to the four separate calls. The front, left, and back legs followed the same
+        # pattern as the right leg below, with their own stacks.
+        # octowrap: off
+        # stackVelocityRightLineVortexCenters_GP1__E = self._apply_body_rate(
+        #     self.stackCblvpr_GP1_CgP1,
+        #     self.calculate_solution_velocity(
+        #         stackP_GP1_CgP1=self.stackCblvpr_GP1_CgP1,
+        #         bound_singularity_counts=bound_singularity_counts,
+        #         wake_singularity_counts=wake_singularity_counts,
+        #     )
+        #     + self._calculate_current_movement_velocities(
+        #         self.stackCblvpr_GP1_CgP1, self._lastStackCblvpr_GP1_CgP1
+        #     ),
+        # )
+        # octowrap: on
+
+        # Stack the four legs' center points in the order right, front, left, back, so
+        # each leg's points are one contiguous block of num_panels rows.
+        num_panels = self.num_panels
+        stackAllLegCenters_GP1_CgP1 = np.concatenate(
+            (
+                self.stackCblvpr_GP1_CgP1,
+                self.stackCblvpf_GP1_CgP1,
+                self.stackCblvpl_GP1_CgP1,
+                self.stackCblvpb_GP1_CgP1,
+            )
+        )
+
+        # Find the distinct points. Each point's three coordinates are viewed as one
+        # block of raw bytes, so only points whose coordinates are equal bit for bit
+        # (including the sign of any zero) are merged. unique_indices picks one copy of
+        # each distinct point, and inverse_indices maps every leg center back to it.
+        legCenterKeys = (
+            np.ascontiguousarray(stackAllLegCenters_GP1_CgP1)
+            .view(np.dtype((np.void, 3 * stackAllLegCenters_GP1_CgP1.itemsize)))
+            .ravel()
+        )
+        _, unique_indices, inverse_indices = np.unique(
+            legCenterKeys, return_index=True, return_inverse=True
+        )
+
+        # Evaluate the induced velocity plus the freestream once at each distinct point,
+        # then copy it back to every leg center. The singularity counts now count a
+        # shared point once instead of twice. They only feed the log messages below, and
+        # leg centers are midpoints rather than vortex vertices, so they are normally
+        # zero.
+        stackUniqueLegCenterVelocities_GP1__E = self.calculate_solution_velocity(
+            stackP_GP1_CgP1=stackAllLegCenters_GP1_CgP1[unique_indices],
+            bound_singularity_counts=bound_singularity_counts,
+            wake_singularity_counts=wake_singularity_counts,
+        )
+        stackAllLegCenterVelocities_GP1__E = stackUniqueLegCenterVelocities_GP1__E[
+            inverse_indices.ravel()
+        ]
+
+        # Add each leg's movement velocity and body rate exactly as before, so every
+        # addition keeps its original operands and order.
         stackVelocityRightLineVortexCenters_GP1__E = self._apply_body_rate(
             self.stackCblvpr_GP1_CgP1,
-            self.calculate_solution_velocity(
-                stackP_GP1_CgP1=self.stackCblvpr_GP1_CgP1,
-                bound_singularity_counts=bound_singularity_counts,
-                wake_singularity_counts=wake_singularity_counts,
-            )
+            stackAllLegCenterVelocities_GP1__E[0:num_panels]
             + self._calculate_current_movement_velocities(
                 self.stackCblvpr_GP1_CgP1, self._lastStackCblvpr_GP1_CgP1
             ),
         )
         stackVelocityFrontLineVortexCenters_GP1__E = self._apply_body_rate(
             self.stackCblvpf_GP1_CgP1,
-            self.calculate_solution_velocity(
-                stackP_GP1_CgP1=self.stackCblvpf_GP1_CgP1,
-                bound_singularity_counts=bound_singularity_counts,
-                wake_singularity_counts=wake_singularity_counts,
-            )
+            stackAllLegCenterVelocities_GP1__E[num_panels : 2 * num_panels]
             + self._calculate_current_movement_velocities(
                 self.stackCblvpf_GP1_CgP1, self._lastStackCblvpf_GP1_CgP1
             ),
         )
         stackVelocityLeftLineVortexCenters_GP1__E = self._apply_body_rate(
             self.stackCblvpl_GP1_CgP1,
-            self.calculate_solution_velocity(
-                stackP_GP1_CgP1=self.stackCblvpl_GP1_CgP1,
-                bound_singularity_counts=bound_singularity_counts,
-                wake_singularity_counts=wake_singularity_counts,
-            )
+            stackAllLegCenterVelocities_GP1__E[2 * num_panels : 3 * num_panels]
             + self._calculate_current_movement_velocities(
                 self.stackCblvpl_GP1_CgP1, self._lastStackCblvpl_GP1_CgP1
             ),
         )
         stackVelocityBackLineVortexCenters_GP1__E = self._apply_body_rate(
             self.stackCblvpb_GP1_CgP1,
-            self.calculate_solution_velocity(
-                stackP_GP1_CgP1=self.stackCblvpb_GP1_CgP1,
-                bound_singularity_counts=bound_singularity_counts,
-                wake_singularity_counts=wake_singularity_counts,
-            )
+            stackAllLegCenterVelocities_GP1__E[3 * num_panels : 4 * num_panels]
             + self._calculate_current_movement_velocities(
                 self.stackCblvpb_GP1_CgP1, self._lastStackCblvpb_GP1_CgP1
             ),

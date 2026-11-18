@@ -185,6 +185,73 @@ class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):
         np.testing.assert_array_equal(self.solver._current_wake_r_c0s, expected)
 
 
+class TestUnsteadyRingVortexLatticeMethodSolverJoukowskiLegCenters(unittest.TestCase):
+    """Tests that the Joukowski loads evaluate each distinct leg center point once and
+    still give every leg exactly the velocity that evaluating its own points would."""
+
+    solver: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Solve an unsteady problem with moving geometry, so the leg centers' movement
+        velocities are not zero, and leave the solver at its final step."""
+        cls.solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+            problem_fixtures.make_pitching_tip_unsteady_problem_fixture()
+        )
+        cls.solver.run(show_progress=False)
+
+    def test_evaluates_each_distinct_leg_center_once(self) -> None:
+        """Test that the loads call calculate_solution_velocity once, on distinct points
+        only, and on fewer points than the four leg center stacks hold."""
+        solver_class = type(self.solver)
+        with patch.object(
+            solver_class,
+            "calculate_solution_velocity",
+            autospec=True,
+            side_effect=solver_class.calculate_solution_velocity,
+        ) as mock_velocity:
+            self.solver._calculate_loads_joukowski()
+
+        mock_velocity.assert_called_once()
+        points = mock_velocity.call_args.kwargs["stackP_GP1_CgP1"]
+        self.assertLess(points.shape[0], 4 * self.solver.num_panels)
+        self.assertEqual(np.unique(points, axis=0).shape[0], points.shape[0])
+
+    def test_leg_velocities_match_evaluating_each_leg_separately(self) -> None:
+        """Test that each leg's velocity, as passed to _apply_body_rate, is bit
+        identical to evaluating that leg's own center points in a separate call, as the
+        loads did before the distinct points were shared."""
+        solver = self.solver
+        last_stacks = {
+            id(solver.stackCblvpr_GP1_CgP1): solver._lastStackCblvpr_GP1_CgP1,
+            id(solver.stackCblvpf_GP1_CgP1): solver._lastStackCblvpf_GP1_CgP1,
+            id(solver.stackCblvpl_GP1_CgP1): solver._lastStackCblvpl_GP1_CgP1,
+            id(solver.stackCblvpb_GP1_CgP1): solver._lastStackCblvpb_GP1_CgP1,
+        }
+        solver_class = type(solver)
+        with patch.object(
+            solver_class,
+            "_apply_body_rate",
+            autospec=True,
+            side_effect=solver_class._apply_body_rate,
+        ) as mock_body_rate:
+            solver._calculate_loads_joukowski()
+
+        self.assertEqual(mock_body_rate.call_count, 4)
+        # The calls come in the order right, front, left, back.
+        for leg, call in zip(
+            ("right", "front", "left", "back"), mock_body_rate.call_args_list
+        ):
+            points, velocities = call.args[1], call.args[2]
+            with self.subTest(leg=leg):
+                expected = solver.calculate_solution_velocity(
+                    stackP_GP1_CgP1=points
+                ) + solver._calculate_current_movement_velocities(
+                    points, last_stacks[id(points)]
+                )
+                self.assertTrue(np.array_equal(velocities, expected))
+
+
 class TestUnsteadyRingVortexLatticeMethodSolverHookDefaults(unittest.TestCase):
     """Tests for the default implementations of the three solver extension hooks added
     to support coupled subclasses: _initialize_step_vortices,
