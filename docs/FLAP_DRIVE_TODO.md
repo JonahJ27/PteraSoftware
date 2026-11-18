@@ -38,6 +38,7 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 26 | The wings' leading edge and membrane mass properties are computed, not measured | Inertia | Medium |
 | 27 | The flap examples' discretization hasn't been checked for convergence, nor their spring constants for sensitivity | Geometry | Medium |
 | 28 | The wake length each flight condition needs hasn't been found | Geometry | High |
+| 29 | The examples don't report the reduced frequency or the advance ratio | Analysis | Medium |
 
 ## Coupling
 
@@ -416,6 +417,28 @@ At this low speed, the animation also shows the wake piling up into a tangle aro
 - Set each example's default from the result (or make it depend on the air speed), and note that item 27's discretization check should use a converged wake length.
 
 **Where.** The free flight examples' MAX_WAKE_FLAPS, and scripts/plot_saved_flap_runs.py.
+
+### 29. The examples don't report the reduced frequency or the advance ratio
+
+**Priority:** Medium
+
+**Problem.** Nothing in the flap examples, their saved metadata, or scripts/plot_saved_flap_runs.py computes the nondimensional numbers that say how unsteady a flight condition is. Each run is described only by its flap frequency, air speed, and angle of attack, so results from different wings, frequencies, and speeds can't be put on one scale. The numbers that matter are:
+
+- The reduced frequency, k = pi * f * c / V, with f the flap frequency, c the mean chord, and V the air speed. It is the ratio of the flapping time scale to the time the air takes to pass one chord.
+- The advance ratio, J = V / (2 * Phi * f * R), with Phi the stroke amplitude in radians and R the wing length. It is the ratio of the air speed to the mean wingtip flapping speed, and unlike k it stays finite near hover.
+- The Strouhal number, St = f * A / V, with A the tip's peak to peak excursion, which the convergence module already mentions for its delta_time estimate.
+
+For the FAAV small wing (mean chord about 0.19 m, R = 0.43 m, Phi = 60 degrees) at 10 Hz, k is about 6 at 1 m/s, 2 at 3 m/s, and 1 at 6 m/s, and J is about 0.11, 0.33, and 0.67. Every condition run so far is strongly unsteady (k well above 0.3), and near hover k diverges, which is why J is the better measure there.
+
+**Why it matters.** The overnight parameter study found that the steps per flap, the wake length, and the wake's behavior depend on the flight condition: a converged wake was about 1.2 m long at both 3 and 6 m/s, and near hover the wake never converged. Expressed in k or J, these results would carry over to the large wing, the pterosaur wing, and other frequencies instead of being redone for each. The numbers also say where a quasi-steady blade element theory model, which item 11's feedforward and any fast stand-in model would rely on, can be trusted (small k), and where only the UVLM can.
+
+**Fix.**
+
+- Add a small helper that computes k, J, and St from a Wing's mean chord and length, the flap frequency and stroke amplitude, and the air speed (the air speed relative to the vehicle in free flight, which changes during a run).
+- Print them in the flap examples and record them in each saved run's metadata.json, with their per flap values for free flight runs, where the air speed changes.
+- Add them to scripts/plot_saved_flap_runs.py's summary, and restate items 27 and 28's results (the steps per flap and the wake length each needs) against them.
+
+**Where.** The flap examples, their saved metadata, and scripts/plot_saved_flap_runs.py.
 
 ### 17. A saved problem can't be rerun
 

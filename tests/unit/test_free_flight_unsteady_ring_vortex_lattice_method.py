@@ -261,17 +261,20 @@ class TestFreeFlightSolverSubstepLifecycle(unittest.TestCase):
 
     def test_restore_substep_clears_transient_state(self) -> None:
         """Test that restore_substep re-evaluates the current step and clears every
-        transient sub-iteration slot.
+        transient sub-iteration slot except the frozen wake grid induced velocity.
 
         A leftover non-None slot would redirect the next step's geometry and wake reads
-        to a stale scratch copy, so the clearing is a correctness contract. The re-
-        evaluation of the current step's aerodynamics is stubbed, since reconstructing
-        it is the inherited solver's behavior, not this method's.
+        to a stale scratch copy, so the clearing is a correctness contract. The frozen
+        wake grid induced velocity is the exception: it is kept for the official wake
+        build, which reuses and clears it. The re-evaluation of the current step's
+        aerodynamics is stubbed, since reconstructing it is the inherited solver's
+        behavior, not this method's.
         """
+        frozen_velocities = [[np.zeros(3, dtype=float)]]
         self.solver._substep_next_step = 1
         self.solver._substep_next_steady_problem = MagicMock()
         self.solver._substep_next_operating_point = MagicMock()
-        self.solver._substepStackVIndGridWrvp_GP1__E = [[np.zeros(3, dtype=float)]]
+        self.solver._substepStackVIndGridWrvp_GP1__E = frozen_velocities
         self.solver._substep_gamma_n = np.ones(3, dtype=float)
         self.solver._substep_gamma_n_minus_1 = np.zeros(3, dtype=float)
 
@@ -285,6 +288,34 @@ class TestFreeFlightSolverSubstepLifecycle(unittest.TestCase):
         self.assertIsNone(self.solver._substep_next_step)
         self.assertIsNone(self.solver._substep_next_steady_problem)
         self.assertIsNone(self.solver._substep_next_operating_point)
-        self.assertIsNone(self.solver._substepStackVIndGridWrvp_GP1__E)
+        self.assertIs(self.solver._substepStackVIndGridWrvp_GP1__E, frozen_velocities)
         self.assertIsNone(self.solver._substep_gamma_n)
         self.assertIsNone(self.solver._substep_gamma_n_minus_1)
+
+    def test_populate_next_airplanes_wake_reuses_frozen_velocity(self) -> None:
+        """Test that the official wake build passes the frozen wake grid induced
+        velocity to the wake point update and then clears it, and passes None when there
+        is no frozen velocity (a prescribed step)."""
+        frozen_velocities = [[np.zeros(3, dtype=float)]]
+        self.solver._substepStackVIndGridWrvp_GP1__E = frozen_velocities
+
+        # The solver has slots, so patch the methods on its class.
+        solver_class = type(self.solver)
+        with (
+            patch.object(
+                solver_class, "_populate_next_airplanes_wake_vortex_points"
+            ) as mock_points,
+            patch.object(
+                solver_class, "_populate_next_airplanes_wake_vortices"
+            ) as mock_vortices,
+        ):
+            self.solver._populate_next_airplanes_wake()
+
+            mock_points.assert_called_once_with(frozen_velocities)
+            mock_vortices.assert_called_once_with()
+            self.assertIsNone(self.solver._substepStackVIndGridWrvp_GP1__E)
+
+            # A second build with no frozen velocity passes None, so the inherited wake
+            # build computes the velocity itself.
+            self.solver._populate_next_airplanes_wake()
+            self.assertIsNone(mock_points.call_args.args[0])

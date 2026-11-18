@@ -2733,6 +2733,25 @@ class UnsteadyRingVortexLatticeMethodSolver:
                         # to the induced velocity at the aged grid, computed up front
                         # for this call or supplied by a strongly coupled sub-iteration
                         # that reuses it across trials.
+                        #
+                        # The transport velocity has three terms, and only the first can
+                        # be reused:
+                        #   1. The induced velocity, stackVIndGridWrvp_GP1__E. It
+                        #      depends only on this time step's wake points, bound and
+                        #      wake geometry, and strengths, all of which are already
+                        #      solved and fixed. It does not depend on the next time
+                        #      step's OperatingPoint, so a strongly coupled free flight
+                        #      step can compute it once and reuse it for every trial and
+                        #      for the official wake build after the solve accepts.
+                        #   2. The freestream, convectionVInf_GP1__E, added below.
+                        #   3. The apparent velocity from body rotation, which
+                        #      _apply_body_rate adds below from
+                        #      convectionOmegasRad_GP1__E.
+                        # Terms 2 and 3 come from the next time step's OperatingPoint (a
+                        # trial's during a sub-iteration, the accepted one in the
+                        # official wake build), and are recomputed at the top of every
+                        # call, so a reused induced velocity never carries a stale body
+                        # state.
                         if self._prescribed_wake:
                             vGridWrvp_GP1__E = convectionVInf_GP1__E
                         else:

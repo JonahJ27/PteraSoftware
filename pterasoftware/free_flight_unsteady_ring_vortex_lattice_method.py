@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import cast
 
 import numpy as np
 
-from . import geometry, operating_point, problems
+from . import _functions, _logging, geometry, operating_point, problems
 from ._coupled_unsteady_ring_vortex_lattice_method import (
     CoupledUnsteadyRingVortexLatticeMethodSolver,
 )
+
+# The base solver's logger, so the wake grid singularity events this solver now logs in
+# freeze_substep read exactly as the official wake build logged them before.
+_logger = _logging.get_logger("unsteady_ring_vortex_lattice_method")
 
 # Body and geometry axes differ by a 180-degree rotation about y, so transforming a free
 # vector (such as an angular velocity) from the first Airplane's body axes to its
@@ -194,9 +199,9 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         clears them. The solver's current step, Airplanes, and strengths must be those
         of the step being solved, as they are when the run loop invokes the step solve.
 
-        The wake-grid induced velocity is recomputed by the official wake build after
-        the solve accepts, so its singularity events are logged there; the throwaway
-        counters here are not logged.
+        The official wake build after the solve accepts reuses this wake grid induced
+        velocity instead of recomputing it (the step's state it reads is the same), so
+        its singularity events are logged here.
 
         :param next_steady_problem: The transient SteadyProblem for the next step, built
             over a scratch copy of the prescribed next-step Airplane. Its OperatingPoint
@@ -217,6 +222,18 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
                 self._calculate_wake_grid_induced_velocities(
                     bound_singularity_counts, wake_singularity_counts
                 )
+            )
+            _functions.log_unexpected_singularity_counts(
+                _logger,
+                logging.DEBUG,
+                "_populate_next_airplanes_wake_vortex_points (bound)",
+                bound_singularity_counts,
+            )
+            _functions.log_unexpected_singularity_counts(
+                _logger,
+                logging.DEBUG,
+                "_populate_next_airplanes_wake_vortex_points (wake)",
+                wake_singularity_counts,
             )
 
         self._substep_gamma_n = self._current_bound_vortex_strengths.copy()
@@ -302,7 +319,9 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         intact per step geometry and wake, leaving the solver as if the step had just
         been solved. The previous strengths are restored first so the re-evaluation
         reproduces the original solve. Clears the transient sub-iteration state, so the
-        inherited reads revert to the canonical committed SteadyProblems.
+        inherited reads revert to the canonical committed SteadyProblems, except for the
+        frozen wake grid induced velocity, which the official wake build takes over (see
+        _populate_next_airplanes_wake).
 
         :param step: The current time step index (zero indexed).
         :return: None
@@ -320,6 +339,38 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         self._substep_next_step = None
         self._substep_next_steady_problem = None
         self._substep_next_operating_point = None
-        self._substepStackVIndGridWrvp_GP1__E = None
+        # Changed for speed: the frozen wake grid induced velocity is no longer cleared
+        # here. The official wake build reuses it and clears it in
+        # _populate_next_airplanes_wake, instead of recomputing the same array.
+        # self._substepStackVIndGridWrvp_GP1__E = None
         self._substep_gamma_n = None
         self._substep_gamma_n_minus_1 = None
+
+    def _populate_next_airplanes_wake(self) -> None:
+        """Updates the next time step's Airplanes' wakes.
+
+        After an accepted strongly coupled step, reuses the wake grid induced velocity
+        that freeze_substep computed, since this official wake build ages the same
+        step's wake from the same restored state, and then clears it so a later step
+        computes its own. On a prescribed step there is no frozen velocity (it is None),
+        so the inherited wake build computes it as usual.
+
+        :return: None
+        """
+        # The frozen array is only the induced (Biot-Savart) part of the wake transport
+        # velocity, which freeze_substep computed from this time step's solved wake,
+        # bound geometry, and strengths. The trials changed the body state, but not this
+        # time step's state, and restore_substep has put the solver back to it, so the
+        # array is exactly what the wake build would compute here. The parts that depend
+        # on the body state (the freestream and the apparent velocity from body
+        # rotation) are not in it: the wake build adds them fresh from the accepted next
+        # step OperatingPoint.
+        stackVIndGridWrvp_GP1__E = self._substepStackVIndGridWrvp_GP1__E
+        self._substepStackVIndGridWrvp_GP1__E = None
+
+        # Populate the locations of the next time step's Airplanes' wake ring vortex
+        # points, reusing the frozen induced velocity when there is one.
+        self._populate_next_airplanes_wake_vortex_points(stackVIndGridWrvp_GP1__E)
+
+        # Populate the locations of the next time step's Airplanes' wake ring vortices.
+        self._populate_next_airplanes_wake_vortices()
