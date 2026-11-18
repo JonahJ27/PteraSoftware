@@ -7,14 +7,17 @@ from typing import cast
 
 import numpy as np
 
-from . import _functions, _logging, geometry, operating_point, problems
+from . import _functions, geometry, operating_point, problems
 from .aeroelastic_unsteady_ring_vortex_lattice_method import (
     AeroelasticUnsteadyRingVortexLatticeMethodSolver,
 )
 
 # The base solver's logger, so the wake grid singularity events this solver now logs in
-# freeze_substep read exactly as the official wake build logged them before.
-_logger = _logging.get_logger("unsteady_ring_vortex_lattice_method")
+# freeze_substep read exactly as the official wake build logged them before. It is
+# imported rather than created here, because the logging setup sizes its name column
+# from the modules that create a logger, and this module does not log under its own
+# name.
+from .unsteady_ring_vortex_lattice_method import _logger
 
 # Body and geometry axes differ by a 180-degree rotation about y, so transforming a free
 # vector (such as an angular velocity) from the first Airplane's body axes to its
@@ -59,6 +62,7 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         "_substepStackVIndGridWrvp_GP1__E",
         "_substep_gamma_n",
         "_substep_gamma_n_minus_1",
+        "_substep_saved_state",
     )
 
     _models_body_rates = True
@@ -97,6 +101,10 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         self._substepStackVIndGridWrvp_GP1__E: list[list[np.ndarray]] | None = None
         self._substep_gamma_n: np.ndarray | None = None
         self._substep_gamma_n_minus_1: np.ndarray | None = None
+        # The saved solver state of the step being solved, keyed by attribute name.
+        # freeze_substep saves it before the trials overwrite the solver's attributes,
+        # and restore_substep puts it back afterwards.
+        self._substep_saved_state: dict[str, object] | None = None
 
         super().__init__(free_flight_unsteady_problem)
 
@@ -208,6 +216,10 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         velocity instead of recomputing it (the step's state it reads is the same), so
         its singularity events are logged here.
 
+        It also saves a reference to every solver attribute, which together hold the
+        solved state of the step being solved, so restore_substep can put that state
+        back after the trials instead of solving the step again.
+
         :param next_steady_problem: The transient SteadyProblem for the next step, built
             over a scratch copy of the prescribed next-step Airplane. Its OperatingPoint
             is a placeholder; the trial OperatingPoint is supplied per trial to
@@ -243,6 +255,23 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
 
         self._substep_gamma_n = self._current_bound_vortex_strengths.copy()
         self._substep_gamma_n_minus_1 = self._last_bound_vortex_strengths.copy()
+
+        # Save this step's solved state. The run loop has just solved this step, so the
+        # solver's attributes (its geometry stacks, influences, strengths, loads, and
+        # the pointers to the current step, Airplanes, and OperatingPoint) describe it.
+        # The trials will point those attributes at the next step's data. Each solve
+        # replaces the attributes with newly created arrays rather than writing into the
+        # existing ones, so the arrays saved here are left untouched by the trials, and
+        # saving references (not copies) is enough. All of the solver's state lives in
+        # __slots__, so collecting the slots of every class in the hierarchy covers it.
+        # The transient _substep slots are skipped, since restore_substep manages them
+        # itself.
+        self._substep_saved_state = {
+            name: getattr(self, name)
+            for cls in type(self).__mro__
+            for name in getattr(cls, "__slots__", ())
+            if not name.startswith("_substep") and hasattr(self, name)
+        }
 
     def evaluate_trial_aero_loads(
         self,
@@ -319,27 +348,42 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         Called once after the sub-iteration accepts, before the inherited run loop
         builds the official wake for the accepted next step. The trials overwrote the
         current step's solver working state (the geometry stacks, influences, and
-        strengths) while evaluating the next step, so this re-runs the current step's
-        aerodynamic evaluation to reconstruct that state exactly from the current step's
-        intact per step geometry and wake, leaving the solver as if the step had just
-        been solved. The previous strengths are restored first so the re-evaluation
-        reproduces the original solve. Clears the transient sub-iteration state, so the
-        inherited reads revert to the canonical committed SteadyProblems, except for the
-        frozen wake grid induced velocity, which the official wake build takes over (see
+        strengths) while evaluating the next step, so this puts back the state that
+        freeze_substep saved before the trials, leaving the solver as if the step had
+        just been solved. Clears the transient sub-iteration state, so the inherited
+        reads revert to the canonical committed SteadyProblems, except for the frozen
+        wake grid induced velocity, which the official wake build takes over (see
         _populate_next_airplanes_wake).
 
         :param step: The current time step index (zero indexed).
         :return: None
         """
-        assert self._substep_gamma_n_minus_1 is not None
+        assert self._substep_saved_state is not None
 
-        current_problem = self._get_steady_problem_at(step)
-        self._current_step = step
-        self.current_airplanes = current_problem.airplanes
-        self.current_operating_point = current_problem.operating_point
-        self._currentVInf_GP1__E = self.current_operating_point.vInf_GP1__E
-        self._last_bound_vortex_strengths = self._substep_gamma_n_minus_1
-        self._evaluate_step_aerodynamics()
+        # Changed for speed: this method used to solve the current step a second time
+        # (the commented out block below) only to rebuild the solver state the trials
+        # overwrote. That state is identical to the one freeze_substep saved before the
+        # trials, so it is now put back directly, which skips a full solve (geometry
+        # collapse, influence matrices, linear solve, and loads) every free step.
+        # assert self._substep_gamma_n_minus_1 is not None
+        # current_problem = self._get_steady_problem_at(step)
+        # self._current_step = step
+        # self.current_airplanes = current_problem.airplanes
+        # self.current_operating_point = current_problem.operating_point
+        # self._currentVInf_GP1__E = self.current_operating_point.vInf_GP1__E
+        # self._last_bound_vortex_strengths = self._substep_gamma_n_minus_1
+        # self._evaluate_step_aerodynamics()
+
+        # Point every solver attribute back at the current step's saved state. This
+        # includes the current step, Airplanes, OperatingPoint, freestream, and previous
+        # strengths that the commented out block set by hand.
+        for name, value in self._substep_saved_state.items():
+            setattr(self, name, value)
+        self._substep_saved_state = None
+
+        # The saved state belongs to the step being solved, so the restored current step
+        # must match the step the caller is restoring.
+        assert self._current_step == step
 
         self._substep_next_step = None
         self._substep_next_steady_problem = None

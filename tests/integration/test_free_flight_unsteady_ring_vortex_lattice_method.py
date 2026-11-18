@@ -26,11 +26,13 @@ whose mean lift approximately balances the glider's weight.
 
 import logging
 import unittest
+from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import solver_fixtures
+from tests.integration.fixtures import problem_fixtures, solver_fixtures
 
 
 class TestFreeFlightUnsteadyRingVortexLatticeMethod(unittest.TestCase):
@@ -405,3 +407,91 @@ class TestFreeFlightUnsteadyRingVortexLatticeMethodKatzForceMethod(unittest.Test
 
         self.assertGreater(lift_to_weight_ratio, 0.85)
         self.assertLess(lift_to_weight_ratio, 1.15)
+
+
+def _assert_restore_matches_resolve(
+    test_case: unittest.TestCase,
+    solver: (
+        ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver
+        | ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+    ),
+) -> None:
+    """Runs a free flight solver with a free wake and asserts, at every free step, that
+    the state restore_substep puts back equals the state a fresh solve of that step
+    produces.
+
+    restore_substep puts back the solver state freeze_substep saved before the trials,
+    instead of solving the current step again. This check wraps it: after the real
+    restore, it records every solver attribute, solves the current step again (what
+    restore_substep used to do), and asserts that every attribute is unchanged. A missed
+    attribute, or one the trials changed in place, would show up as a difference.
+
+    :param test_case: The TestCase whose assertions to use.
+    :param solver: The free flight solver to run. It must not have run yet.
+    :return: None
+    """
+    solver_class = type(solver)
+    original_restore_substep = solver_class.restore_substep
+    slot_names = [
+        name
+        for cls in solver_class.__mro__
+        for name in getattr(cls, "__slots__", ())
+        if not name.startswith("_substep")
+    ]
+    checked_steps: list[int] = []
+
+    def checking_restore_substep(self: Any, step: int) -> None:
+        original_restore_substep(self, step)
+
+        # Record the restored state, then solve the current step again, as
+        # restore_substep used to.
+        restored = {
+            name: getattr(self, name) for name in slot_names if hasattr(self, name)
+        }
+        self._evaluate_step_aerodynamics()
+
+        for name, expected in restored.items():
+            actual = getattr(self, name)
+            if actual is expected:
+                continue
+            with test_case.subTest(step=step, attribute=name):
+                if isinstance(expected, np.ndarray):
+                    test_case.assertTrue(
+                        np.array_equal(
+                            expected, actual, equal_nan=expected.dtype.kind == "f"
+                        )
+                    )
+                else:
+                    test_case.assertEqual(expected, actual)
+        checked_steps.append(step)
+
+    # The solver has slots, so patch the method on its class.
+    with patch.object(solver_class, "restore_substep", checking_restore_substep):
+        solver.run(prescribed_wake=False, show_progress=False)
+
+    # The check must have run on the free steps.
+    test_case.assertGreater(len(checked_steps), 0)
+
+
+class TestFreeFlightRestoreSubstepMatchesResolve(unittest.TestCase):
+    """This is a class for testing that restore_substep, which puts back the state
+    freeze_substep saved instead of solving the current step again, leaves both free
+    flight solvers in exactly the state a fresh solve would."""
+
+    def test_restore_substep_matches_resolve(self) -> None:
+        """Test, at every free step of the simple glider with a free wake, that the
+        restored solver state equals the state a fresh solve of the step produces."""
+        _assert_restore_matches_resolve(
+            self, solver_fixtures.make_simple_glider_free_flight_solver()
+        )
+
+    def test_aeroelastic_restore_substep_matches_resolve(self) -> None:
+        """Test the same for the aeroelastic free flight solver, on the flapping free
+        flight aeroelastic problem with a free wake."""
+        problem = problem_fixtures.make_flapping_free_flight_aeroelastic_problem()
+        _assert_restore_matches_resolve(
+            self,
+            ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                problem
+            ),
+        )

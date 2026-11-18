@@ -149,6 +149,7 @@ class TestFreeFlightUnsteadyRingVortexLatticeMethodSolver(unittest.TestCase):
                 "_substepStackVIndGridWrvp_GP1__E",
                 "_substep_gamma_n",
                 "_substep_gamma_n_minus_1",
+                "_substep_saved_state",
             ),
         )
         with self.assertRaises(AttributeError):
@@ -259,24 +260,52 @@ class TestFreeFlightSolverSubstepLifecycle(unittest.TestCase):
 
         self.assertIsNone(self.solver._substepStackVIndGridWrvp_GP1__E)
 
+    def test_freeze_substep_saves_solver_state(self) -> None:
+        """Test that freeze_substep saves a reference to every solver attribute, so
+        restore_substep can put the step's state back without solving it again, and
+        skips the transient substep slots, which restore_substep manages itself."""
+        self.solver._prescribed_wake = True
+        self.solver._current_step = 0
+        current_strengths = np.ones(3, dtype=float)
+        self.solver._current_bound_vortex_strengths = current_strengths
+        self.solver._last_bound_vortex_strengths = np.zeros(3, dtype=float)
+
+        self.solver.freeze_substep(MagicMock())
+
+        saved_state = self.solver._substep_saved_state
+        assert saved_state is not None
+        # References, not copies: the trials replace these attributes rather than
+        # writing into them, so the saved objects stay intact.
+        self.assertIs(saved_state["_current_bound_vortex_strengths"], current_strengths)
+        self.assertEqual(saved_state["_current_step"], 0)
+        self.assertEqual(saved_state["num_steps"], self.solver.num_steps)
+        self.assertFalse(any(name.startswith("_substep") for name in saved_state))
+
     def test_restore_substep_clears_transient_state(self) -> None:
-        """Test that restore_substep re-evaluates the current step and clears every
-        transient sub-iteration slot except the frozen wake grid induced velocity.
+        """Test that restore_substep puts back the state freeze_substep saved, without
+        solving the current step again, and clears every transient sub-iteration slot
+        except the frozen wake grid induced velocity.
 
         A leftover non-None slot would redirect the next step's geometry and wake reads
         to a stale scratch copy, so the clearing is a correctness contract. The frozen
         wake grid induced velocity is the exception: it is kept for the official wake
-        build, which reuses and clears it. The re-evaluation of the current step's
-        aerodynamics is stubbed, since reconstructing it is the inherited solver's
-        behavior, not this method's.
+        build, which reuses and clears it.
         """
         frozen_velocities = [[np.zeros(3, dtype=float)]]
+        saved_strengths = np.array([1.0, 2.0, 3.0], dtype=float)
         self.solver._substep_next_step = 1
         self.solver._substep_next_steady_problem = MagicMock()
         self.solver._substep_next_operating_point = MagicMock()
         self.solver._substepStackVIndGridWrvp_GP1__E = frozen_velocities
         self.solver._substep_gamma_n = np.ones(3, dtype=float)
         self.solver._substep_gamma_n_minus_1 = np.zeros(3, dtype=float)
+        self.solver._substep_saved_state = {
+            "_current_step": 0,
+            "_current_bound_vortex_strengths": saved_strengths,
+        }
+        # Stand in for the trials, which point the solver at the next step.
+        self.solver._current_step = 1
+        self.solver._current_bound_vortex_strengths = np.zeros(3, dtype=float)
 
         with patch.object(
             ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
@@ -284,7 +313,10 @@ class TestFreeFlightSolverSubstepLifecycle(unittest.TestCase):
         ) as mock_evaluate_step_aerodynamics:
             self.solver.restore_substep(step=0)
 
-        mock_evaluate_step_aerodynamics.assert_called_once()
+        mock_evaluate_step_aerodynamics.assert_not_called()
+        self.assertEqual(self.solver._current_step, 0)
+        self.assertIs(self.solver._current_bound_vortex_strengths, saved_strengths)
+        self.assertIsNone(self.solver._substep_saved_state)
         self.assertIsNone(self.solver._substep_next_step)
         self.assertIsNone(self.solver._substep_next_steady_problem)
         self.assertIsNone(self.solver._substep_next_operating_point)
