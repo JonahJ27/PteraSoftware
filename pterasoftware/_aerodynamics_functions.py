@@ -220,14 +220,17 @@ def _ceiling() -> int:
     having measured as the fastest width in every condition tested.
 
     Why physical cores rather than logical processors: with hyperthreading, a physical
-    core's two hardware threads share its execution units, including the square root and
-    division unit, which is what limits the vectorized ring vortex kernel. A second
-    thread on the same core gets no extra square roots or divisions done, and only adds
-    to the synchronization cost. On this project's development machine (8 physical
-    cores, 16 logical processors), a cap of 6 kernel threads ran the free flight
-    benchmark about 10% faster than the old cap of 12 (three quarters of the logical
-    processors), and 8 ran slower than 6. On a CPU without hyperthreading, the two
-    counts are equal and the ceiling is unchanged.
+    core's two hardware threads share all of its execution units (its vector multiply
+    and add units, its load and store units, and its caches). A second thread on a core
+    only gets work done while the first one is stalled, for example waiting on memory.
+    The vectorized ring vortex kernel keeps a core's vector units busy almost all the
+    time, with about 50 multiplies, adds, and memory operations per point and line
+    vortex and few stalls, so a second thread on the same core mostly competes with the
+    first for those units, and adds to the synchronization cost. On this project's
+    development machine (8 physical cores, 16 logical processors), a cap of 6 kernel
+    threads ran the free flight benchmark about 10% faster than the old cap of 12 (three
+    quarters of the logical processors), and 8 ran slower than 6. On a CPU without
+    hyperthreading, the two counts are equal and the ceiling is unchanged.
 
     The ceiling applies uniformly, including to thread masks set at or above it. Masks
     below the ceiling are honored exactly, so a batch of single thread simulations runs
@@ -250,8 +253,8 @@ def _ceiling() -> int:
     # Changed for speed: the ceiling used to be three quarters of the pool's width alone
     # (the commented out line below), which by default is the number of logical
     # processors. It now uses the smaller of the pool's width and the physical core
-    # count, so hyperthreads that would share a core's square root and division unit
-    # aren't counted twice.
+    # count, so hyperthreads that would compete for the same core's vector units aren't
+    # counted twice.
     # octowrap: off
     # return max((3 * pool_width) // 4, 1)
     # octowrap: on
