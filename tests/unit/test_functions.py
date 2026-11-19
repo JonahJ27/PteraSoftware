@@ -741,6 +741,37 @@ class TestProcessSolverLoads(unittest.TestCase):
         cls.qInf__E = operating_point.qInf__E
         cls.T_pas_GP1_CgP1_to_W_CgP1 = operating_point.T_pas_GP1_CgP1_to_W_CgP1
 
+    def test_panel_wind_axes_loads_match_per_vector_transforms(self) -> None:
+        """Test that every Panel's wind axes force and moment, which
+        process_solver_loads transforms as whole stacks, equal byte for byte what
+        transforming each Panel's vectors one at a time gives."""
+        for airplane in (self.first_airplane, self.second_airplane):
+            for wing in airplane.wings:
+                assert wing.panels is not None
+                for panel in np.ravel(wing.panels):
+                    assert panel.forces_GP1 is not None
+                    assert panel.moments_GP1_CgP1 is not None
+                    assert panel.forces_W is not None
+                    assert panel.moments_W_CgP1 is not None
+                    expected_forces_W = _transformations.apply_T_to_vectors(
+                        self.T_pas_GP1_CgP1_to_W_CgP1,
+                        panel.forces_GP1,
+                        is_position=False,
+                    )
+                    expected_moments_W = _transformations.apply_T_to_vectors(
+                        self.T_pas_GP1_CgP1_to_W_CgP1,
+                        panel.moments_GP1_CgP1,
+                        is_position=False,
+                    )
+                    self.assertEqual(
+                        np.asarray(panel.forces_W).tobytes(),
+                        expected_forces_W.tobytes(),
+                    )
+                    self.assertEqual(
+                        np.asarray(panel.moments_W_CgP1).tobytes(),
+                        expected_moments_W.tobytes(),
+                    )
+
     def test_wind_axes_loads_match_panel_sums(self) -> None:
         """Test that the wind axes loads are the rotated Panel load sums."""
         for airplane, stackForces_GP1, stackMoments_GP1_CgP1 in (

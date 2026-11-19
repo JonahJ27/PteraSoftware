@@ -193,19 +193,58 @@ class SteadyProblem:
             for wing in airplane.wings:
                 assert wing.panels is not None
 
-                for panel in np.ravel(wing.panels):
-                    panel.Frpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
-                        T_pas_G_Cg_to_GP1_CgP1, panel.Frpp_G_Cg, is_position=True
-                    )
-                    panel.Flpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
-                        T_pas_G_Cg_to_GP1_CgP1, panel.Flpp_G_Cg, is_position=True
-                    )
-                    panel.Blpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
-                        T_pas_G_Cg_to_GP1_CgP1, panel.Blpp_G_Cg, is_position=True
-                    )
-                    panel.Brpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
-                        T_pas_G_Cg_to_GP1_CgP1, panel.Brpp_G_Cg, is_position=True
-                    )
+                # Changed for speed: each Panel's four corners used to be transformed
+                # one vector at a time (the commented out loop below), four calls of
+                # apply_T_to_vectors per Panel for every new SteadyProblem, which is
+                # every time step of an unsteady run. Each call costs a few microseconds
+                # of NumPy overhead for a 4 x 4 by 4 product. Gathering each corner of
+                # all the Wing's Panels into one stack and transforming it once gives
+                # the same bits for every Panel, because the gather copies the values
+                # exactly and apply_T_to_vectors is one np.einsum that computes each
+                # vector's product independently (checked byte for byte on random
+                # stacks). Each Panel then gets its own row, which the set once property
+                # makes read only.
+                # octowrap: off
+                # for panel in np.ravel(wing.panels):
+                #     panel.Frpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                #         T_pas_G_Cg_to_GP1_CgP1, panel.Frpp_G_Cg, is_position=True
+                #     )
+                #     panel.Flpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                #         T_pas_G_Cg_to_GP1_CgP1, panel.Flpp_G_Cg, is_position=True
+                #     )
+                #     panel.Blpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                #         T_pas_G_Cg_to_GP1_CgP1, panel.Blpp_G_Cg, is_position=True
+                #     )
+                #     panel.Brpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                #         T_pas_G_Cg_to_GP1_CgP1, panel.Brpp_G_Cg, is_position=True
+                #     )
+                # octowrap: on
+                panels = np.ravel(wing.panels)
+                stackFrpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                    T_pas_G_Cg_to_GP1_CgP1,
+                    np.array([panel.Frpp_G_Cg for panel in panels], dtype=float),
+                    is_position=True,
+                )
+                stackFlpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                    T_pas_G_Cg_to_GP1_CgP1,
+                    np.array([panel.Flpp_G_Cg for panel in panels], dtype=float),
+                    is_position=True,
+                )
+                stackBlpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                    T_pas_G_Cg_to_GP1_CgP1,
+                    np.array([panel.Blpp_G_Cg for panel in panels], dtype=float),
+                    is_position=True,
+                )
+                stackBrpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
+                    T_pas_G_Cg_to_GP1_CgP1,
+                    np.array([panel.Brpp_G_Cg for panel in panels], dtype=float),
+                    is_position=True,
+                )
+                for panel_index, panel in enumerate(panels):
+                    panel.Frpp_GP1_CgP1 = stackFrpp_GP1_CgP1[panel_index]
+                    panel.Flpp_GP1_CgP1 = stackFlpp_GP1_CgP1[panel_index]
+                    panel.Blpp_GP1_CgP1 = stackBlpp_GP1_CgP1[panel_index]
+                    panel.Brpp_GP1_CgP1 = stackBrpp_GP1_CgP1[panel_index]
 
     # --- Immutable: read only properties ---
     @property

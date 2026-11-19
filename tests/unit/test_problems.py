@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 import pterasoftware as ps
+from pterasoftware import _transformations
 from tests.unit.fixtures import (
     geometry_fixtures,
     movement_fixtures,
@@ -267,6 +268,40 @@ class TestSteadyProblemPanelCoordinates(unittest.TestCase):
                     self.assertIsNotNone(panel.Flpp_GP1_CgP1)
                     self.assertIsNotNone(panel.Blpp_GP1_CgP1)
                     self.assertIsNotNone(panel.Brpp_GP1_CgP1)
+
+    def test_panel_GP1_CgP1_coordinates_match_per_vector_transforms(self) -> None:
+        """Test that every Panel's GP1_CgP1 corners, which SteadyProblem transforms as
+        one stack per corner per Wing, equal byte for byte what transforming each
+        Panel's corners one at a time gives, for every Airplane."""
+        steady_problem = problem_fixtures.make_multi_airplane_steady_problem_fixture()
+        for airplane in steady_problem.airplanes:
+            T_pas_G_Cg_to_GP1_CgP1 = airplane.T_pas_G_Cg_to_GP1_CgP1
+            for wing in airplane.wings:
+                assert wing.panels is not None
+                for panel in np.ravel(wing.panels):
+                    for local, transformed in (
+                        (panel.Frpp_G_Cg, panel.Frpp_GP1_CgP1),
+                        (panel.Flpp_G_Cg, panel.Flpp_GP1_CgP1),
+                        (panel.Blpp_G_Cg, panel.Blpp_GP1_CgP1),
+                        (panel.Brpp_G_Cg, panel.Brpp_GP1_CgP1),
+                    ):
+                        assert transformed is not None
+                        expected = _transformations.apply_T_to_vectors(
+                            T_pas_G_Cg_to_GP1_CgP1, local, is_position=True
+                        )
+                        self.assertEqual(
+                            np.asarray(transformed).tobytes(), expected.tobytes()
+                        )
+
+    def test_panel_GP1_CgP1_coordinates_can_only_be_set_once(self) -> None:
+        """Test that the Panel GP1_CgP1 corners SteadyProblem sets still can't be set a
+        second time."""
+        steady_problem = problem_fixtures.make_basic_steady_problem_fixture()
+        first_wing = steady_problem.airplanes[0].wings[0]
+        assert first_wing.panels is not None
+        first_panel = first_wing.panels[0, 0]
+        with self.assertRaises(AttributeError):
+            first_panel.Frpp_GP1_CgP1 = np.zeros(3, dtype=float)
 
 
 class TestUnsteadyProblem(unittest.TestCase):

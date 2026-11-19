@@ -319,18 +319,36 @@ def process_solver_loads(
     qInf__E = this_operating_point.qInf__E
     T_pas_GP1_CgP1_to_W_CgP1 = this_operating_point.T_pas_GP1_CgP1_to_W_CgP1
 
+    # Changed for speed: each Panel's force and moment used to be transformed to wind
+    # axes one vector at a time inside the loop below (the commented out calls), two
+    # calls of apply_T_to_vectors per Panel in every solve. Each call costs a few
+    # microseconds of NumPy overhead for a 4 x 4 by 4 product. Transforming the whole
+    # stacks once gives the same bits for every Panel, because apply_T_to_vectors is one
+    # np.einsum that computes each vector's product independently (checked byte for byte
+    # on random stacks), so the loop now only hands out rows.
+    stackPanelForces_W = _transformations.apply_T_to_vectors(
+        T_pas_GP1_CgP1_to_W_CgP1, stackPanelForces_GP1, is_position=False
+    )
+    stackPanelMoments_W_CgP1 = _transformations.apply_T_to_vectors(
+        T_pas_GP1_CgP1_to_W_CgP1, stackPanelMoments_GP1_CgP1, is_position=False
+    )
+
     # Iterate through this solver's Panels.
     assert solver.panels is not None
     for panel_num, panel in enumerate(solver.panels):
         theseForces_GP1 = stackPanelForces_GP1[panel_num, :]
         theseMoments_GP1_CgP1 = stackPanelMoments_GP1_CgP1[panel_num, :]
 
-        theseForces_W = _transformations.apply_T_to_vectors(
-            T_pas_GP1_CgP1_to_W_CgP1, theseForces_GP1, is_position=False
-        )
-        theseMoments_W_CgP1 = _transformations.apply_T_to_vectors(
-            T_pas_GP1_CgP1_to_W_CgP1, theseMoments_GP1_CgP1, is_position=False
-        )
+        # octowrap: off
+        # theseForces_W = _transformations.apply_T_to_vectors(
+        #     T_pas_GP1_CgP1_to_W_CgP1, theseForces_GP1, is_position=False
+        # )
+        # theseMoments_W_CgP1 = _transformations.apply_T_to_vectors(
+        #     T_pas_GP1_CgP1_to_W_CgP1, theseMoments_GP1_CgP1, is_position=False
+        # )
+        # octowrap: on
+        theseForces_W = stackPanelForces_W[panel_num, :]
+        theseMoments_W_CgP1 = stackPanelMoments_W_CgP1[panel_num, :]
 
         # Update this Panel's loads.
         panel.forces_GP1 = theseForces_GP1
