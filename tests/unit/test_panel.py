@@ -1015,3 +1015,86 @@ class TestPanelDeepCopy(unittest.TestCase):
         self.assertIsNotNone(copied.area)
         npt.assert_array_equal(copied.rightLeg_G, original.rightLeg_G)
         self.assertEqual(copied.area, original.area)
+
+
+class TestCross3d(unittest.TestCase):
+    """This is a class with functions to test _cross_3d, the faster stand in for
+    np.cross on single (3,) vectors that the Panel's area, unit normals, and projected
+    area use."""
+
+    def _assert_matches_np_cross(self, a: np.ndarray, b: np.ndarray) -> None:
+        """Asserts that _cross_3d(a, b) equals np.cross(a, b) bit for bit, including the
+        sign of any zero component.
+
+        :param a: A (3,) ndarray of floats representing the first vector.
+        :param b: A (3,) ndarray of floats representing the second vector.
+        :return: None
+        """
+        expected = np.cross(a, b)
+        actual = _panel._cross_3d(a, b)
+        self.assertEqual(actual.shape, (3,))
+        self.assertEqual(actual.dtype, np.float64)
+        # Comparing the raw bytes also tells 0.0 from -0.0, which np.array_equal does
+        # not.
+        self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_matches_np_cross_on_random_vectors(self) -> None:
+        """Test that _cross_3d matches np.cross bit for bit on random vectors at small,
+        unit, and large scales."""
+        rng = np.random.default_rng(0)
+        for scale in (1e-12, 1e-6, 1.0, 1e6, 1e12):
+            with self.subTest(scale=scale):
+                for _ in range(2000):
+                    self._assert_matches_np_cross(
+                        rng.standard_normal(3) * scale, rng.standard_normal(3) * scale
+                    )
+
+    def test_matches_np_cross_on_special_vectors(self) -> None:
+        """Test that _cross_3d matches np.cross bit for bit on axis aligned vectors,
+        parallel vectors, zeros, negative zeros, and extreme values."""
+        values = (0.0, -0.0, 1.0, -1.0, 1e-300, -1e-300, 1e300, 5e-324)
+        rng = np.random.default_rng(1)
+        for _ in range(4000):
+            a = np.array(rng.choice(values, 3), dtype=float)
+            b = np.array(rng.choice(values, 3), dtype=float)
+            self._assert_matches_np_cross(a, b)
+        unit_vectors = np.eye(3, dtype=float)
+        for a in unit_vectors:
+            for b in unit_vectors:
+                self._assert_matches_np_cross(a, b)
+                self._assert_matches_np_cross(a, -b)
+        self._assert_matches_np_cross(
+            np.array([1.0, 2.0, 3.0]), np.array([2.0, 4.0, 6.0])
+        )
+
+    def test_propagates_nan_and_infinity_like_np_cross(self) -> None:
+        """Test that NaN and infinite components give the same result as np.cross."""
+        for a, b in (
+            (np.array([np.nan, 1.0, 2.0]), np.array([1.0, 2.0, 3.0])),
+            (np.array([np.inf, 1.0, 2.0]), np.array([1.0, 2.0, 3.0])),
+            (np.array([np.inf, 0.0, 0.0]), np.array([0.0, np.inf, 0.0])),
+        ):
+            with self.subTest(a=a, b=b):
+                npt.assert_array_equal(_panel._cross_3d(a, b), np.cross(a, b))
+
+    def test_returns_a_new_writable_array(self) -> None:
+        """Test that _cross_3d returns a new array, as np.cross does, so callers can set
+        it read only without affecting anything else."""
+        a = np.array([1.0, 0.0, 0.0])
+        b = np.array([0.0, 1.0, 0.0])
+        result = _panel._cross_3d(a, b)
+        self.assertTrue(result.flags.writeable)
+        self.assertFalse(np.shares_memory(result, a))
+        self.assertFalse(np.shares_memory(result, b))
+
+    def test_rejects_vectors_that_are_not_three_dimensional(self) -> None:
+        """Test that _cross_3d fails on vectors that aren't (3,), instead of silently
+        ignoring components or raising an unclear IndexError."""
+        for a, b in (
+            (np.zeros(2), np.zeros(3)),
+            (np.zeros(3), np.zeros(4)),
+            (np.zeros((1, 3)), np.zeros(3)),
+        ):
+            with self.subTest(a_shape=a.shape, b_shape=b.shape):
+                with self.assertRaises(AssertionError):
+                    _panel._cross_3d(a, b)

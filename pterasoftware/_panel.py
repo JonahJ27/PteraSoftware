@@ -7,6 +7,40 @@ from typing import cast
 import numpy as np
 
 
+def _cross_3d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Returns the cross product of two (3,) vectors, as a faster stand in for np.cross
+    on single vectors.
+
+    This exists only for speed. np.cross handles the general case (stacks of vectors, 2D
+    vectors, axis arguments, and dtype promotion), and on two single (3,) vectors it
+    spends most of its time (about 9.7 us of each call) on that argument handling rather
+    than the arithmetic. Every new Airplane computes each of its Panels' area, unit
+    normals, and projected area with a cross product, about 194,000 calls per free
+    flight run, so writing the three components out (about 0.9 us per call) saves
+    roughly 5% of the run.
+
+    The result is bit-identical to np.cross(a, b): this uses NumPy's own formula for 3D
+    vectors, rounding each product and then each difference, in the same order, with no
+    fused multiply add. Like np.cross, it returns a new ndarray, and NaN and infinite
+    values propagate the same way. Unlike np.cross, it accepts only two (3,) float
+    ndarrays, which the assertion below checks, since a wrong shape would otherwise
+    either raise an unclear IndexError or silently ignore extra components.
+
+    :param a: A (3,) ndarray of floats representing the first vector.
+    :param b: A (3,) ndarray of floats representing the second vector.
+    :return: A (3,) ndarray of floats representing the cross product a x b.
+    """
+    assert a.shape == (3,) and b.shape == (3,)
+    return np.array(
+        (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ),
+        dtype=float,
+    )
+
+
 class Panel:
     """A class used to contain the panels of a Wing.
 
@@ -413,7 +447,11 @@ class Panel:
             firstDiagonal_G = cast(np.ndarray, self._Frpp_G_Cg - self._Blpp_G_Cg)
             secondDiagonal_G = cast(np.ndarray, self._Flpp_G_Cg - self._Brpp_G_Cg)
 
-            cross_G = cast(np.ndarray, np.cross(firstDiagonal_G, secondDiagonal_G))
+            # Changed for speed: _cross_3d replaces np.cross (the commented out line
+            # below), which is about 10 times slower on single (3,) vectors. The result
+            # is bit-identical.
+            # cross_G = cast(np.ndarray, np.cross(firstDiagonal_G, secondDiagonal_G))
+            cross_G = _cross_3d(firstDiagonal_G, secondDiagonal_G)
 
             self._unitNormal_G = cast(np.ndarray, cross_G / np.linalg.norm(cross_G))
             self._unitNormal_G.flags.writeable = False
@@ -436,7 +474,11 @@ class Panel:
             firstDiagonal_G = cast(np.ndarray, self._Frpp_G_Cg - self._Blpp_G_Cg)
             secondDiagonal_G = cast(np.ndarray, self._Flpp_G_Cg - self._Brpp_G_Cg)
 
-            cross_G = cast(np.ndarray, np.cross(firstDiagonal_G, secondDiagonal_G))
+            # Changed for speed: _cross_3d replaces np.cross (the commented out line
+            # below), which is about 10 times slower on single (3,) vectors. The result
+            # is bit-identical.
+            # cross_G = cast(np.ndarray, np.cross(firstDiagonal_G, secondDiagonal_G))
+            cross_G = _cross_3d(firstDiagonal_G, secondDiagonal_G)
 
             self._area = float(np.linalg.norm(cross_G) / 2)
         return self._area
@@ -782,7 +824,12 @@ class Panel:
             secondDiagonal_GP1 = self._Flpp_GP1_CgP1 - self._Brpp_GP1_CgP1
 
             # Compute the cross product and normalize.
-            cross_GP1 = np.cross(firstDiagonal_GP1, secondDiagonal_GP1)
+            #
+            # Changed for speed: _cross_3d replaces np.cross (the commented out line
+            # below), which is about 10 times slower on single (3,) vectors. The result
+            # is bit-identical.
+            # cross_GP1 = np.cross(firstDiagonal_GP1, secondDiagonal_GP1)
+            cross_GP1 = _cross_3d(firstDiagonal_GP1, secondDiagonal_GP1)
 
             self._unitNormal_GP1 = cast(
                 np.ndarray, cross_GP1 / np.linalg.norm(cross_GP1)
@@ -864,7 +911,16 @@ class Panel:
         # The projected area is found by dividing the magnitude of cross product of the
         # diagonal vectors (in geometry axes) by two. Read the area method for a more
         # detailed explanation.
-        projDiagonalsOnPlaneCross_G = np.cross(
+        #
+        # Changed for speed: _cross_3d replaces np.cross (the commented out lines
+        # below), which is about 10 times slower on single (3,) vectors. The result is
+        # bit-identical.
+        # octowrap: off
+        # projDiagonalsOnPlaneCross_G = np.cross(
+        #     projFirstDiagonalOnPlane_G, projSecondDiagonalOnPlane_G
+        # )
+        # octowrap: on
+        projDiagonalsOnPlaneCross_G = _cross_3d(
             projFirstDiagonalOnPlane_G, projSecondDiagonalOnPlane_G
         )
         return float(np.linalg.norm(projDiagonalsOnPlaneCross_G) / 2)
