@@ -2853,8 +2853,18 @@ class TestParallelDispatchWrappers(unittest.TestCase):
 class TestVectorizedRingVortexKernel(unittest.TestCase):
     """This is a class with functions to test that
     collapsed_velocities_from_ring_vortices, which now launches the vectorized ring
-    vortex kernel once for all four legs, gives the same results, bit for bit, as the
-    four per leg line vortex kernel launches it replaced."""
+    vortex kernel once for all four legs, gives the same results as the four per leg
+    line vortex kernel launches it replaced.
+
+    The vectorized kernel fuses multiplies and adds (fastmath={"contract"}), so its
+    results differ from the unfused line vortex kernel at round off level: by at most
+    about 4e-14 of the largest induced velocity on these tests' inputs. The comparisons
+    allow 1e-12 of it. The singularity counts must match exactly, and the results must
+    not depend on the chunk size or thread count at all.
+    """
+
+    # The comparison tolerance, relative to the largest induced velocity magnitude.
+    _RELATIVE_TOLERANCE = 1e-12
 
     @staticmethod
     def _four_launch_reference(
@@ -2941,10 +2951,24 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
             ages=inputs["ages"],
             nu=inputs["nu"],
         )
-        self.assertEqual(actual.shape, expected.shape)
-        # Comparing the raw bytes also tells 0.0 from -0.0.
-        self.assertEqual(actual.tobytes(), expected.tobytes())
+        self._assert_close(actual, expected)
         npt.assert_array_equal(actual_counts, expected_counts)
+
+    def _assert_close(self, actual: np.ndarray, expected: np.ndarray) -> None:
+        """Asserts that two induced velocity arrays have the same shape and agree to
+        _RELATIVE_TOLERANCE of the largest magnitude in the expected one.
+
+        :param actual: The induced velocities to check.
+        :param expected: The reference induced velocities.
+        :return: None
+        """
+        self.assertEqual(actual.shape, expected.shape)
+        if expected.size == 0:
+            return
+        scale = float(np.max(np.abs(expected)))
+        npt.assert_allclose(
+            actual, expected, rtol=0.0, atol=self._RELATIVE_TOLERANCE * scale
+        )
 
     def test_matches_four_launches_on_random_inputs(self) -> None:
         """Test bit for bit agreement over point counts that do and don't fill whole
@@ -3051,14 +3075,16 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
                 )
 
     def test_kernel_results_do_not_depend_on_the_chunk_size(self) -> None:
-        """Test that the vectorized kernel gives the same results, bit for bit, as the
-        four launch reference at chunk sizes that are and aren't multiples of the vector
-        width, so rounding the chunk size up can't change the results."""
+        """Test that the vectorized kernel gives the same results, bit for bit, at chunk
+        sizes that are and aren't multiples of the vector width, so rounding the chunk
+        size up can't change the results, and that they match the four launch reference
+        to round off."""
         rng = np.random.default_rng(4)
         for num_points in (100, 730):
             inputs = self._make_inputs(rng, num_points, 300, wake=True, scale=1.0)
             expected_counts = np.zeros(3, dtype=np.int64)
             expected = self._four_launch_reference(inputs, expected_counts)
+            first_result: np.ndarray | None = None
             for chunk_size in (16, 23, 24, 31, 32, 43, 48, 128):
                 with self.subTest(num_points=num_points, chunk_size=chunk_size):
                     actual_counts = np.zeros(3, dtype=np.int64)
@@ -3075,8 +3101,12 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
                         nu=inputs["nu"],
                         chunk_size=chunk_size,
                     )
-                    # Comparing the raw bytes also tells 0.0 from -0.0.
-                    self.assertEqual(actual.tobytes(), expected.tobytes())
+                    if first_result is None:
+                        first_result = actual
+                    # Every chunk size gives the same bits. Comparing the raw bytes also
+                    # tells 0.0 from -0.0.
+                    self.assertEqual(actual.tobytes(), first_result.tobytes())
+                    self._assert_close(actual, expected)
                     npt.assert_array_equal(actual_counts, expected_counts)
 
 

@@ -1208,7 +1208,17 @@ def _collapsed_velocities_from_line_vortices(
 # in parallel. The only division that can see a zero here is at a point exactly on a
 # vertex, and its value is discarded by a select (see below), so the results are the
 # same either way.
-@njit(cache=True, fastmath=False, parallel=True, error_model="numpy")
+#
+# Changed for speed: fastmath={"contract"} lets LLVM fuse each multiply and the add that
+# uses it into one fused multiply add instruction, which rounds once instead of twice.
+# Nothing is reordered, so each point still adds its vortices one at a time in index
+# order, and the vectorization across points is kept. The kernel is limited by its total
+# multiply, add, and memory work, so this makes it about 6% faster. The results now
+# differ from the unfused kernel at round off level (the fused operations round once).
+# octowrap: off
+# @njit(cache=True, fastmath=False, parallel=True, error_model="numpy")
+# octowrap: on
+@njit(cache=True, fastmath={"contract"}, parallel=True, error_model="numpy")
 def _collapsed_velocities_from_ring_vortices_vectorized(
     stackP_GP1_CgP1: np.ndarray,
     stackBrrvp_GP1_CgP1: np.ndarray,
@@ -1226,14 +1236,15 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
     finds the cumulative induced velocity at every point, computing several points per
     vector instruction.
 
-    This gives the same results, bit for bit, as calling the line vortex kernel
+    This gives the same results, to round off, as calling the line vortex kernel
     (_collapsed_velocities_from_line_vortices) once per leg (right, front, left, back)
     and adding the four results, which is what collapsed_velocities_from_ring_vortices
-    used to do. It exists for speed: it handles all four legs in one launch, and its
-    innermost loop runs over a chunk of points, which LLVM vectorizes (on AVX-512, 8
-    points per instruction). Vectorizing across points rather than across vortices is
-    what keeps the results identical, since each point still adds its vortices one at a
-    time in index order.
+    used to do. Without its fused multiply adds (see the decorator's comment) it gives
+    the same results bit for bit. It exists for speed: it handles all four legs in one
+    launch, and its innermost loop runs over a chunk of points, which LLVM vectorizes
+    (on AVX-512, 8 points per instruction). Vectorizing across points rather than across
+    vortices is what keeps each point's additions in order, since each point still adds
+    its vortices one at a time in index order.
 
     Why the line vortex kernel is slower, even though Numba compiles it: the CPU's
     vector units can process several double precision numbers per instruction (8 with
@@ -1268,8 +1279,10 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
 
     The two forms of the numerator are chosen per point by the same test, so each point
     gets the same form as before. Square roots and divisions are correctly rounded in
-    IEEE arithmetic, so their vector forms give the same bits as their scalar forms.
-    fastmath stays off, so no operations are reordered or fused into multiply adds.
+    IEEE arithmetic, so their vector forms give the same bits as their scalar forms. The
+    only fastmath flag on is contract, which fuses multiplies with the adds that use
+    them, but nothing is reordered. A fused multiply add with a 0.0 product (the
+    selected out pairs) still leaves the sum unchanged, so the selects work as before.
 
     The chunk size only affects speed (see the module's chunk size constants).
 
