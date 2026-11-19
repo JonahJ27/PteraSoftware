@@ -39,6 +39,8 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 | 27 | The flap examples' discretization hasn't been checked for convergence, nor their spring constants for sensitivity | Geometry | Medium |
 | 28 | The wake length each flight condition needs hasn't been found | Geometry | High |
 | 29 | The examples don't report the reduced frequency or the advance ratio | Analysis | Medium |
+| 30 | When ground effect matters for the flapping robots hasn't been worked out | Analysis | Medium |
+| 31 | The torsional springs solve each strip on its own, but the geometry chains the strips' twists | Structure | High |
 
 ## Coupling
 
@@ -58,6 +60,18 @@ Items are grouped by area and roughly ordered by priority within each group. Pri
 **Needs first.** Item 12 (rewinding the saturation controller). For the non free flight problem, a solver interface for evaluating a step without committing it, which changes shared solver code. The free flight solver already has one (`freeze_substep`, `evaluate_trial_aero_loads`, `restore_substep`).
 
 **Cheaper stopgaps.** Extrapolating the torque over the step (cuts the phase error, not the instability), and treating the added mass implicitly with an `I_added` on `FlapDrive` (fixes the instability, not the circulatory lag). Both are described in the same section.
+
+**Design question for when the wings become MuJoCo bodies with mass (item 2).** Today the coupling iterates only on the body's 12-vector (position, attitude, velocity, angular velocity). The flap angle and the spring twist are set once per step before the trials (`_advance_flap_drives` and `_calculate_wing_deformation` run 119 times in the benchmark, against 395 trials), and every trial reuses the same deep copied next-step Airplane (`problems.py`, `_advance_strongly_coupled`). Once the wings are hinged MuJoCo bodies, their joint angles and rates must either join the iterated state or stay loosely coupled, and each choice has a cost:
+
+- **Iterate on the wing joints (strong coupling).**
+  - The weighting matrix D (`STRONG_COUPLING.md` Section 7) needs reference scales for the new angle and rate entries.
+  - Convergence will likely slow, maybe a lot. Aitken's rate depends on the added mass ratio, and a light wing's (about 19 g in total on the small wing, a 5 g leading edge and a 14 g membrane per item 26's table, sweeping a large volume of air) may approach or exceed 1, where `STRONG_COUPLING.md` Section 8 warns about pressing against k_max and the unrelaxed iteration diverges. The FAAV body's ratio is small, which is why one full relaxation step nearly converges it today (`SPEED_UP_TODO.md` items S5 and How much the coupling trials cost). With wing joints in the iterate, starting the relaxation at 1.0 (S5) becomes unsafe; keep 0.5 or carry over the previous step's Aitken factor.
+  - Each trial costs more, since the wing geometry then changes per trial: the Airplane must be rebuilt and the Wings meshed again in every trial (about 10 ms per step today), and the whole bound geometry and wing on wing matrix change, not just the trailing edge corners.
+- **Keep the wing joints loosely coupled, as now.** The body's convergence is unchanged, but this item's lag and its added mass instability remain, and they get worse as the wings get lighter.
+
+Measure before choosing: the added mass ratio of each wing about its hinge, and the trials per step and run time with the wing joints in the iterate, on the small and large wings.
+
+Estimated cost per coupling trial (see `SPEED_UP_TODO.md` item R4 for the table): a higher fidelity MuJoCo model alone barely changes it (MuJoCo is about 0.2% of a run today, and moving the crank and motor dynamics from Python into MuJoCo could even save the flap drives' 1 s per run). Strongly coupled wing joints would roughly double each trial (the geometry rebuilt every trial, about 11 ms to 24 ms) and raise the trials per step (about 5 to 8 to 15), for about 2x to 3x the run time. `SPEED_UP_TODO.md` item R4 (rebuild the geometry by transforming a mesh precomputed once per run) would bring each trial back to about 11 to 12 ms, so do R4 together with, or before, this upgrade.
 
 **Where.** `_FlapDriveCoupling._advance_flap_drives` and `initialize_next_problem` in `flap_driven_aeroelastic_unsteady_problem.py`, `FreeFlightAeroelasticUnsteadyProblem._advance_strongly_coupled` in `problems.py`, the free flight solver's substep interface, `_fixed_point_relaxation.py`.
 
@@ -209,6 +223,28 @@ Item 4 (passing the split into the package) and item 7 (building the vehicle's m
 **Why it matters.** Comparisons between the two codes have to separate the aerodynamic difference from the structural one.
 
 **Fix.** Decide which structural model is the reference, and either port the other or document the expected differences with a side by side case.
+
+### 31. The torsional springs solve each strip on its own, but the geometry chains the strips' twists
+
+**Priority:** High
+
+**Problem.** The structural solve and the geometry assume two different structures.
+
+- **The solve treats each strip as an independent oscillator.** `_calculate_spring_moments` (and `_solve_strips_analytically`) gives strip s only its own torsional inertia, `(1 / 2) * M_s * L_s^2` from its own mass and mean chord (`_calculate_strip_inertias`), and only its own aerodynamic moment, the sum over its own chordwise Panels (`np.sum(aeroMoments_GP1_Slep[:, s, 1])`). Its flapping-axis inertia, which scales its inertial forcing, is also its own. The whole Wing's inertia (`wing_flap_inertia`) is used only by the FlapDrive, about the hinge, which is correct there.
+- **The geometry chains the twists.** Each strip's deformation angle is added to its outboard WingCrossSection's `angles_Wcsp_to_Wcs_ixyz` (`AeroelasticWingCrossSectionMovement`), which are relative to the WingCrossSection's parent axes, and a WingCrossSection's parent is the previous WingCrossSection (`AXES_POINTS_AND_FRAMES.md`, section 8). So twisting one WingCrossSection rotates every WingCrossSection outboard of it too, and the tip's actual twist is the sum of all the inboard deformation angles.
+
+With chained twists, the spring at a WingCrossSection physically acts as a joint in series: it carries the torsional moment of everything outboard of it (aerodynamic plus inertial), and it rotates the inertia of everything outboard. The solve gives it only its own strip's moment and inertia.
+
+**Why it matters.** The twist distribution along the span, and with it the loads, can be substantially wrong: outboard twist is overstated by the summing (each strip's own response is added on top of every inboard one), while each inboard spring sees far less moment and inertia than the outboard wing it moves. The error grows with the number of strips, so it also makes results depend on the spanwise panel width.
+
+**Fix.** Pick the structure the wing actually has, and make the solve and the geometry agree:
+
+1. **Independent strips (absolute twist).** Matches ribs or battens hinged individually on a stiff spar. Keep the per strip springs, but apply each strip's twist relative to the undeformed wing instead of chained: difference the states before handing them to the WingCrossSections (Delta_k = theta_k - theta_(k - 1)). The spring solve is unchanged.
+2. **A twisting spar (springs in series).** Matches a flexible spar whose twist accumulates toward the tip. Spring k carries the sum of the outboard moments, and the inertias couple (rotating joint k rotates everything outboard), so each Wing becomes one coupled linear system instead of independent strips. It still has constant coefficients, so the exact matrix exponential method still applies, on a 2S x 2S system per Wing instead of S separate 2 x 2 ones. The batched solve (`SPEED_UP_TODO.md` S1) would need reworking.
+
+Before choosing: check which model the blade element theory code assumes (item 15), look at the built FAAV wings' structure (spar and batten layout), and compare the two options' twist distributions and loads on one case. The spring constants (item 21) would need recalibrating for whichever is chosen, since their meaning changes.
+
+**Where.** `_calculate_spring_moments`, `_solve_strips_analytically`, and `_calculate_strip_inertias` in `problems.py`; `AeroelasticWingMovement.generate_wing_at_time_step` and `AeroelasticWingCrossSectionMovement` (how the deformation angles are applied).
 
 ## Control and Trajectories
 
@@ -439,6 +475,27 @@ For the FAAV small wing (mean chord about 0.19 m, R = 0.43 m, Phi = 60 degrees) 
 - Add them to scripts/plot_saved_flap_runs.py's summary, and restate items 27 and 28's results (the steps per flap and the wake length each needs) against them.
 
 **Where.** The flap examples, their saved metadata, and scripts/plot_saved_flap_runs.py.
+
+### 30. When ground effect matters for the flapping robots hasn't been worked out
+
+**Priority:** Medium
+
+**Problem.** The solver models ground effect with the method of images: when an OperatingPoint has a surface (surfaceNormal_E and surfacePoint_E_Eo), every bound and wake ring vortex gets a mirror image across it, which cancels the flow through the ground. The free flight problems carry the surface into every trial OperatingPoint, so a flap driven free flight can already run in ground effect. But none of the flap examples use it, and we haven't worked out when they should. Open questions:
+
+- **When it matters.** For fixed wings, ground effect is noticeable below about one wingspan of height and strong below about half a span. The FAAV's span is about 0.9 m, so takeoff, landing, low passes, and a robot on a test stand near the floor or a wall may all be in it. Flapping changes the picture: the wings' height above the ground swings through each stroke, and the wake is pushed down toward the ground, so the fixed wing rule of thumb may not carry over. Read the flapping wing ground effect literature (hovering insects and birds near the ground, and flapping robots at takeoff) for how the lift and power change with height over span and with the advance ratio (item 29).
+- **What the model can and can't do.** Read Katz and Plotkin, Section 12.2 (`docs/private/katz_plotkin_12_2/`), for the image method's assumptions. Known limits to check: the ground is flat and infinite, there is no boundary layer on it, and a wake convected into the ground has nothing to stop it piling up against its image, which may cause near singular induced velocities over a long run near the ground.
+- **What it costs.** Every kernel call gains a second launch for the images, which roughly doubles the kernel's work (see `SPEED_UP_TODO.md` item G1).
+
+**Why it matters.** If the robots' flight tests or test stand runs happen within about a span of the ground, simulations in free air may overpredict the power needed and mispredict the lift, which would bias the controller tuning and any comparison with measurements.
+
+**Fix.**
+
+- Summarize the literature on flapping wing ground effect: the height at which it becomes noticeable, and its effect on lift, thrust, and power.
+- Run the FAAV hover and a slow forward flight case at several heights (for example 0.25, 0.5, 1, and 2 spans) against free air, and record where the loads differ by more than about 5%.
+- Check the wake near the ground in those runs for build up or near singular velocities.
+- Decide which use cases need ground effect (takeoff, landing, test stand), and add a ground option to the flap examples if any do.
+
+**Where.** The flap examples, the OperatingPoint's surface parameters, and the image branches in `unsteady_ring_vortex_lattice_method.py`.
 
 ### 17. A saved problem can't be rerun
 

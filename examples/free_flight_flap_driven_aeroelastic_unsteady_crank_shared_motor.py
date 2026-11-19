@@ -83,11 +83,11 @@ crank_parameters = load_parameters("faav_crank_linkage.json")
 # forcing loses accuracy as the time step grows relative to the flap period. The vehicle
 # holds its initial state for PRESCRIBED_NUM_FLAPS flaps (one wingbeat), so the wake can
 # develop, and then flies freely for FREE_NUM_FLAPS flaps.
-FLAP_FREQUENCY = 10.0
+FLAP_FREQUENCY = 5.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
-AIR_SPEED = 0.1
-ANGLE_OF_ATTACK = 80.0
-STEPS_PER_FLAP = 40
+AIR_SPEED = 6.0
+ANGLE_OF_ATTACK = 15.0
+STEPS_PER_FLAP = 20
 PRESCRIBED_NUM_FLAPS = 1
 FREE_NUM_FLAPS = 10
 DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
@@ -103,7 +103,7 @@ DURATION = NUM_STEPS * DELTA_TIME
 # linearly with the flight time. The oldest rows, which are far behind the vehicle (or,
 # near hover, piled up under it), are dropped. Raise it for more accuracy, or set
 # MAX_WAKE_ROWS to None to keep the whole wake.
-MAX_WAKE_FLAPS = 4
+MAX_WAKE_FLAPS = 1
 MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 # MAX_WAKE_ROWS: int | None = None
 
