@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import ctypes
+import functools
+import glob
 import math
+import os
+import subprocess
 import sys
 import warnings
 
@@ -83,17 +88,151 @@ _MIN_CHUNK_SIZE = 16
 _MAX_CHUNK_SIZE = 128
 
 
+@functools.cache
+def _physical_core_count() -> int:
+    """Returns the number of physical CPU cores on this machine.
+
+    A CPU with hyperthreading (simultaneous multithreading) runs two hardware threads on
+    each physical core, and the operating system reports each as a logical processor, so
+    os.cpu_count() counts them twice. _ceiling uses the physical count, for the reason
+    its docstring gives.
+
+    Python has no portable way to count physical cores, so this tries each operating
+    system's own source in turn, and falls back to os.cpu_count() (the logical count,
+    which is the ceiling's original behavior) if none works. psutil is not used, because
+    Ptera Software doesn't depend on it. The count can't change while the process runs,
+    so it is found once and cached.
+
+    :return: A positive int representing the number of physical cores, never more than
+        the number of logical processors.
+    """
+    logical_count = os.cpu_count() or 1
+    for counter in (
+        _physical_core_count_linux,
+        _physical_core_count_macos,
+        _physical_core_count_windows,
+    ):
+        try:
+            count = counter()
+        except Exception:
+            # Any failure (a missing file, a missing system call, an unexpected format)
+            # just moves on to the next source, so counting cores can never stop a
+            # simulation. The last resort is the logical count, the original behavior.
+            continue
+        if count is not None and count > 0:
+            return min(count, logical_count)
+    return logical_count
+
+
+def _physical_core_count_linux() -> int | None:
+    """Returns the number of physical cores from Linux's sysfs CPU topology, or None
+    when it isn't available.
+
+    Each logical processor's topology directory names its physical package (socket) and
+    its core within the package. Hyperthreads on one core share both, so the count of
+    distinct pairs is the physical core count.
+
+    :return: The number of physical cores, or None.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    cores = set()
+    for topology in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/topology"):
+        with open(os.path.join(topology, "physical_package_id")) as package_file:
+            package_id = package_file.read().strip()
+        with open(os.path.join(topology, "core_id")) as core_file:
+            core_id = core_file.read().strip()
+        cores.add((package_id, core_id))
+    return len(cores) or None
+
+
+def _physical_core_count_macos() -> int | None:
+    """Returns the number of physical cores from macOS's hw.physicalcpu sysctl, or None
+    when it isn't available.
+
+    :return: The number of physical cores, or None.
+    """
+    if sys.platform != "darwin":
+        return None
+    output = subprocess.run(
+        ["sysctl", "-n", "hw.physicalcpu"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    ).stdout
+    return int(output.strip())
+
+
+def _physical_core_count_windows() -> int | None:
+    """Returns the number of physical cores from Windows'
+    GetLogicalProcessorInformationEx, or None when it isn't available.
+
+    Asked for processor core relationships only (RelationProcessorCore, 0), the call
+    fills a buffer with one variable size record per physical core. Each record starts
+    with its relationship type and then its size in bytes (two 32 bit integers), so the
+    records are counted by stepping through the buffer by each one's size.
+
+    :return: The number of physical cores, or None.
+    """
+    if sys.platform != "win32":
+        return None
+    # ctypes.WinDLL exists only on Windows, so it is looked up by name, which keeps type
+    # checkers on other platforms from flagging it.
+    get_information = getattr(ctypes, "WinDLL")(
+        "kernel32"
+    ).GetLogicalProcessorInformationEx
+    relation_processor_core = 0
+    buffer_length = ctypes.c_uint32(0)
+
+    # The first call, with no buffer, fails but reports the buffer size it needs.
+    get_information(relation_processor_core, None, ctypes.byref(buffer_length))
+    if buffer_length.value == 0:
+        return None
+    buffer = ctypes.create_string_buffer(buffer_length.value)
+    if not get_information(
+        relation_processor_core, buffer, ctypes.byref(buffer_length)
+    ):
+        return None
+
+    count = 0
+    offset = 0
+    while offset < buffer_length.value:
+        record_size = int.from_bytes(buffer.raw[offset + 4 : offset + 8], "little")
+        if record_size == 0:
+            break
+        count += 1
+        offset += record_size
+    return count
+
+
 def _ceiling() -> int:
     """Returns the largest share of the Numba thread pool that a kernel launch may use.
 
-    The share is three quarters of the pool's width, rounded down, never below 1. A team
-    that claims every logical processor stalls on its closing barrier whenever anything
-    else on the machine wants CPU time, because the scheduler delays one member and the
-    barrier waits for that laggard. Three quarters leaves enough slack to absorb
-    realistic background bursts, and it costs nothing where it binds, having measured as
-    the fastest width in every non-idle condition tested. The ceiling applies uniformly,
-    including to thread masks set at or above it. Masks below the ceiling are honored
-    exactly.
+    The share is three quarters of the smaller of the pool's width and the machine's
+    physical core count, rounded down, never below 1.
+
+    Why three quarters: a team that claims every core stalls on its closing barrier
+    whenever anything else on the machine wants CPU time, because the scheduler delays
+    one member and the barrier waits for that laggard. The main Python thread, which
+    runs everything outside the kernels, and the operating system's own work need cores
+    too. Three quarters leaves them that slack, and it costs nothing where it binds,
+    having measured as the fastest width in every condition tested.
+
+    Why physical cores rather than logical processors: with hyperthreading, a physical
+    core's two hardware threads share its execution units, including the square root and
+    division unit, which is what limits the vectorized ring vortex kernel. A second
+    thread on the same core gets no extra square roots or divisions done, and only adds
+    to the synchronization cost. On this project's development machine (8 physical
+    cores, 16 logical processors), a cap of 6 kernel threads ran the free flight
+    benchmark about 10% faster than the old cap of 12 (three quarters of the logical
+    processors), and 8 ran slower than 6. On a CPU without hyperthreading, the two
+    counts are equal and the ceiling is unchanged.
+
+    The ceiling applies uniformly, including to thread masks set at or above it. Masks
+    below the ceiling are honored exactly, so a batch of single thread simulations runs
+    exactly as before. The thread count never changes the results, since each point's
+    velocity is summed by one thread in a fixed order.
 
     The pool's width is read here rather than at import, because a module-level read
     would do arithmetic on a Numba attribute while the module is being imported, which
@@ -107,7 +246,16 @@ def _ceiling() -> int:
     # Numba populates its config module's attributes dynamically, so mypy sees this one
     # as untyped. Convert it explicitly rather than returning an untyped value.
     pool_width = int(numba.config.NUMBA_NUM_THREADS)
-    return max((3 * pool_width) // 4, 1)
+
+    # Changed for speed: the ceiling used to be three quarters of the pool's width alone
+    # (the commented out line below), which by default is the number of logical
+    # processors. It now uses the smaller of the pool's width and the physical core
+    # count, so hyperthreads that would share a core's square root and division unit
+    # aren't counted twice.
+    # octowrap: off
+    # return max((3 * pool_width) // 4, 1)
+    # octowrap: on
+    return max((3 * min(pool_width, _physical_core_count())) // 4, 1)
 
 
 def _threads_for_launch(num_points: int, num_vortices: int) -> int:
@@ -177,7 +325,9 @@ def report_thread_settings() -> None:
     _logger.debug(
         _logging.indent()
         + f"Numba thread pool width: {numba.config.NUMBA_NUM_THREADS}, thread mask: "
-        + f"{external_cap}, ceiling: {ceiling} (three quarters of the pool)"
+        + f"{external_cap}, physical cores: {_physical_core_count()}, ceiling: "
+        + f"{ceiling} (three quarters of the smaller of the pool and the physical "
+        + "cores)"
     )
     _logger.debug(
         _logging.indent()

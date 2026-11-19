@@ -1,6 +1,7 @@
 """This module contains a class to test aerodynamics functions."""
 
 import math
+import os
 import unittest
 import warnings
 from decimal import Decimal, localcontext
@@ -2753,10 +2754,21 @@ class TestParallelDispatchWrappers(unittest.TestCase):
 
     def test_many_grain_launch_is_capped_at_the_ceiling(self) -> None:
         """Test that a launch spanning more grains than the ceiling is capped at three
-        quarters of the pool width."""
+        quarters of the smaller of the pool width and the physical core count."""
         # Compute the documented ceiling independently of the module's own derivation:
-        # three quarters of the pool width, rounded down, never below 1.
-        ceiling = max((3 * numba.config.NUMBA_NUM_THREADS) // 4, 1)
+        # three quarters of the smaller of the pool width and the physical core count,
+        # rounded down, never below 1.
+        ceiling = max(
+            (
+                3
+                * min(
+                    numba.config.NUMBA_NUM_THREADS,
+                    _aerodynamics_functions._physical_core_count(),
+                )
+            )
+            // 4,
+            1,
+        )
 
         # With one ring vortex, this stack of points makes the launch span one more
         # grain than the ceiling, so the work-proportional count exceeds the ceiling.
@@ -2978,3 +2990,108 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
                     self._assert_matches_reference(inputs)
         finally:
             numba.set_num_threads(original_num_threads)
+
+
+class TestPhysicalCoreCeiling(unittest.TestCase):
+    """This is a class with functions to test _physical_core_count and the kernel thread
+    ceiling built on it."""
+
+    def setUp(self) -> None:
+        """Clear the cached physical core count, so each test computes it fresh."""
+        _aerodynamics_functions._physical_core_count.cache_clear()
+
+    def tearDown(self) -> None:
+        """Clear the cache again, so a patched count doesn't leak into other tests."""
+        _aerodynamics_functions._physical_core_count.cache_clear()
+
+    def test_count_is_positive_and_at_most_the_logical_count(self) -> None:
+        """Test that the physical core count is a positive int no larger than the number
+        of logical processors."""
+        count = _aerodynamics_functions._physical_core_count()
+        self.assertIsInstance(count, int)
+        self.assertGreaterEqual(count, 1)
+        self.assertLessEqual(count, os.cpu_count() or 1)
+
+    _SOURCES = (
+        "_physical_core_count_linux",
+        "_physical_core_count_macos",
+        "_physical_core_count_windows",
+    )
+
+    def test_falls_back_to_the_logical_count_when_every_source_fails(self) -> None:
+        """Test that the count falls back to os.cpu_count() when no operating system
+        source works, whether the sources raise or report that they don't apply (by
+        returning None), which keeps the ceiling's original behavior.
+
+        Every source is patched, so this runs the same on any operating system.
+        """
+        failures: dict[str, dict[str, Any]] = {
+            "raise": {"side_effect": OSError("Mock failure.")},
+            "return None": {"return_value": None},
+        }
+        for failure, behavior in failures.items():
+            with self.subTest(failure=failure):
+                _aerodynamics_functions._physical_core_count.cache_clear()
+                with (
+                    patch.object(_aerodynamics_functions, self._SOURCES[0], **behavior),
+                    patch.object(_aerodynamics_functions, self._SOURCES[1], **behavior),
+                    patch.object(_aerodynamics_functions, self._SOURCES[2], **behavior),
+                ):
+                    self.assertEqual(
+                        _aerodynamics_functions._physical_core_count(),
+                        os.cpu_count() or 1,
+                    )
+
+    def test_uses_the_first_source_that_works(self) -> None:
+        """Test that each source's count is used when the sources before it fail, so the
+        logic doesn't depend on which operating system runs the test."""
+        for working_index in range(len(self._SOURCES)):
+            with self.subTest(source=self._SOURCES[working_index]):
+                _aerodynamics_functions._physical_core_count.cache_clear()
+                patches = [
+                    patch.object(
+                        _aerodynamics_functions,
+                        source,
+                        **(
+                            {"return_value": 1}
+                            if index == working_index
+                            else {"side_effect": OSError("Mock failure.")}
+                        ),
+                    )
+                    for index, source in enumerate(self._SOURCES)
+                ]
+                with patches[0], patches[1], patches[2]:
+                    self.assertEqual(_aerodynamics_functions._physical_core_count(), 1)
+
+    def test_count_never_exceeds_the_logical_count(self) -> None:
+        """Test that an implausible count from a source is capped at the number of
+        logical processors.
+
+        Every source is patched, so this runs the same on any operating system.
+        """
+        with (
+            patch.object(
+                _aerodynamics_functions, self._SOURCES[0], return_value=10_000
+            ),
+            patch.object(_aerodynamics_functions, self._SOURCES[1], return_value=None),
+            patch.object(_aerodynamics_functions, self._SOURCES[2], return_value=None),
+        ):
+            self.assertEqual(
+                _aerodynamics_functions._physical_core_count(), os.cpu_count() or 1
+            )
+
+    def test_ceiling_is_three_quarters_of_the_smaller_count(self) -> None:
+        """Test that the ceiling is three quarters of the smaller of the pool width and
+        the physical core count, rounded down, never below 1."""
+        pool_width = int(numba.config.NUMBA_NUM_THREADS)
+        for physical in (1, 2, 4, 8, 64):
+            with self.subTest(physical=physical):
+                with patch.object(
+                    _aerodynamics_functions,
+                    "_physical_core_count",
+                    return_value=physical,
+                ):
+                    self.assertEqual(
+                        _aerodynamics_functions._ceiling(),
+                        max((3 * min(pool_width, physical)) // 4, 1),
+                    )
