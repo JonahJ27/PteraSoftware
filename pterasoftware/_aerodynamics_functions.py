@@ -98,6 +98,44 @@ _MAX_CHUNK_SIZE = 128
 # changes the results.
 _CHUNK_SIZE_MULTIPLE = 8
 
+# WARNING, READ BEFORE CHANGING: these two constants pack two integer counts into one
+# float. The vectorized ring vortex kernel
+# (_collapsed_velocities_from_ring_vortices_vectorized) counts, for every point, how
+# many line vortices have that point exactly on their start vertex and how many have it
+# exactly on their end vertex. These counts only feed the singularity diagnostics
+# (singularity_counts[1] and [2]); they never change a velocity. To make the kernel
+# faster, it keeps both counts in ONE float64 per point:
+#
+#     packed = start_count * 1 + end_count * _VERTEX_HIT_BASE
+#
+# and after its loops it gets the two counts back with
+#
+#     start_count = packed % _VERTEX_HIT_BASE
+#     end_count = packed // _VERTEX_HIT_BASE
+#
+# This is exact, not approximate, as long as BOTH of these hold:
+#   1. Each count stays below _VERTEX_HIT_BASE (2^26 = 67,108,864). Otherwise the start
+#      count would spill into the end count's digits and both would be wrong.
+#   2. The packed total stays below 2^53. A float64 stores every whole number up to 2^53
+#      exactly, and adding whole numbers never rounds below that. With condition 1, the
+#      total is below 2^26 * 2^26 + 2^26, far below 2^53.
+# A point can get at most one hit per (leg, ring vortex) pair, so each count is at most
+# 4 * (number of ring vortices). collapsed_velocities_from_ring_vortices therefore
+# raises a ValueError before launching the kernel if a launch has
+# _MAX_RING_VORTICES_PER_LAUNCH or more ring vortices (about 16.8 million). Real runs
+# have thousands to tens of thousands, and in practice a point is on at most about 4
+# start and 4 end vertices (one corner shared by 4 ring vortices), so neither limit is
+# ever close. If something goes wrong here, only the logged singularity counts would be
+# wrong, never the induced velocities. Before raising _VERTEX_HIT_BASE, recheck
+# condition 2.
+_VERTEX_HIT_BASE = 2**26
+_MAX_RING_VORTICES_PER_LAUNCH = _VERTEX_HIT_BASE // 4
+
+# The same base as a float, so that the kernel's packed count update stays entirely in
+# float64 arithmetic (mixing in an integer would undo the speed up). 2^26 is exactly
+# representable as a float64.
+_VERTEX_HIT_BASE_FLOAT = float(_VERTEX_HIT_BASE)
+
 
 @functools.cache
 def _physical_core_count() -> int:
@@ -449,6 +487,20 @@ def collapsed_velocities_from_ring_vortices(
 
     num_points = stackP_GP1_CgP1.shape[0]
     num_vortices = strengths.shape[0]
+
+    # Guard for the packed vertex hit counts. The vectorized kernel keeps each point's
+    # start vertex and end vertex hit counts in one float64, which is exact only while
+    # each count stays below _VERTEX_HIT_BASE. Each count is at most 4 * num_vortices,
+    # so refuse any launch large enough to break that, instead of silently logging wrong
+    # singularity counts. See the comment at _VERTEX_HIT_BASE. Real runs are about a
+    # thousand times below this limit.
+    if num_vortices >= _MAX_RING_VORTICES_PER_LAUNCH:
+        raise ValueError(
+            f"collapsed_velocities_from_ring_vortices got {num_vortices} ring "
+            f"vortices, but it supports at most {_MAX_RING_VORTICES_PER_LAUNCH - 1} per "
+            "call, because its kernel packs two singularity counts into one float64 "
+            "(see _VERTEX_HIT_BASE in _aerodynamics_functions.py)."
+        )
 
     # Bound ring vortices have no ages. The line vortex kernel treated None as every age
     # being 0.0, so pass that explicitly.
@@ -1286,12 +1338,20 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
 
     The chunk size only affects speed (see the module's chunk size constants).
 
+    The singularity counts for points on a start vertex and on an end vertex are kept
+    packed in one float64 per point (start + end * _VERTEX_HIT_BASE) inside the point
+    loop, and unpacked once per point at the end. One float array costs much less in the
+    vectorized loop than two integer arrays, and it is exact while M is below
+    _MAX_RING_VORTICES_PER_LAUNCH, which collapsed_velocities_from_ring_vortices
+    enforces. See the comment at _VERTEX_HIT_BASE. The velocities don't depend on this.
+
     :param stackP_GP1_CgP1: A (N,3) C contiguous ndarray of floats representing the
         positions of N points (in the first Airplane's geometry axes, relative to the
         first Airplane's CG). The units are in meters.
     :param stackBrrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
         M ring vortices' back right vertices (in the first Airplane's geometry axes,
-        relative to the first Airplane's CG). The units are in meters.
+        relative to the first Airplane's CG). The units are in meters. M must be below
+        _MAX_RING_VORTICES_PER_LAUNCH (see above).
     :param stackFrrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
         the M ring vortices' front right vertices (in the first Airplane's geometry
         axes, relative to the first Airplane's CG). The units are in meters.
@@ -1404,8 +1464,19 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
         allLegsX = np.zeros(n)
         allLegsY = np.zeros(n)
         allLegsZ = np.zeros(n)
-        start_vertex_counts = np.zeros(n, dtype=np.int64)
-        end_vertex_counts = np.zeros(n, dtype=np.int64)
+
+        # Changed for speed: the two per point integer count arrays below were replaced
+        # by one float64 array, packed_vertex_hits, which holds both counts as
+        # start_count + end_count * _VERTEX_HIT_BASE. Updating two int64 arrays in the
+        # vectorized loop below cost about a third of the kernel's time (two more arrays
+        # to load and store, and converting float compare results to integer lanes). The
+        # packing is exact under the limits described at _VERTEX_HIT_BASE, and it never
+        # affects the velocities.
+        # octowrap: off
+        # start_vertex_counts = np.zeros(n, dtype=np.int64)
+        # end_vertex_counts = np.zeros(n, dtype=np.int64)
+        # octowrap: on
+        packed_vertex_hits = np.zeros(n)
 
         for leg in range(4):
             # Each point's sum over this leg's vortices, starting at 0.0.
@@ -1466,9 +1537,31 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
                     legX[p] += c_4 * r3X_GP1
                     legY[p] += c_4 * r3Y_GP1
                     legZ[p] += c_4 * r3Z_GP1
-                    start_vertex_counts[p] += 1 if (on_vertex and r1 == 0.0) else 0
-                    end_vertex_counts[p] += (
-                        1 if (on_vertex and r1 != 0.0 and r2 == 0.0) else 0
+
+                    # Changed for speed: count this pair's vertex hit in the packed
+                    # float instead of the two integer arrays (the old code is commented
+                    # out below). The conditions are the old ones exactly:
+                    #   - point on the start vertex (on_vertex and r1 == 0.0): add 1.0,
+                    #     which counts one in the start count's digits;
+                    #   - otherwise, point on the end vertex (on_vertex and r2 == 0.0,
+                    #     and r1 != 0.0 because the first branch wasn't taken): add
+                    #     _VERTEX_HIT_BASE_FLOAT (2^26), which counts one in the end
+                    #     count's digits;
+                    #   - otherwise: add 0.0, no hit.
+                    # Every value added is a whole number and the total stays far below
+                    # 2^53, so each addition is exact (see _VERTEX_HIT_BASE).
+                    # octowrap: off
+                    # start_vertex_counts[p] += 1 if (on_vertex and r1 == 0.0) else 0
+                    # end_vertex_counts[p] += (
+                    #     1 if (on_vertex and r1 != 0.0 and r2 == 0.0) else 0
+                    # )
+                    # octowrap: on
+                    packed_vertex_hits[p] += (
+                        1.0
+                        if (on_vertex and r1 == 0.0)
+                        else (
+                            _VERTEX_HIT_BASE_FLOAT if (on_vertex and r2 == 0.0) else 0.0
+                        )
                     )
 
             # Add this leg's sums to the totals, in leg order.
@@ -1481,8 +1574,18 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
             stackVInd_GP1__E[start + p, 0] = allLegsX[p]
             stackVInd_GP1__E[start + p, 1] = allLegsY[p]
             stackVInd_GP1__E[start + p, 2] = allLegsZ[p]
-            point_singularity_counts[start + p, 1] = start_vertex_counts[p]
-            point_singularity_counts[start + p, 2] = end_vertex_counts[p]
+            # Changed for speed: unpack this point's two vertex hit counts from
+            # packed_vertex_hits = start_count + end_count * _VERTEX_HIT_BASE. The float
+            # holds a whole number exactly, so converting it to int64 loses nothing. The
+            # remainder after dividing by the base is the start count (always below the
+            # base, see _VERTEX_HIT_BASE), and the quotient is the end count.
+            # octowrap: off
+            # point_singularity_counts[start + p, 1] = start_vertex_counts[p]
+            # point_singularity_counts[start + p, 2] = end_vertex_counts[p]
+            # octowrap: on
+            packed_hits = np.int64(packed_vertex_hits[p])
+            point_singularity_counts[start + p, 1] = packed_hits % _VERTEX_HIT_BASE
+            point_singularity_counts[start + p, 2] = packed_hits // _VERTEX_HIT_BASE
 
     # Aggregate per point singularity counts into the output array.
     for k in range(1, 3):

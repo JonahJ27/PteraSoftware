@@ -3109,6 +3109,89 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
                     self._assert_close(actual, expected)
                     npt.assert_array_equal(actual_counts, expected_counts)
 
+    def test_packed_vertex_hit_counts_with_many_hits_per_point(self) -> None:
+        """Test that the packed vertex hit counts (TODO item K3) unpack exactly when one
+        point is on a vertex of many ring vortices, so that its start and end counts are
+        both well above 1, and that they match the four launch reference.
+
+        Every vertex of a ring vortex is the start of one leg and the end of another, so
+        a point on a shared corner gets one start hit and one end hit per ring vortex.
+        Here 50 ring vortices share their back right vertex at the first point, and 7
+        others share their front left vertex at the second point.
+        """
+        rng = np.random.default_rng(5)
+        inputs = self._make_inputs(rng, 40, 80, wake=True, scale=1.0)
+        inputs["Br"][:50] = inputs["P"][0]
+        inputs["Fl"][50:57] = inputs["P"][1]
+        self._assert_matches_reference(inputs)
+
+        counts = np.zeros(3, dtype=np.int64)
+        _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
+            stackP_GP1_CgP1=inputs["P"],
+            stackBrrvp_GP1_CgP1=inputs["Br"],
+            stackFrrvp_GP1_CgP1=inputs["Fr"],
+            stackFlrvp_GP1_CgP1=inputs["Fl"],
+            stackBlrvp_GP1_CgP1=inputs["Bl"],
+            strengths=inputs["strengths"],
+            r_c0s=inputs["r_c0s"],
+            singularity_counts=counts,
+            ages=inputs["ages"],
+            nu=inputs["nu"],
+        )
+        npt.assert_array_equal(counts, np.array([0, 57, 57], dtype=np.int64))
+
+    def test_vertex_hit_packing_constants_are_exact(self) -> None:
+        """Test that the packing constants satisfy the conditions under which the packed
+        vertex hit counts are exact (see _VERTEX_HIT_BASE): the largest packed total is
+        a whole number below 2^53, the float base equals the integer base, and the
+        launch limit keeps each count, at most 4 per ring vortex, below the base."""
+        base = _aerodynamics_functions._VERTEX_HIT_BASE
+        limit = _aerodynamics_functions._MAX_RING_VORTICES_PER_LAUNCH
+        self.assertEqual(_aerodynamics_functions._VERTEX_HIT_BASE_FLOAT, float(base))
+        self.assertEqual(int(float(base)), base)
+        self.assertLess(4 * (limit - 1), base)
+        largest_count = base - 1
+        largest_total = largest_count + largest_count * base
+        self.assertLess(largest_total, 2**53)
+        self.assertEqual(int(float(largest_total)), largest_total)
+        self.assertEqual(int(float(largest_total)) % base, largest_count)
+        self.assertEqual(int(float(largest_total)) // base, largest_count)
+
+    def test_raises_at_the_ring_vortex_launch_limit(self) -> None:
+        """Test that collapsed_velocities_from_ring_vortices refuses a launch with
+        _MAX_RING_VORTICES_PER_LAUNCH or more ring vortices, whose packed vertex hit
+        counts might not be exact, and accepts one below it.
+
+        The limit is patched to a small value, since a real launch at the limit (about
+        16.8 million ring vortices) is too large for a unit test.
+        """
+        rng = np.random.default_rng(6)
+        with patch.object(_aerodynamics_functions, "_MAX_RING_VORTICES_PER_LAUNCH", 10):
+            for num_vortices, should_raise in ((9, False), (10, True), (11, True)):
+                inputs = self._make_inputs(rng, 5, num_vortices, wake=True, scale=1.0)
+                arguments = dict(
+                    stackP_GP1_CgP1=inputs["P"],
+                    stackBrrvp_GP1_CgP1=inputs["Br"],
+                    stackFrrvp_GP1_CgP1=inputs["Fr"],
+                    stackFlrvp_GP1_CgP1=inputs["Fl"],
+                    stackBlrvp_GP1_CgP1=inputs["Bl"],
+                    strengths=inputs["strengths"],
+                    r_c0s=inputs["r_c0s"],
+                    singularity_counts=np.zeros(3, dtype=np.int64),
+                    ages=inputs["ages"],
+                    nu=inputs["nu"],
+                )
+                with self.subTest(num_vortices=num_vortices):
+                    if should_raise:
+                        with self.assertRaises(ValueError):
+                            _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
+                                **arguments
+                            )
+                    else:
+                        _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
+                            **arguments
+                        )
+
 
 class TestPhysicalCoreCeiling(unittest.TestCase):
     """This is a class with functions to test _physical_core_count and the kernel thread
