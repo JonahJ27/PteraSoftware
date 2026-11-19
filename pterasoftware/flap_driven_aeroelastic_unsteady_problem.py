@@ -922,16 +922,23 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
         Wing's flap angular acceleration over the time step. Otherwise, the Wing's
         prescribed flap motion sets it, as in the parent class.
 
+        The inertia is applied as a single multiplication, as the parent method's
+        docstring requires, because the parent's _solve_strips_analytically samples this
+        function once per Wing with an inertia of 1.0 and scales the samples by each
+        strip's inertia.
+
         :param flapping_axis_inertia: The strip's rotational inertia about the flapping
             axis (kg*m^2).
         :param wing_movement: The AeroelasticWingMovement whose flap motion is used.
         :return: A callable that accepts a time (s) and returns the inertial moment
             (N*m).
         """
-        # The parent's torsional spring model calls this once per strip per time step.
-        # For a driven Wing, the acceleration is the one _advance_flap_drives just
-        # recorded for this interval, so the strip's inertial load follows the flap's
-        # actual motion, including any lag or saturation of the actuator.
+        # The parent's torsional spring model calls this once per Wing per time step
+        # with the analytical spring solver (with an inertia of 1.0), and once per strip
+        # per time step with the numerical one. For a driven Wing, the acceleration is
+        # the one _advance_flap_drives just recorded for this interval, so the strip's
+        # inertial load follows the flap's actual motion, including any lag or
+        # saturation of the actuator.
         if isinstance(
             wing_movement,
             flap_driven_wing_movement_mod.FlapDrivenAeroelasticWingMovement,

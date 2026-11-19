@@ -730,6 +730,105 @@ class TestFlapDrivenAeroelasticUnsteadyProblem(unittest.TestCase):
         actual = cls._generate_inertial_moment_function(0.2, wing_movement)
         self.assertAlmostEqual(actual(0.1), 0.2 * 3.0)
 
+    @staticmethod
+    def _record_saturated_acceleration(wing_movement: Any, step: int) -> None:
+        """Records a flap acceleration for a step, sampled as _advance_flap_drives
+        samples it, with a clipped stretch in the middle like a saturated motor's.
+
+        :param wing_movement: The FlapDrivenAeroelasticWingMovement to record on.
+        :param step: The time step whose acceleration to record.
+        """
+        dt = 0.0025
+        times = np.linspace(dt * (step - 1), dt * step, 100)
+        accelerations = np.clip(
+            4000.0 * np.sin(2.0 * np.pi * 10.0 * times + 0.3), -2500.0, 2500.0
+        )
+        wing_movement.record_flap_step(
+            step,
+            0.0,
+            ps.flap_driven_aeroelastic_unsteady_problem._make_interpolated_function(
+                times, accelerations
+            ),
+        )
+
+    def test_batched_spring_solve_matches_per_strip_with_recorded_acceleration(
+        self,
+    ) -> None:
+        """Test that the batched analytical spring solve matches solving each strip on
+        its own, byte for byte, when a FlapDrive's recorded acceleration (including a
+        saturated stretch) drives the inertial forcing."""
+        self.assertTrue(self.problem.use_analytical_spring_solver)
+        wing_movement = _make_wing_movement()
+        rng = np.random.default_rng(0)
+        num_strips = 6
+        dt = 0.0025
+        torsional_inertias = 10 ** rng.uniform(-9.0, -4.0, num_strips)
+        flapping_axis_inertias = 10 ** rng.uniform(-8.0, -3.0, num_strips)
+        aeroMoments_GP1_Slep = rng.normal(0.0, 1e-3, (5, num_strips, 3))
+        theta = rng.normal(0.0, 0.05, num_strips)
+        theta_derivative = rng.normal(0.0, 1.0, num_strips)
+        # Steps are recorded in order from 0, which has no preceding interval.
+        wing_movement.record_flap_step(0, 0.0, None)
+        for step in range(1, 4):
+            self._record_saturated_acceleration(wing_movement, step)
+            batched = self.problem._solve_strips_analytically(
+                dt=dt,
+                step=step,
+                torsional_inertias=torsional_inertias,
+                flapping_axis_inertias=flapping_axis_inertias,
+                lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz=theta,
+                lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz=theta_derivative,
+                aeroMoments_GP1_Slep=aeroMoments_GP1_Slep,
+                wing_movement=wing_movement,
+            )
+            reference = [
+                self.problem._calculate_torsional_spring_moment(
+                    dt,
+                    torsional_inertia=torsional_inertias[strip],
+                    lastDeformationAngleYRad_Wcsp_to_Wcs_ixyz=theta[strip],
+                    lastDeformationAngleDerivativeYRad_Wcsp_to_Wcs_ixyz=(
+                        theta_derivative[strip]
+                    ),
+                    aeroMomentY_GP1_Slep=np.sum(aeroMoments_GP1_Slep[:, strip, 1]),
+                    step=step,
+                    flapping_axis_inertia=flapping_axis_inertias[strip],
+                    wing_movement=wing_movement,
+                )
+                for strip in range(num_strips)
+            ]
+            theta = np.array([state[0] for state in reference], dtype=float)
+            theta_derivative = np.array([state[1] for state in reference], dtype=float)
+            with self.subTest(step=step):
+                # Comparing the raw bytes also tells 0.0 from -0.0.
+                self.assertEqual(batched[0].tobytes(), theta.tobytes())
+                self.assertEqual(batched[1].tobytes(), theta_derivative.tobytes())
+
+    def test_recorded_acceleration_inertial_moment_contract(self) -> None:
+        """Test that the FlapDrive override applies the flapping-axis inertia as a
+        single multiplication, so I * f_1(t) equals f_I(t) byte for byte, which the
+        batched analytical spring solve relies on."""
+        wing_movement = _make_wing_movement()
+        # Steps are recorded in order from 0, which has no preceding interval.
+        wing_movement.record_flap_step(0, 0.0, None)
+        self._record_saturated_acceleration(wing_movement, 1)
+        cls = (
+            ps.flap_driven_aeroelastic_unsteady_problem.FlapDrivenAeroelasticUnsteadyProblem
+        )
+        sample_times = np.linspace(0.0, 0.0025, 100)
+        unit = cls._generate_inertial_moment_function(1.0, wing_movement)
+        for inertia in 10 ** np.random.default_rng(1).uniform(-8.0, 0.0, 20):
+            scaled = cls._generate_inertial_moment_function(
+                float(inertia), wing_movement
+            )
+            with self.subTest(inertia=inertia):
+                expected = np.array(
+                    [float(scaled(float(time))) for time in sample_times]
+                )
+                actual = inertia * np.array(
+                    [float(unit(float(time))) for time in sample_times]
+                )
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
     def test_prescribed_wings_keep_the_parent_inertial_moment(self) -> None:
         """Test that a Wing with no recorded acceleration behaves as in the parent."""
         wing_movement = _make_wing_movement()

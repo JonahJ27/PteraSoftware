@@ -997,6 +997,416 @@ class TestUseAnalyticalSpringSolver(unittest.TestCase):
         self.assertEqual((spring_samples - 1) % (flap_samples - 1), 0)
 
 
+def _original_spring_analytical_ode(
+    t: np.ndarray,
+    spring_constant_rad: float,
+    damping_constant_rad: float,
+    torsional_inertia: float,
+    theta0_rad: float,
+    theta_derivative0_rad: float,
+    aero_moment: float,
+    inertial_moment_func: Callable[[float], float],
+) -> tuple[float, float]:
+    """An independent copy of _spring_analytical_ode as it was before its stepping was
+    shared with _solve_strips_analytically, one strip with piece_map @ vector per piece.
+    The tests compare the shared code against it bit for bit.
+
+    :param t: A (N,) ndarray of time points; only the first and last are used.
+    :param spring_constant_rad: The spring constant (N*m/rad).
+    :param damping_constant_rad: The damping constant (N*m*s/rad).
+    :param torsional_inertia: The torsional inertia (kg*m^2).
+    :param theta0_rad: The initial angle (radians).
+    :param theta_derivative0_rad: The initial angle's time derivative (rad/s).
+    :param aero_moment: The constant aerodynamic moment (N*m).
+    :param inertial_moment_func: The inertial moment as a function of time (N*m).
+    :return: The final angle (radians) and its time derivative (rad/s).
+    """
+    sample_times = np.linspace(t[0], t[-1], problems_module._SPRING_FORCING_SAMPLES)
+    piece_duration = float(sample_times[1] - sample_times[0])
+    moments = [
+        float(aero_moment + inertial_moment_func(float(sample_time)))
+        for sample_time in sample_times
+    ]
+    piece_map = problems_module._spring_piece_map(
+        spring_constant_rad, damping_constant_rad, torsional_inertia, piece_duration
+    )
+    state = np.array([theta0_rad, theta_derivative0_rad], dtype=float)
+    for piece in range(problems_module._SPRING_FORCING_SAMPLES - 1):
+        start_moment = moments[piece]
+        moment_change = moments[piece + 1] - start_moment
+        state = piece_map @ np.array(
+            [state[0], state[1], start_moment, moment_change], dtype=float
+        )
+    return float(state[0]), float(state[1])
+
+
+class TestSolveStripsAnalytically(unittest.TestCase):
+    """This class contains unit tests for AeroelasticUnsteadyProblem's
+    _solve_strips_analytically, which solves all of a Wing's strips at once with the
+    analytical spring solver, and must match solving them one at a time bit for bit."""
+
+    def setUp(self) -> None:
+        """Set up an analytical solver problem and its sinusoidally flapping Wing's
+        movement."""
+        self.problem = ps.problems.AeroelasticUnsteadyProblem(
+            movement=movement_fixtures.make_basic_aeroelastic_movement_fixture(),
+            wing_density=0.01,
+            spring_constant_rad=10.0,
+            damping_constant_rad=0.5,
+            use_analytical_spring_solver=True,
+        )
+        wing_movement = self.problem._aeroelastic_movement.airplane_movements[
+            0
+        ].wing_movements[0]
+        assert isinstance(
+            wing_movement,
+            ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement,
+        )
+        self.wing_movement = wing_movement
+
+    @staticmethod
+    def _make_strips(
+        rng: np.random.Generator, num_strips: int
+    ) -> dict[str, np.ndarray]:
+        """Makes random strip inputs, with inertias spread over several decades.
+
+        :param rng: The random number generator.
+        :param num_strips: The number of strips.
+        :return: A dict of the strips' inertias, previous states, and aerodynamic
+            moments.
+        """
+        return {
+            "torsional_inertias": 10 ** rng.uniform(-9.0, -3.0, num_strips),
+            "flapping_axis_inertias": 10 ** rng.uniform(-8.0, -2.0, num_strips),
+            "theta": rng.normal(0.0, 0.05, num_strips),
+            "theta_derivative": rng.normal(0.0, 1.0, num_strips),
+            "aeroMoments_GP1_Slep": rng.normal(0.0, 1e-3, (6, num_strips, 3)),
+        }
+
+    def _assert_matches_per_strip_solve(
+        self,
+        wing_movement: Any,
+        num_strips: int = 7,
+        num_steps: int = 5,
+        seed: int = 0,
+    ) -> None:
+        """Asserts that _solve_strips_analytically matches
+        _calculate_torsional_spring_moment called for each strip in turn, byte for byte,
+        over several steps with each step's state fed into the next.
+
+        :param wing_movement: The Wing movement whose inertial forcing is used.
+        :param num_strips: The number of strips.
+        :param num_steps: The number of steps to march.
+        :param seed: The random seed.
+        :return: None
+        """
+        rng = np.random.default_rng(seed)
+        strips = self._make_strips(rng, num_strips)
+        dt = 0.0025
+        batched_theta = strips["theta"].copy()
+        batched_derivative = strips["theta_derivative"].copy()
+        reference_theta = strips["theta"].copy()
+        reference_derivative = strips["theta_derivative"].copy()
+        for step in range(1, num_steps + 1):
+            batched_theta, batched_derivative = self.problem._solve_strips_analytically(
+                dt=dt,
+                step=step,
+                torsional_inertias=strips["torsional_inertias"],
+                flapping_axis_inertias=strips["flapping_axis_inertias"],
+                lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz=batched_theta,
+                lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz=(
+                    batched_derivative
+                ),
+                aeroMoments_GP1_Slep=strips["aeroMoments_GP1_Slep"],
+                wing_movement=wing_movement,
+            )
+            reference = [
+                self.problem._calculate_torsional_spring_moment(
+                    dt,
+                    torsional_inertia=strips["torsional_inertias"][strip],
+                    lastDeformationAngleYRad_Wcsp_to_Wcs_ixyz=reference_theta[strip],
+                    lastDeformationAngleDerivativeYRad_Wcsp_to_Wcs_ixyz=(
+                        reference_derivative[strip]
+                    ),
+                    aeroMomentY_GP1_Slep=np.sum(
+                        strips["aeroMoments_GP1_Slep"][:, strip, 1]
+                    ),
+                    step=step,
+                    flapping_axis_inertia=strips["flapping_axis_inertias"][strip],
+                    wing_movement=wing_movement,
+                )
+                for strip in range(num_strips)
+            ]
+            reference_theta = np.array([state[0] for state in reference], dtype=float)
+            reference_derivative = np.array(
+                [state[1] for state in reference], dtype=float
+            )
+            with self.subTest(step=step):
+                # Comparing the raw bytes also tells 0.0 from -0.0.
+                self.assertEqual(batched_theta.tobytes(), reference_theta.tobytes())
+                self.assertEqual(
+                    batched_derivative.tobytes(), reference_derivative.tobytes()
+                )
+
+    def test_matches_per_strip_solve_for_sine_forcing(self) -> None:
+        """Test bit for bit agreement with a sinusoidally flapping Wing."""
+        self._assert_matches_per_strip_solve(self.wing_movement)
+
+    def test_matches_per_strip_solve_without_flapping(self) -> None:
+        """Test bit for bit agreement with a Wing that doesn't flap (zero inertial
+        forcing)."""
+        self._assert_matches_per_strip_solve(
+            aeroelastic_wing_movement_fixtures.make_static_aeroelastic_wing_movement_fixture(),
+            seed=1,
+        )
+
+    def test_matches_per_strip_solve_for_custom_spacing(self) -> None:
+        """Test bit for bit agreement with a custom spacing function and its second
+        derivative."""
+        wing_movement = self.wing_movement
+        with (
+            patch.object(
+                type(wing_movement),
+                "spacingAngles_Gs_to_Wn_ixyz",
+                new_callable=PropertyMock,
+                return_value=(lambda t: np.sin(t), "sine", "sine"),
+            ),
+            patch.object(
+                type(wing_movement),
+                "spacingAnglesSecondDerivative_Gs_to_Wn_ixyz",
+                new_callable=PropertyMock,
+                return_value=(lambda t: -np.sin(t), None, None),
+            ),
+        ):
+            self._assert_matches_per_strip_solve(wing_movement, seed=2)
+
+    def test_matches_per_strip_solve_with_one_strip(self) -> None:
+        """Test bit for bit agreement for a Wing with a single strip."""
+        self._assert_matches_per_strip_solve(self.wing_movement, num_strips=1, seed=3)
+
+    def test_spring_analytical_ode_matches_the_original_per_strip_code(self) -> None:
+        """Test that _spring_analytical_ode, which now steps through the shared
+        _advance_spring_strips, gives the same bits as the original one strip code, over
+        random strips and both constant and sinusoidal inertial forcing."""
+        rng = np.random.default_rng(7)
+        sine_function = self.problem._generate_inertial_moment_function(
+            1e-4, self.wing_movement
+        )
+        forcings: list[Callable[[float], float]] = [
+            lambda time: 0.0,
+            lambda time: 2e-3,
+            sine_function,
+        ]
+        for case in range(30):
+            dt = 0.0025
+            step = int(rng.integers(1, 50))
+            t = np.linspace(dt * (step - 1), dt * step, 2)
+            arguments = (
+                t,
+                float(10 ** rng.uniform(0.0, 3.0)),
+                float(10 ** rng.uniform(0.0, 3.0)),
+                float(10 ** rng.uniform(-9.0, -3.0)),
+                float(rng.normal(0.0, 0.05)),
+                float(rng.normal(0.0, 1.0)),
+                float(rng.normal(0.0, 1e-3)),
+                forcings[case % len(forcings)],
+            )
+            with self.subTest(case=case):
+                actual = np.array(
+                    problems_module.AeroelasticUnsteadyProblem._spring_analytical_ode(
+                        *arguments
+                    )
+                )
+                expected = np.array(_original_spring_analytical_ode(*arguments))
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_advance_spring_strips_matches_per_strip_products(self) -> None:
+        """Test that _advance_spring_strips gives the same bits for every strip as
+        stepping that strip on its own with piece_map @ vector, over random batches of
+        strips with inertias spread over several decades."""
+        rng = np.random.default_rng(8)
+        num_samples = problems_module._SPRING_FORCING_SAMPLES
+        for num_strips in (1, 2, 7, 23, 40):
+            piece_maps = np.stack(
+                [
+                    problems_module._spring_piece_map(
+                        1000.0, 1000.0, float(10 ** rng.uniform(-9.0, -3.0)), 2.5e-5
+                    )
+                    for _ in range(num_strips)
+                ]
+            )
+            moments = rng.normal(0.0, 1e-3, (num_strips, num_samples))
+            states = rng.normal(0.0, 0.1, (num_strips, 2))
+            actual = problems_module._advance_spring_strips(piece_maps, moments, states)
+            expected = np.empty((num_strips, 2), dtype=float)
+            for strip in range(num_strips):
+                state = states[strip].copy()
+                for piece in range(num_samples - 1):
+                    start_moment = float(moments[strip, piece])
+                    moment_change = float(moments[strip, piece + 1]) - start_moment
+                    state = piece_maps[strip] @ np.array(
+                        [state[0], state[1], start_moment, moment_change], dtype=float
+                    )
+                expected[strip] = state
+            with self.subTest(num_strips=num_strips):
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_inertial_moment_contract(self) -> None:
+        """Test that every inertial moment function applies the flapping-axis inertia as
+        a single multiplication, so I * f_1(t) equals f_I(t) byte for byte, which is
+        what _solve_strips_analytically relies on."""
+        rng = np.random.default_rng(4)
+        sample_times = np.linspace(0.0, 0.0025, 100)
+        static_wing_movement = (
+            aeroelastic_wing_movement_fixtures.make_static_aeroelastic_wing_movement_fixture()
+        )
+        cases: list[tuple[str, Any]] = [
+            ("sine", self.wing_movement),
+            ("static", static_wing_movement),
+        ]
+        for name, wing_movement in cases:
+            unit = self.problem._generate_inertial_moment_function(1.0, wing_movement)
+            for inertia in 10 ** rng.uniform(-8.0, 0.0, 20):
+                scaled = self.problem._generate_inertial_moment_function(
+                    float(inertia), wing_movement
+                )
+                with self.subTest(case=name, inertia=inertia):
+                    expected = np.array(
+                        [float(scaled(float(time))) for time in sample_times]
+                    )
+                    actual = inertia * np.array(
+                        [float(unit(float(time))) for time in sample_times]
+                    )
+                    self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_inertial_moment_contract_for_custom_spacing(self) -> None:
+        """Test the same contract for a custom spacing function."""
+        rng = np.random.default_rng(5)
+        sample_times = np.linspace(0.0, 0.0025, 100)
+        wing_movement = self.wing_movement
+        with (
+            patch.object(
+                type(wing_movement),
+                "spacingAngles_Gs_to_Wn_ixyz",
+                new_callable=PropertyMock,
+                return_value=(lambda t: np.sin(t), "sine", "sine"),
+            ),
+            patch.object(
+                type(wing_movement),
+                "spacingAnglesSecondDerivative_Gs_to_Wn_ixyz",
+                new_callable=PropertyMock,
+                return_value=(lambda t: -np.sin(t), None, None),
+            ),
+        ):
+            unit = self.problem._generate_inertial_moment_function(1.0, wing_movement)
+            for inertia in 10 ** rng.uniform(-8.0, 0.0, 20):
+                scaled = self.problem._generate_inertial_moment_function(
+                    float(inertia), wing_movement
+                )
+                with self.subTest(inertia=inertia):
+                    expected = np.array(
+                        [float(scaled(float(time))) for time in sample_times]
+                    )
+                    actual = inertia * np.array(
+                        [float(unit(float(time))) for time in sample_times]
+                    )
+                    self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_uniform_spacing_still_raises(self) -> None:
+        """Test that a uniform (sawtooth) spacing still raises a ValueError."""
+        wing_movement = self.wing_movement
+        strips = self._make_strips(np.random.default_rng(6), 3)
+        with patch.object(
+            type(wing_movement),
+            "spacingAngles_Gs_to_Wn_ixyz",
+            new_callable=PropertyMock,
+            return_value=("uniform", "sine", "sine"),
+        ):
+            with self.assertRaises(ValueError):
+                self.problem._solve_strips_analytically(
+                    dt=0.0025,
+                    step=1,
+                    torsional_inertias=strips["torsional_inertias"],
+                    flapping_axis_inertias=strips["flapping_axis_inertias"],
+                    lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz=strips["theta"],
+                    lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz=strips[
+                        "theta_derivative"
+                    ],
+                    aeroMoments_GP1_Slep=strips["aeroMoments_GP1_Slep"],
+                    wing_movement=wing_movement,
+                )
+
+    def _spring_moments(
+        self, problem: ps.problems.AeroelasticUnsteadyProblem
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Calls _calculate_spring_moments once on the problem's first Wing.
+
+        :param problem: The problem.
+        :return: The new deformation angles and their time derivatives.
+        """
+        wing = problem.steady_problems[0].airplanes[0].wings[0]
+        num_spanwise_panels = wing.num_spanwise_panels
+        num_chordwise_panels = wing.num_chordwise_panels
+        assert num_spanwise_panels is not None
+        return problem._calculate_spring_moments(
+            num_spanwise_panels=num_spanwise_panels,
+            wing=wing,
+            mass_matrix=np.full((num_chordwise_panels, num_spanwise_panels, 3), 0.01),
+            aeroMoments_GP1_Slep=np.full(
+                (num_chordwise_panels, num_spanwise_panels, 3), 0.001
+            ),
+            step=problem.step_discards + 1,
+            wing_idx=0,
+            wing_movement=self.wing_movement,
+        )
+
+    def test_analytical_solver_routes_to_the_batched_solve(self) -> None:
+        """Test that with the analytical solver, _calculate_spring_moments solves the
+        strips with _solve_strips_analytically and returns a clamped root."""
+        problem_class = ps.problems.AeroelasticUnsteadyProblem
+        with patch.object(
+            problem_class,
+            "_solve_strips_analytically",
+            autospec=True,
+            side_effect=problem_class._solve_strips_analytically,
+        ) as batched:
+            angles, derivatives = self._spring_moments(self.problem)
+        batched.assert_called_once()
+        self.assertEqual(angles[0], 0.0)
+        self.assertEqual(derivatives[0], 0.0)
+
+    def test_numerical_solver_keeps_the_per_strip_loop(self) -> None:
+        """Test that with the numerical solver, _calculate_spring_moments doesn't use
+        the batched solve and calls _spring_numerical_ode once per strip."""
+        problem = ps.problems.AeroelasticUnsteadyProblem(
+            movement=movement_fixtures.make_basic_aeroelastic_movement_fixture(),
+            wing_density=0.01,
+            spring_constant_rad=10.0,
+            damping_constant_rad=0.5,
+            use_analytical_spring_solver=False,
+        )
+        problem_class = ps.problems.AeroelasticUnsteadyProblem
+        with (
+            patch.object(
+                problem_class,
+                "_solve_strips_analytically",
+                autospec=True,
+                side_effect=problem_class._solve_strips_analytically,
+            ) as batched,
+            patch.object(
+                problem_class,
+                "_spring_numerical_ode",
+                wraps=problem_class._spring_numerical_ode,
+            ) as numerical,
+        ):
+            self._spring_moments(problem)
+        batched.assert_not_called()
+        num_spanwise_panels = (
+            problem.steady_problems[0].airplanes[0].wings[0].num_spanwise_panels
+        )
+        self.assertEqual(numerical.call_count, num_spanwise_panels)
+
+
 class TestSpringAnalyticalOde(unittest.TestCase):
     """This class contains unit tests for AeroelasticUnsteadyProblem's
     _spring_analytical_ode, comparing its accuracy against closed form solutions and

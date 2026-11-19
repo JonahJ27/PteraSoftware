@@ -139,6 +139,70 @@ def _spring_piece_map(
     return expm(augmented_matrix * piece_duration)[:2]
 
 
+def _spring_sample_times(
+    start_time: float, end_time: float
+) -> tuple[np.ndarray, float]:
+    """Returns the times at which the analytical spring solve samples its forcing within
+    a time step, and the duration of each piece between them.
+
+    Shared by AeroelasticUnsteadyProblem._spring_analytical_ode (one strip) and
+    _solve_strips_analytically (all of a Wing's strips), so both sample at the same
+    times.
+
+    :param start_time: The start of the time step (s).
+    :param end_time: The end of the time step (s).
+    :return: A tuple of a (_SPRING_FORCING_SAMPLES,) ndarray of floats of evenly spaced
+        sample times (s), from start_time to end_time, and the duration of each piece
+        between consecutive samples (s).
+    """
+    sample_times = np.linspace(start_time, end_time, _SPRING_FORCING_SAMPLES)
+    piece_duration = float(sample_times[1] - sample_times[0])
+    return sample_times, piece_duration
+
+
+def _advance_spring_strips(
+    piece_maps: np.ndarray, moments: np.ndarray, states: np.ndarray
+) -> np.ndarray:
+    """Advances one or more strips' torsional spring-damper states exactly across a time
+    step, piece by piece.
+
+    Shared by AeroelasticUnsteadyProblem._spring_analytical_ode (one strip) and
+    _solve_strips_analytically (all of a Wing's strips), so the stepping math lives in
+    one place.
+
+    Each piece takes a strip's (theta, d(theta)/dt, M_start, dM) at the start of the
+    piece, where M_start is the piece's starting moment and dM is its change in moment
+    across the piece, to (theta, d(theta)/dt) at the end of the piece, through the
+    strip's piece map (see _spring_piece_map). All strips advance together with one
+    np.einsum call per piece. It gives the same bits as each strip's own piece_map @
+    vector product, while a hand written sum of the four products does not (it adds in a
+    different order), so the einsum form must be kept.
+
+    The solve keeps the analytical solver's two simplifications. The forcing is treated
+    as linear between samples, which is exact for a FlapDrive's acceleration but an
+    approximation for a smooth forcing such as a prescribed sinusoidal flap (see
+    _spring_analytical_ode). And the piece maps' matrix exponentials lose accuracy for
+    very light strips, reaching about 1e-6 relative error in theta near 1e-10 kg*m^2,
+    where a closed form solution would be needed instead (see _spring_piece_map).
+    Batching the strips changes neither.
+
+    :param piece_maps: A (S, 2, 4) ndarray of floats of each strip's piece map.
+    :param moments: A (S, _SPRING_FORCING_SAMPLES) ndarray of floats of each strip's
+        total forcing (N*m) at each sample time.
+    :param states: A (S, 2) ndarray of floats of each strip's angle (radians) and its
+        time derivative (rad/s) at the start of the time step.
+    :return: A (S, 2) ndarray of floats of each strip's angle (radians) and its time
+        derivative (rad/s) at the end of the time step.
+    """
+    vectors = np.empty((states.shape[0], 4), dtype=float)
+    vectors[:, :2] = states
+    for piece in range(_SPRING_FORCING_SAMPLES - 1):
+        vectors[:, 2] = moments[:, piece]
+        vectors[:, 3] = moments[:, piece + 1] - moments[:, piece]
+        vectors[:, :2] = np.einsum("sij,sj->si", piece_maps, vectors)
+    return vectors[:, :2].copy()
+
+
 class SteadyProblem:
     """A class used to contain steady aerodynamics problems."""
 
@@ -1961,6 +2025,35 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             num_spanwise_panels=num_spanwise_panels,
             mass_matrix=mass_matrix,
         )
+
+        # Changed for speed: with the analytical spring solver, all of the Wing's strips
+        # are solved together by _solve_strips_analytically, which gives the same
+        # results, bit for bit, as solving them one at a time in the loop below (see its
+        # docstring). The loop remains for the numerical solver, whose solve_ivp calls
+        # can't be batched.
+        if self.use_analytical_spring_solver:
+            (
+                newDeformationAnglesYRad_Wcsp_to_Wcs_ixyz[1:],
+                newDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz[1:],
+            ) = self._solve_strips_analytically(
+                dt=dt,
+                step=step,
+                torsional_inertias=torsional_inertias,
+                flapping_axis_inertias=flapping_axis_inertias,
+                lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz=(
+                    lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz[1:]
+                ),
+                lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz=(
+                    lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz[1:]
+                ),
+                aeroMoments_GP1_Slep=aeroMoments_GP1_Slep,
+                wing_movement=wing_movement,
+            )
+            return (
+                newDeformationAnglesYRad_Wcsp_to_Wcs_ixyz,
+                newDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz,
+            )
+
         for span_panel in range(num_spanwise_panels):
             aeroMomentY_GP1_Slep = np.sum(aeroMoments_GP1_Slep[:, span_panel, 1])
             # Re-seed the strip's ODE from its own state at the end of the previous time
@@ -1990,6 +2083,130 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             newDeformationAnglesYRad_Wcsp_to_Wcs_ixyz,
             newDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz,
         )
+
+    def _solve_strips_analytically(
+        self,
+        dt: float,
+        step: int,
+        torsional_inertias: np.ndarray,
+        flapping_axis_inertias: np.ndarray,
+        lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz: np.ndarray,
+        lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz: np.ndarray,
+        aeroMoments_GP1_Slep: np.ndarray,
+        wing_movement: aeroelastic_wing_movement_mod.AeroelasticWingMovement,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Solve the torsional spring-damper ODE exactly for all of a Wing's strips at
+        once.
+
+        This gives the same results, bit for bit, as calling
+        _calculate_torsional_spring_moment (and through it _spring_analytical_ode) for
+        each strip in turn, which is what _calculate_spring_moments did before. It is
+        faster because it does two things once per Wing instead of once per strip:
+
+        It samples the inertial forcing once per Wing. Every inertial moment function
+        that _generate_inertial_moment_function returns is the strip's flapping-axis
+        inertia I times a function of time g(t) that is the same for all of the Wing's
+        strips, with I applied as a single multiplication (see that method's
+        docstring). So asking for the function with I = 1.0 returns g(t) exactly, since
+        multiplying by 1.0 is exact, and each strip's samples are formed as I * g, which
+        equals the per strip g * I or I * g bit for bit, since floating point
+        multiplication is commutative.
+
+        It advances all strips across each piece of the time step together. Each strip
+        keeps its own piece map (its own torsional inertia), and the maps are stacked
+        and passed to _advance_spring_strips, the same stepping code
+        _spring_analytical_ode uses for one strip. The sample times come from
+        _spring_sample_times, which _spring_analytical_ode uses too.
+
+        It has the same limits as the one strip solve: the forcing is linear between
+        samples, and very light strips (near 1e-10 kg*m^2) lose accuracy in the piece
+        maps' matrix exponentials (see _advance_spring_strips and _spring_piece_map).
+
+        :param dt: The time step duration (seconds).
+        :param step: The current time step index.
+        :param torsional_inertias: A (S,) ndarray of floats of the strips' torsional
+            inertias (kg*m^2), in root-to-tip order.
+        :param flapping_axis_inertias: A (S,) ndarray of floats of the strips'
+            flapping-axis inertias (kg*m^2), in root-to-tip order.
+        :param lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz: A (S,) ndarray of floats of
+            each strip's deformation angle y component (radians) at the end of the
+            previous time step, in root-to-tip order (the outboard WingCrossSections'
+            entries, without the clamped root).
+        :param lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz: A (S,) ndarray of
+            floats of those angles' time derivatives (rad/s), in the same order.
+        :param aeroMoments_GP1_Slep: A (num_chordwise_panels, S, 3) ndarray of
+            aerodynamic moments (in the first Airplane's geometry axes, each relative to
+            its strip's leading edge point), with the spanwise axis in root-to-tip
+            order.
+        :param wing_movement: The AeroelasticWingMovement providing the prescribed
+            flapping parameters used for inertial moment generation.
+        :return: A tuple of two (S,) ndarrays of floats: each strip's new deformation
+            angle y component (radians) and its new time derivative (rad/s), at the end
+            of the time step, in root-to-tip order.
+        """
+        num_strips = torsional_inertias.shape[0]
+
+        # The same time step bounds as _calculate_torsional_spring_moment (with its
+        # default two time points), and the same sample times as _spring_analytical_ode.
+        t = np.linspace(dt * (step - 1), dt * step, 2)
+        sample_times, piece_duration = _spring_sample_times(t[0], t[-1])
+
+        # Sample the strip independent part of the inertial forcing, g(t), once for the
+        # whole Wing (see the docstring for why this is exact). With an inertia of 1.0,
+        # the inertial moment function returns the Wing's flap angular acceleration
+        # (rad/s^2): the prescribed motion's, or a FlapDrive's recorded one. This goes
+        # through self, so a subclass's override (such as the FlapDrive's) applies,
+        # exactly as in the per strip solve.
+        flap_angular_acceleration_rad_func = self._generate_inertial_moment_function(
+            1.0, wing_movement=wing_movement
+        )
+        flap_angular_accelerations_rad = np.array(
+            [
+                float(flap_angular_acceleration_rad_func(float(sample_time)))
+                for sample_time in sample_times
+            ],
+            dtype=float,
+        )
+
+        # Each strip's total forcing at each sample: its constant aerodynamic moment
+        # plus its inertial moment, its flapping-axis inertia times the flap angular
+        # acceleration (I * g). The aerodynamic moment is summed per strip, exactly as
+        # in the per strip solve, so its summation order is unchanged. Row s, column i
+        # equals float(aero_moment + inertial_moment_func(sample_time)) in
+        # _spring_analytical_ode for strip s and sample i.
+        aero_moments = np.array(
+            [np.sum(aeroMoments_GP1_Slep[:, strip, 1]) for strip in range(num_strips)],
+            dtype=float,
+        )
+        moments = (
+            aero_moments[:, np.newaxis]
+            + flapping_axis_inertias[:, np.newaxis] * flap_angular_accelerations_rad
+        )
+
+        # Each strip's piece map (its own torsional inertia), stacked into (S, 2, 4).
+        piece_maps = np.stack(
+            [
+                _spring_piece_map(
+                    self.spring_constant_rad,
+                    self.damping_constant_rad,
+                    float(torsional_inertias[strip]),
+                    piece_duration,
+                )
+                for strip in range(num_strips)
+            ]
+        )
+
+        # Advance every strip across the time step together, with the same stepping code
+        # _spring_analytical_ode uses for one strip.
+        states = np.column_stack(
+            (
+                lastDeformationAnglesYRad_Wcsp_to_Wcs_ixyz,
+                lastDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz,
+            )
+        ).astype(float)
+        new_states = _advance_spring_strips(piece_maps, moments, states)
+
+        return new_states[:, 0].copy(), new_states[:, 1].copy()
 
     @staticmethod
     def _calculate_strip_inertias(
@@ -2141,6 +2358,13 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         creates a callable inertial moment function M_inertial = I *
         d^2(theta_prescribed)/dt^2, where I is the strip's flapping-axis inertia.
         Supports sinusoidal and custom spacing functions.
+
+        The returned function must apply I as a single multiplication, first or last,
+        to a function of time that doesn't depend on I, as every branch below does.
+        _solve_strips_analytically relies on this: it asks for the function once per
+        Wing with I = 1.0 and multiplies the samples by each strip's I, which is only
+        bit for bit equal to calling each strip's own function if I enters this way.
+        Overrides must keep it too.
 
         :param flapping_axis_inertia: The strip's rotational inertia about the
             flapping axis (kg*m^2).
@@ -2316,8 +2540,16 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         """
         # Sample the total forcing (the constant aerodynamic moment plus the inertial
         # moment) at evenly spaced times across the time step.
-        sample_times = np.linspace(t[0], t[-1], _SPRING_FORCING_SAMPLES)
-        piece_duration = float(sample_times[1] - sample_times[0])
+        #
+        # Changed for speed: the sample times and the piece stepping below are now
+        # shared with _solve_strips_analytically, which solves all of a Wing's strips at
+        # once, through _spring_sample_times and _advance_spring_strips, so the math
+        # lives in one place. The results are the same bit for bit.
+        # octowrap: off
+        # sample_times = np.linspace(t[0], t[-1], _SPRING_FORCING_SAMPLES)
+        # piece_duration = float(sample_times[1] - sample_times[0])
+        # octowrap: on
+        sample_times, piece_duration = _spring_sample_times(t[0], t[-1])
         moments = [
             float(aero_moment + inertial_moment_func(float(sample_time)))
             for sample_time in sample_times
@@ -2331,19 +2563,25 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             piece_duration,
         )
 
-        # Advance the state across each piece in turn. piece_map (2 x 4) takes (theta,
-        # d(theta)/dt, M_start, dM) at the start of a piece, where M_start is the
-        # piece's starting moment and dM is its change in moment across the piece, to
-        # (theta, d(theta)/dt) at the end of the piece (see _spring_piece_map).
-        state = np.array([theta0_rad, theta_derivative0_rad], dtype=float)
-        for piece in range(_SPRING_FORCING_SAMPLES - 1):
-            start_moment = moments[piece]
-            moment_change = moments[piece + 1] - start_moment
-            state = piece_map @ np.array(
-                [state[0], state[1], start_moment, moment_change], dtype=float
-            )
+        # Advance the state across each piece in turn (see _advance_spring_strips), as a
+        # single strip.
+        # octowrap: off
+        # state = np.array([theta0_rad, theta_derivative0_rad], dtype=float)
+        # for piece in range(_SPRING_FORCING_SAMPLES - 1):
+        #     start_moment = moments[piece]
+        #     moment_change = moments[piece + 1] - start_moment
+        #     state = piece_map @ np.array(
+        #         [state[0], state[1], start_moment, moment_change], dtype=float
+        #     )
+        # return float(state[0]), float(state[1])
+        # octowrap: on
+        new_state = _advance_spring_strips(
+            piece_map[np.newaxis],
+            np.array(moments, dtype=float)[np.newaxis],
+            np.array([[theta0_rad, theta_derivative0_rad]], dtype=float),
+        )[0]
 
-        return float(state[0]), float(state[1])
+        return float(new_state[0]), float(new_state[1])
 
 
 class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
