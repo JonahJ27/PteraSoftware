@@ -450,6 +450,7 @@ def update_ring_vortex_solvers_panel_attributes(
     Flrvp_GP1_CgP1: np.ndarray,
     Blrvp_GP1_CgP1: np.ndarray,
     Brrvp_GP1_CgP1: np.ndarray,
+    write_corner_arrays: bool = True,
 ) -> None:
     """Populates a ring vortex solver's attributes with the attributes of a given Panel.
 
@@ -457,6 +458,11 @@ def update_ring_vortex_solvers_panel_attributes(
     they cannot be derived from the Panel alone. The caller is expected to have already
     resolved them (using neighboring Panels for non trailing edge Panels and a quarter
     chord projection for trailing edge Panels).
+
+    A caller that already holds every Panel's corner points as stacked arrays can pass
+    write_corner_arrays=False and write the corner, leg center, and leg vector arrays
+    itself for all Panels at once, which is much faster than one Panel at a time. The
+    unsteady ring vortex lattice method solver does this.
 
     :param ring_vortex_solver: The solver whose attributes are to be updated.
     :param global_panel_position: The position of the Panel with respect to the global
@@ -475,6 +481,10 @@ def update_ring_vortex_solvers_panel_attributes(
     :param Brrvp_GP1_CgP1: A (3,) ndarray of floats representing the position of this
         Panel's bound ring vortex's back right point (in the first Airplane's geometry
         axes, relative to the first Airplane's CG). The units are in meters.
+    :param write_corner_arrays: Set this to True to write this Panel's rows of the
+        solver's bound ring vortex corner, leg center, and leg vector arrays from the
+        four corner points. Set it to False when the caller writes those arrays for all
+        Panels at once. The default is True.
     :return: None
     """
     assert ring_vortex_solver.panels is not None
@@ -488,52 +498,67 @@ def update_ring_vortex_solvers_panel_attributes(
     assert ring_vortex_solver.stackCpp_GP1_CgP1 is not None
     ring_vortex_solver.stackCpp_GP1_CgP1[global_panel_position, :] = panel.Cpp_GP1_CgP1
 
-    # Bound ring vortex corner points. The right leg goes from the back right corner to
-    # the front right corner, the front leg from front right to front left, the left leg
-    # from front left to back left, and the back leg from back left to back right.
-    assert ring_vortex_solver.stackBrbrvp_GP1_CgP1 is not None
-    ring_vortex_solver.stackBrbrvp_GP1_CgP1[global_panel_position, :] = Brrvp_GP1_CgP1
-    assert ring_vortex_solver.stackFrbrvp_GP1_CgP1 is not None
-    ring_vortex_solver.stackFrbrvp_GP1_CgP1[global_panel_position, :] = Frrvp_GP1_CgP1
-    assert ring_vortex_solver.stackFlbrvp_GP1_CgP1 is not None
-    ring_vortex_solver.stackFlbrvp_GP1_CgP1[global_panel_position, :] = Flrvp_GP1_CgP1
-    assert ring_vortex_solver.stackBlbrvp_GP1_CgP1 is not None
-    ring_vortex_solver.stackBlbrvp_GP1_CgP1[global_panel_position, :] = Blrvp_GP1_CgP1
+    # Changed for speed: the corner, leg center, and leg vector rows below used to be
+    # written unconditionally. They are pure arithmetic on the four corner points, so a
+    # caller that holds every Panel's corners as stacked arrays (the unsteady solver)
+    # passes write_corner_arrays=False and computes them for all Panels at once. The
+    # steady solver keeps the default and still writes them here, one Panel at a time.
+    if write_corner_arrays:
+        # Bound ring vortex corner points. The right leg goes from the back right corner
+        # to the front right corner, the front leg from front right to front left, the
+        # left leg from front left to back left, and the back leg from back left to back
+        # right.
+        assert ring_vortex_solver.stackBrbrvp_GP1_CgP1 is not None
+        ring_vortex_solver.stackBrbrvp_GP1_CgP1[global_panel_position, :] = (
+            Brrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackFrbrvp_GP1_CgP1 is not None
+        ring_vortex_solver.stackFrbrvp_GP1_CgP1[global_panel_position, :] = (
+            Frrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackFlbrvp_GP1_CgP1 is not None
+        ring_vortex_solver.stackFlbrvp_GP1_CgP1[global_panel_position, :] = (
+            Flrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackBlbrvp_GP1_CgP1 is not None
+        ring_vortex_solver.stackBlbrvp_GP1_CgP1[global_panel_position, :] = (
+            Blrvp_GP1_CgP1
+        )
 
-    # Bound line vortex leg center points and direction vectors, derived from the corner
-    # points.
-    assert ring_vortex_solver.stackCblvpr_GP1_CgP1 is not None
-    ring_vortex_solver.stackCblvpr_GP1_CgP1[global_panel_position, :] = 0.5 * (
-        Brrvp_GP1_CgP1 + Frrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackRbrv_GP1 is not None
-    ring_vortex_solver.stackRbrv_GP1[global_panel_position, :] = (
-        Frrvp_GP1_CgP1 - Brrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackCblvpf_GP1_CgP1 is not None
-    ring_vortex_solver.stackCblvpf_GP1_CgP1[global_panel_position, :] = 0.5 * (
-        Frrvp_GP1_CgP1 + Flrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackFbrv_GP1 is not None
-    ring_vortex_solver.stackFbrv_GP1[global_panel_position, :] = (
-        Flrvp_GP1_CgP1 - Frrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackCblvpl_GP1_CgP1 is not None
-    ring_vortex_solver.stackCblvpl_GP1_CgP1[global_panel_position, :] = 0.5 * (
-        Flrvp_GP1_CgP1 + Blrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackLbrv_GP1 is not None
-    ring_vortex_solver.stackLbrv_GP1[global_panel_position, :] = (
-        Blrvp_GP1_CgP1 - Flrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackCblvpb_GP1_CgP1 is not None
-    ring_vortex_solver.stackCblvpb_GP1_CgP1[global_panel_position, :] = 0.5 * (
-        Blrvp_GP1_CgP1 + Brrvp_GP1_CgP1
-    )
-    assert ring_vortex_solver.stackBbrv_GP1 is not None
-    ring_vortex_solver.stackBbrv_GP1[global_panel_position, :] = (
-        Brrvp_GP1_CgP1 - Blrvp_GP1_CgP1
-    )
+        # Bound line vortex leg center points and direction vectors, derived from the
+        # corner points.
+        assert ring_vortex_solver.stackCblvpr_GP1_CgP1 is not None
+        ring_vortex_solver.stackCblvpr_GP1_CgP1[global_panel_position, :] = 0.5 * (
+            Brrvp_GP1_CgP1 + Frrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackRbrv_GP1 is not None
+        ring_vortex_solver.stackRbrv_GP1[global_panel_position, :] = (
+            Frrvp_GP1_CgP1 - Brrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackCblvpf_GP1_CgP1 is not None
+        ring_vortex_solver.stackCblvpf_GP1_CgP1[global_panel_position, :] = 0.5 * (
+            Frrvp_GP1_CgP1 + Flrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackFbrv_GP1 is not None
+        ring_vortex_solver.stackFbrv_GP1[global_panel_position, :] = (
+            Flrvp_GP1_CgP1 - Frrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackCblvpl_GP1_CgP1 is not None
+        ring_vortex_solver.stackCblvpl_GP1_CgP1[global_panel_position, :] = 0.5 * (
+            Flrvp_GP1_CgP1 + Blrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackLbrv_GP1 is not None
+        ring_vortex_solver.stackLbrv_GP1[global_panel_position, :] = (
+            Blrvp_GP1_CgP1 - Flrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackCblvpb_GP1_CgP1 is not None
+        ring_vortex_solver.stackCblvpb_GP1_CgP1[global_panel_position, :] = 0.5 * (
+            Blrvp_GP1_CgP1 + Brrvp_GP1_CgP1
+        )
+        assert ring_vortex_solver.stackBbrv_GP1 is not None
+        ring_vortex_solver.stackBbrv_GP1[global_panel_position, :] = (
+            Brrvp_GP1_CgP1 - Blrvp_GP1_CgP1
+        )
 
     assert ring_vortex_solver.panel_is_trailing_edge is not None
     ring_vortex_solver.panel_is_trailing_edge[global_panel_position] = (

@@ -252,6 +252,70 @@ class TestUnsteadyRingVortexLatticeMethodSolverJoukowskiLegCenters(unittest.Test
                 self.assertTrue(np.array_equal(velocities, expected))
 
 
+class TestUnsteadyRingVortexLatticeMethodSolverCollapsedCornerArrays(unittest.TestCase):
+    """Tests that _collapse_geometry's vectorized corner, leg center, and leg vector
+    arrays equal what the per Panel arithmetic in
+    update_ring_vortex_solvers_panel_attributes writes."""
+
+    solver: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Solve an unsteady problem with moving geometry and leave the solver at its
+        final step."""
+        cls.solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+            problem_fixtures.make_pitching_tip_unsteady_problem_fixture()
+        )
+        cls.solver.run(show_progress=False)
+
+    def test_corner_arrays_match_per_panel_arithmetic(self) -> None:
+        """Test that every collapsed corner derived array equals, bit for bit, the
+        arrays that update_ring_vortex_solvers_panel_attributes writes one Panel at a
+        time with write_corner_arrays left at its default."""
+        solver = self.solver
+        step = solver._current_step
+        corner_stacks = (
+            solver._listStackFrbrvp_GP1_CgP1[step],
+            solver._listStackFlbrvp_GP1_CgP1[step],
+            solver._listStackBlbrvp_GP1_CgP1[step],
+            solver._listStackBrbrvp_GP1_CgP1[step],
+        )
+        names = (
+            "stackFrbrvp_GP1_CgP1",
+            "stackFlbrvp_GP1_CgP1",
+            "stackBlbrvp_GP1_CgP1",
+            "stackBrbrvp_GP1_CgP1",
+            "stackCblvpr_GP1_CgP1",
+            "stackCblvpf_GP1_CgP1",
+            "stackCblvpl_GP1_CgP1",
+            "stackCblvpb_GP1_CgP1",
+            "stackRbrv_GP1",
+            "stackFbrv_GP1",
+            "stackLbrv_GP1",
+            "stackBbrv_GP1",
+        )
+        vectorized = {name: getattr(solver, name).copy() for name in names}
+
+        # Zero the arrays, then rewrite them one Panel at a time the original way.
+        for name in names:
+            getattr(solver, name)[:] = 0.0
+        for position, panel in enumerate(solver.panels):
+            ps._functions.update_ring_vortex_solvers_panel_attributes(
+                ring_vortex_solver=solver,
+                global_panel_position=position,
+                panel=panel,
+                Frrvp_GP1_CgP1=corner_stacks[0][position],
+                Flrvp_GP1_CgP1=corner_stacks[1][position],
+                Blrvp_GP1_CgP1=corner_stacks[2][position],
+                Brrvp_GP1_CgP1=corner_stacks[3][position],
+            )
+
+        for name in names:
+            with self.subTest(array=name):
+                per_panel = getattr(solver, name)
+                self.assertEqual(per_panel.tobytes(), vectorized[name].tobytes())
+
+
 class TestUnsteadyRingVortexLatticeMethodSolverHookDefaults(unittest.TestCase):
     """Tests for the default implementations of the three solver extension hooks added
     to support coupled subclasses: _initialize_step_vortices,

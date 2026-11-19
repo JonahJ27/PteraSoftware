@@ -863,7 +863,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 panels = np.ravel(_panels)
 
                 # Iterate through the 1D ndarray of this Wing's Panels and write the per
-                # Panel scalars plus the corner-derived bound leg arrays.
+                # Panel data (the Panel, its unit normal, area, collocation point, edge
+                # flags, and streamline seed point). The corner derived bound leg arrays
+                # are written for all Panels at once after this loop.
                 panel: _panel.Panel
                 for panel in panels:
                     _functions.update_ring_vortex_solvers_panel_attributes(
@@ -874,6 +876,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
                         Flrvp_GP1_CgP1=currentStackFl[global_panel_position],
                         Blrvp_GP1_CgP1=currentStackBl[global_panel_position],
                         Brrvp_GP1_CgP1=currentStackBr[global_panel_position],
+                        write_corner_arrays=False,
                     )
                     if panel.is_trailing_edge:
                         self._current_bound_r_c0s[global_panel_position, 3] = wing_r_c0
@@ -907,6 +910,34 @@ class UnsteadyRingVortexLatticeMethodSolver:
                     )
 
                     global_wake_ring_vortex_position += num_wing_wake_vortices
+
+        # Changed for speed: the bound ring vortex corners, leg center points, and leg
+        # vectors used to be written one Panel at a time inside the loop above, as about
+        # a dozen small (3,) array operations per Panel, which cost far more in Python
+        # and NumPy overhead than in arithmetic. They depend only on the four corner
+        # stacks, which already hold every Panel's corners in the same global order, so
+        # they are now written for all Panels at once. Elementwise NumPy arithmetic on
+        # the stacks rounds each element exactly as the per Panel arithmetic did, and
+        # each formula keeps its original operand order, so the results are
+        # bit-identical. The right leg goes from the back right corner to the front
+        # right corner, the front leg from front right to front left, the left leg from
+        # front left to back left, and the back leg from back left to back right.
+        self.stackFrbrvp_GP1_CgP1[:] = currentStackFr
+        self.stackFlbrvp_GP1_CgP1[:] = currentStackFl
+        self.stackBlbrvp_GP1_CgP1[:] = currentStackBl
+        self.stackBrbrvp_GP1_CgP1[:] = currentStackBr
+
+        # Leg center points: the midpoint of each leg's two corners.
+        self.stackCblvpr_GP1_CgP1[:] = 0.5 * (currentStackBr + currentStackFr)
+        self.stackCblvpf_GP1_CgP1[:] = 0.5 * (currentStackFr + currentStackFl)
+        self.stackCblvpl_GP1_CgP1[:] = 0.5 * (currentStackFl + currentStackBl)
+        self.stackCblvpb_GP1_CgP1[:] = 0.5 * (currentStackBl + currentStackBr)
+
+        # Leg vectors: from each leg's start corner to its end corner.
+        self.stackRbrv_GP1[:] = currentStackFr - currentStackBr
+        self.stackFbrv_GP1[:] = currentStackFl - currentStackFr
+        self.stackLbrv_GP1[:] = currentStackBl - currentStackFl
+        self.stackBbrv_GP1[:] = currentStackBr - currentStackBl
 
         if self._current_step > 0:
             last_step = self._current_step - 1
