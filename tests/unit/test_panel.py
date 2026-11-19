@@ -1098,3 +1098,220 @@ class TestCross3d(unittest.TestCase):
             with self.subTest(a_shape=a.shape, b_shape=b.shape):
                 with self.assertRaises(AssertionError):
                     _panel._cross_3d(a, b)
+
+
+class TestCrossRows(unittest.TestCase):
+    """This is a class with functions to test cross_rows, the row by row form of
+    _cross_3d that set_derived_GP1_caches and Wing.projected_area use."""
+
+    def test_matches_cross_3d_on_every_row(self) -> None:
+        """Test that each row equals _cross_3d on that row bit for bit, at small, unit,
+        and large scales and with special values."""
+        rng = np.random.default_rng(0)
+        values = (0.0, -0.0, 1.0, -1.0, 1e-300, 1e300)
+        for scale in (1e-12, 1.0, 1e12):
+            with self.subTest(scale=scale):
+                a = rng.standard_normal((500, 3)) * scale
+                b = rng.standard_normal((500, 3)) * scale
+                a[:50] = rng.choice(values, (50, 3))
+                b[:50] = rng.choice(values, (50, 3))
+                actual = _panel.cross_rows(a, b)
+                expected = np.array([_panel._cross_3d(x, y) for x, y in zip(a, b)])
+                # Comparing the raw bytes also tells 0.0 from -0.0.
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_rejects_wrong_shapes(self) -> None:
+        """Test that stacks that aren't matching (S, 3) arrays fail the assertion."""
+        for a, b in (
+            (np.zeros((4, 2)), np.zeros((4, 2))),
+            (np.zeros((4, 4)), np.zeros((4, 4))),
+            (np.zeros(3), np.zeros(3)),
+            (np.zeros((4, 3)), np.zeros((5, 3))),
+            (np.zeros((4, 3, 1)), np.zeros((4, 3, 1))),
+        ):
+            with self.subTest(a_shape=a.shape, b_shape=b.shape):
+                with self.assertRaises(AssertionError):
+                    _panel.cross_rows(a, b)
+
+
+class TestSetDerivedGP1Caches(unittest.TestCase):
+    """This is a class with functions to test set_derived_GP1_caches, which computes a
+    Wing's Panels' derived quantities as arrays and stores them in the Panels' caches.
+
+    Every quantity it stores must equal, byte for byte, what the Panel's own property
+    computes, including on strongly twisted (soft, deformed) Wings, whose Panels are
+    stretched and warped.
+    """
+
+    # The derived quantities set_derived_GP1_caches fills, as property names.
+    _PROPERTIES = (
+        "rightLeg_GP1",
+        "frontLeg_GP1",
+        "leftLeg_GP1",
+        "backLeg_GP1",
+        "Frbvp_GP1_CgP1",
+        "Flbvp_GP1_CgP1",
+        "Cpp_GP1_CgP1",
+        "unitNormal_GP1",
+        "area",
+    )
+
+    @staticmethod
+    def _grid_corners(
+        rng: np.random.Generator,
+        num_chordwise: int,
+        num_spanwise: int,
+        max_twist_step_rad: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Makes a Wing like grid of Panel corners (in geometry axes), with each
+        spanwise station's chord rotated about its leading point by a twist that
+        accumulates along the span, as a deformed Wing's twists do.
+
+        :param rng: The random number generator.
+        :param num_chordwise: The number of chordwise Panels.
+        :param num_spanwise: The number of spanwise Panels.
+        :param max_twist_step_rad: The largest twist change between neighboring spanwise
+            stations (radians). Zero gives a flat Wing.
+        :return: The front left, front right, back left, and back right corners, each a
+            (num_chordwise, num_spanwise, 3) ndarray of floats.
+        """
+        twists_rad = np.cumsum(
+            rng.uniform(-max_twist_step_rad, max_twist_step_rad, num_spanwise + 1)
+        )
+        chord_fractions = np.linspace(0.0, 1.0, num_chordwise + 1)
+        chord = 0.19
+        points = np.empty((num_chordwise + 1, num_spanwise + 1, 3), dtype=float)
+        for station in range(num_spanwise + 1):
+            points[:, station, 0] = (
+                chord * chord_fractions * np.cos(twists_rad[station])
+            )
+            points[:, station, 1] = 0.02 * station
+            points[:, station, 2] = (
+                -chord * chord_fractions * np.sin(twists_rad[station])
+            )
+        return (
+            points[:-1, :-1].copy(),
+            points[:-1, 1:].copy(),
+            points[1:, :-1].copy(),
+            points[1:, 1:].copy(),
+        )
+
+    @staticmethod
+    def _make_two_sets(
+        corners: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, ...]]:
+        """Makes two identical sets of Panels from a grid of corners, with their corners
+        in the first Airplane's geometry axes set as SteadyProblem would.
+
+        :param corners: The grid's front left, front right, back left, and back right
+            corners.
+        :return: The two (S,) object ndarrays of Panels, and the four (S, 3) stacks of
+            corners in the first Airplane's geometry axes, in the order front right,
+            front left, back left, back right.
+        """
+        Fl, Fr, Bl, Br = (corner.reshape(-1, 3) for corner in corners)
+        offset = np.array([0.3, -1.2, 0.05])
+        stacks = (Fr + offset, Fl + offset, Bl + offset, Br + offset)
+        sets = []
+        for _ in range(2):
+            panels = np.empty(len(Fl), dtype=object)
+            for index in range(len(Fl)):
+                panel = _panel.Panel(
+                    Frpp_G_Cg=Fr[index],
+                    Flpp_G_Cg=Fl[index],
+                    Blpp_G_Cg=Bl[index],
+                    Brpp_G_Cg=Br[index],
+                    is_leading_edge=False,
+                    is_trailing_edge=False,
+                )
+                panel.Frpp_GP1_CgP1 = stacks[0][index]
+                panel.Flpp_GP1_CgP1 = stacks[1][index]
+                panel.Blpp_GP1_CgP1 = stacks[2][index]
+                panel.Brpp_GP1_CgP1 = stacks[3][index]
+                panels[index] = panel
+            sets.append(panels)
+        return sets[0], sets[1], stacks
+
+    def _assert_filled_matches_properties(
+        self, corners: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """Fills one set of Panels with set_derived_GP1_caches and asserts that every
+        quantity equals, byte for byte, what the other set's properties compute.
+
+        :param corners: The grid's corners.
+        :return: None
+        """
+        filled, reference, stacks = self._make_two_sets(corners)
+        _panel.set_derived_GP1_caches(filled, *stacks)
+        for index, (filled_panel, reference_panel) in enumerate(zip(filled, reference)):
+            for name in self._PROPERTIES:
+                with self.subTest(panel=index, quantity=name):
+                    actual = np.asarray(getattr(filled_panel, name), dtype=float)
+                    expected = np.asarray(getattr(reference_panel, name), dtype=float)
+                    # Comparing the raw bytes also tells 0.0 from -0.0.
+                    self.assertEqual(actual.tobytes(), expected.tobytes())
+
+    def test_matches_properties_on_a_flat_wing(self) -> None:
+        """Test byte equality on an untwisted Wing grid."""
+        rng = np.random.default_rng(0)
+        self._assert_filled_matches_properties(self._grid_corners(rng, 6, 23, 0.0))
+
+    def test_matches_properties_on_a_soft_twisted_wing(self) -> None:
+        """Test byte equality on Wing grids twisted like soft, strongly deformed Wings:
+
+        up to 0.05 and 0.3 radians of twist change between neighboring stations,
+        accumulating along the span, which stretches and warps the Panels.
+        """
+        rng = np.random.default_rng(1)
+        for max_twist_step_rad in (0.05, 0.3):
+            with self.subTest(max_twist_step_rad=max_twist_step_rad):
+                self._assert_filled_matches_properties(
+                    self._grid_corners(rng, 6, 23, max_twist_step_rad)
+                )
+
+    def test_matches_properties_on_random_quadrilaterals(self) -> None:
+        """Test byte equality on random, non planar quadrilaterals at several scales."""
+        rng = np.random.default_rng(2)
+        for scale in (1e-3, 1.0, 1e3):
+            with self.subTest(scale=scale):
+                Fl, Fr, Bl, Br = (
+                    rng.standard_normal((4, 5, 3)) * scale for _ in range(4)
+                )
+                self._assert_filled_matches_properties((Fl, Fr, Bl, Br))
+
+    def test_matches_properties_with_a_zero_length_leg(self) -> None:
+        """Test byte equality when a Panel's right leg has zero length (its front right
+        and back right corners coincide)."""
+        rng = np.random.default_rng(3)
+        Fl, Fr, Bl, Br = self._grid_corners(rng, 2, 3, 0.1)
+        Br[0, 0] = Fr[0, 0]
+        self._assert_filled_matches_properties((Fl, Fr, Bl, Br))
+
+    def test_does_not_replace_an_existing_cache(self) -> None:
+        """Test that a quantity a Panel already computed keeps its own array."""
+        rng = np.random.default_rng(4)
+        filled, _, stacks = self._make_two_sets(self._grid_corners(rng, 2, 2, 0.1))
+        already_computed = filled[0].Cpp_GP1_CgP1
+        _panel.set_derived_GP1_caches(filled, *stacks)
+        self.assertIs(filled[0].Cpp_GP1_CgP1, already_computed)
+
+    def test_filled_arrays_are_read_only(self) -> None:
+        """Test that every filled array is read only, as the properties make theirs."""
+        rng = np.random.default_rng(5)
+        filled, _, stacks = self._make_two_sets(self._grid_corners(rng, 2, 2, 0.1))
+        _panel.set_derived_GP1_caches(filled, *stacks)
+        for name in self._PROPERTIES[:-1]:
+            with self.subTest(quantity=name):
+                with self.assertRaises(ValueError):
+                    getattr(filled[0], name)[0] = 999.0
+
+    def test_a_deep_copy_keeps_the_filled_area(self) -> None:
+        """Test that a deep copied Panel keeps the area that was filled, as it keeps a
+        computed one."""
+        rng = np.random.default_rng(6)
+        filled, reference, stacks = self._make_two_sets(
+            self._grid_corners(rng, 2, 2, 0.1)
+        )
+        _panel.set_derived_GP1_caches(filled, *stacks)
+        copied = copy.deepcopy(filled[0])
+        self.assertEqual(copied.area, reference[0].area)

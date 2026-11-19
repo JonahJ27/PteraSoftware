@@ -269,6 +269,29 @@ class TestSteadyProblemPanelCoordinates(unittest.TestCase):
                     self.assertIsNotNone(panel.Blpp_GP1_CgP1)
                     self.assertIsNotNone(panel.Brpp_GP1_CgP1)
 
+    def test_panel_derived_GP1_caches_are_filled(self) -> None:
+        """Test that building a SteadyProblem fills every Panel's derived caches (its
+        legs, bound vortex points, collocation point, unit normal, and area) for every
+        Airplane, so no Panel computes them one at a time later."""
+        steady_problem = problem_fixtures.make_multi_airplane_steady_problem_fixture()
+        for airplane in steady_problem.airplanes:
+            for wing in airplane.wings:
+                assert wing.panels is not None
+                for panel in np.ravel(wing.panels):
+                    for slot in (
+                        "_rightLeg_GP1",
+                        "_frontLeg_GP1",
+                        "_leftLeg_GP1",
+                        "_backLeg_GP1",
+                        "_Frbvp_GP1_CgP1",
+                        "_Flbvp_GP1_CgP1",
+                        "_Cpp_GP1_CgP1",
+                        "_unitNormal_GP1",
+                        "_area",
+                    ):
+                        with self.subTest(slot=slot):
+                            self.assertIsNotNone(getattr(panel, slot))
+
     def test_panel_GP1_CgP1_coordinates_match_per_vector_transforms(self) -> None:
         """Test that every Panel's GP1_CgP1 corners, which SteadyProblem transforms as
         one stack per corner per Wing, equal byte for byte what transforming each

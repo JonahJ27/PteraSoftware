@@ -17,6 +17,7 @@ from . import (
     _fixed_point_relaxation,
     _logging,
     _mujoco_model,
+    _panel,
     _parameter_validation,
     _private_access,
     _transformations,
@@ -309,6 +310,22 @@ class SteadyProblem:
                     panel.Flpp_GP1_CgP1 = stackFlpp_GP1_CgP1[panel_index]
                     panel.Blpp_GP1_CgP1 = stackBlpp_GP1_CgP1[panel_index]
                     panel.Brpp_GP1_CgP1 = stackBrpp_GP1_CgP1[panel_index]
+
+                # Changed for speed: compute this Wing's Panels' derived quantities
+                # (legs, front bound vortex points, collocation points, unit normals,
+                # and areas) once, as arrays from the same corner stacks, and store them
+                # in the Panels' caches. Each Panel used to compute them one at a time
+                # on first access through its properties, for every new Airplane, which
+                # is every time step of an unsteady run. The stored values are
+                # bit-identical to what the properties compute (see
+                # set_derived_GP1_caches), so nothing that reads them changes.
+                _panel.set_derived_GP1_caches(
+                    panels,
+                    stackFrpp_GP1_CgP1,
+                    stackFlpp_GP1_CgP1,
+                    stackBlpp_GP1_CgP1,
+                    stackBrpp_GP1_CgP1,
+                )
 
     # --- Immutable: read only properties ---
     @property

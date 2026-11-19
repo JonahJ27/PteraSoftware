@@ -1214,15 +1214,60 @@ class Wing:
         WnZ_G = self.WnZ_G
         assert WnZ_G is not None
 
-        # Iterate through the chordwise and spanwise indices of the Panels and add their
-        # area to the total projected area.
-        assert self._num_spanwise_panels is not None
-        for chordwise_location in range(self._num_chordwise_panels):
-            for spanwise_location in range(self._num_spanwise_panels):
-                this_panel: _panel.Panel = self._panels[
-                    chordwise_location, spanwise_location
-                ]
-                projected_area += this_panel.calculate_projected_area(WnZ_G)
+        # Changed for speed: each Panel's projected area used to be computed by calling
+        # its calculate_projected_area method in the loop below, which normalized the
+        # same z axis again for every Panel and did every step on single (3,) vectors.
+        # Every new Wing computes this (each time step's Airplane, and each free flight
+        # step's trial copy), so it was about 65,000 calls per free flight run. It now
+        # gathers the Panels' corners in the loop's order (chordwise, then spanwise),
+        # normalizes the axis once, and applies calculate_projected_area's formulas to
+        # whole stacks, which gives the same bits for each Panel: the differences, the
+        # cross products (_panel.cross_rows), and the projections are elementwise, and
+        # the dot products and norms, which no vectorized form reproduces bit for bit,
+        # are still taken one Panel at a time with np.dot and np.linalg.norm. The
+        # Panels' areas are then added into the total in the same order as before.
+        # octowrap: off
+        # assert self._num_spanwise_panels is not None
+        # for chordwise_location in range(self._num_chordwise_panels):
+        #     for spanwise_location in range(self._num_spanwise_panels):
+        #         this_panel: _panel.Panel = self._panels[
+        #             chordwise_location, spanwise_location
+        #         ]
+        #         projected_area += this_panel.calculate_projected_area(WnZ_G)
+        # octowrap: on
+        panels = np.ravel(self._panels)
+        stackFirstDiagonal_G = np.array(
+            [panel.Frpp_G_Cg for panel in panels], dtype=float
+        ) - np.array([panel.Blpp_G_Cg for panel in panels], dtype=float)
+        stackSecondDiagonal_G = np.array(
+            [panel.Flpp_G_Cg for panel in panels], dtype=float
+        ) - np.array([panel.Brpp_G_Cg for panel in panels], dtype=float)
+        unitWnZ_G = WnZ_G / np.linalg.norm(WnZ_G)
+
+        # Each diagonal's projection onto the plane: the diagonal minus its component
+        # along the plane's unit normal.
+        firstDots = np.array(
+            [np.dot(diagonal, unitWnZ_G) for diagonal in stackFirstDiagonal_G],
+            dtype=float,
+        )
+        secondDots = np.array(
+            [np.dot(diagonal, unitWnZ_G) for diagonal in stackSecondDiagonal_G],
+            dtype=float,
+        )
+        stackProjFirstDiagonalOnPlane_G = (
+            stackFirstDiagonal_G - firstDots[:, np.newaxis] * unitWnZ_G
+        )
+        stackProjSecondDiagonalOnPlane_G = (
+            stackSecondDiagonal_G - secondDots[:, np.newaxis] * unitWnZ_G
+        )
+
+        # Each Panel's projected area is half the norm of its projected diagonals' cross
+        # product.
+        stackProjDiagonalsOnPlaneCross_G = _panel.cross_rows(
+            stackProjFirstDiagonalOnPlane_G, stackProjSecondDiagonalOnPlane_G
+        )
+        for projDiagonalsOnPlaneCross_G in stackProjDiagonalsOnPlaneCross_G:
+            projected_area += float(np.linalg.norm(projDiagonalsOnPlaneCross_G) / 2)
 
         # Cache the computed value.
         self._projected_area = projected_area

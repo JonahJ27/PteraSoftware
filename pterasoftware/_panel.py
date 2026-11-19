@@ -41,6 +41,143 @@ def _cross_3d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     )
 
 
+def cross_rows(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Returns the row by row cross products of two (S, 3) stacks of vectors, with
+    _cross_3d's formula applied to whole columns.
+
+    Each element is computed with the same products and differences, in the same order,
+    as _cross_3d computes for one row, so every row is bit-identical to _cross_3d on
+    that row (and so to np.cross). Like _cross_3d, it accepts only matching (S, 3)
+    stacks, which the assertion below checks, since a (S, 2) or (S, 4) stack, a single
+    (3,) vector, or two stacks of different lengths would otherwise either raise an
+    unclear IndexError or silently give wrong rows.
+
+    :param a: A (S, 3) ndarray of floats representing the first vectors.
+    :param b: A (S, 3) ndarray of floats representing the second vectors.
+    :return: A (S, 3) ndarray of floats representing each row's cross product a x b.
+    """
+    assert a.ndim == 2 and a.shape[1] == 3 and a.shape == b.shape
+    return np.column_stack(
+        (
+            a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+            a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+            a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0],
+        )
+    )
+
+
+def set_derived_GP1_caches(
+    panels: np.ndarray,
+    stackFrpp_GP1_CgP1: np.ndarray,
+    stackFlpp_GP1_CgP1: np.ndarray,
+    stackBlpp_GP1_CgP1: np.ndarray,
+    stackBrpp_GP1_CgP1: np.ndarray,
+) -> None:
+    """Computes a Wing's Panels' derived quantities once, as arrays, and stores them in
+    the Panels' caches.
+
+    This exists only for speed. Every new Airplane's Panels (one Airplane per time step
+    of an unsteady run, plus each free flight step's trial copy) used to compute their
+    legs, front bound vortex points, collocation points, unit normals (in the first
+    Airplane's geometry axes), and areas (in their own geometry axes) one Panel at a
+    time, on first access, through their properties. This computes them for all of a
+    Wing's Panels at once and stores each Panel's values where its properties would, so
+    the properties find them already computed. The properties stay the reference path: a
+    Panel that is never passed here computes its quantities exactly as before.
+
+    Every stored value is bit-identical to what the property computes. The legs, the
+    bound vortex points, the collocation points, and the cross products are elementwise
+    arithmetic, done on whole stacks with the properties' formulas and operation order,
+    so each element rounds the same way. The norms are not vectorized: np.linalg.norm on
+    a (3,) vector computes a fused multiply add chain that no vectorized form reproduces
+    (a row wise norm differs in about 10% of random vectors, by one unit in the last
+    place), so each row's norm is taken with np.linalg.norm, as the properties do.
+
+    A cache that is already filled is left as it is, and every stored array is made read
+    only, as the properties make theirs.
+
+    :param panels: A (S,) ndarray of the Wing's Panels, in the same order as the stacks.
+    :param stackFrpp_GP1_CgP1: A (S, 3) ndarray of floats representing the Panels' front
+        right points (in the first Airplane's geometry axes, relative to the first
+        Airplane's CG). The units are in meters.
+    :param stackFlpp_GP1_CgP1: A (S, 3) ndarray of floats representing the Panels' front
+        left points (in the first Airplane's geometry axes, relative to the first
+        Airplane's CG). The units are in meters.
+    :param stackBlpp_GP1_CgP1: A (S, 3) ndarray of floats representing the Panels' back
+        left points (in the first Airplane's geometry axes, relative to the first
+        Airplane's CG). The units are in meters.
+    :param stackBrpp_GP1_CgP1: A (S, 3) ndarray of floats representing the Panels' back
+        right points (in the first Airplane's geometry axes, relative to the first
+        Airplane's CG). The units are in meters.
+    :return: None
+    """
+    Fr = stackFrpp_GP1_CgP1
+    Fl = stackFlpp_GP1_CgP1
+    Bl = stackBlpp_GP1_CgP1
+    Br = stackBrpp_GP1_CgP1
+
+    # The legs (in the first Airplane's geometry axes), as in rightLeg_GP1,
+    # frontLeg_GP1, leftLeg_GP1, and backLeg_GP1.
+    stackRightLeg_GP1 = Fr - Br
+    stackFrontLeg_GP1 = Fl - Fr
+    stackLeftLeg_GP1 = Bl - Fl
+    stackBackLeg_GP1 = Br - Bl
+
+    # The front bound vortex points, as in Frbvp_GP1_CgP1 and Flbvp_GP1_CgP1.
+    stackFrbvp_GP1_CgP1 = Br + 0.75 * stackRightLeg_GP1
+    stackFlbvp_GP1_CgP1 = Fl + 0.25 * stackLeftLeg_GP1
+
+    # The collocation points, as in Cpp_GP1_CgP1: halfway between the points three
+    # quarters of the way down the right and left legs.
+    stackRightThreeQuarterChord_GP1_CgP1 = Br + 0.25 * stackRightLeg_GP1
+    stackLeftThreeQuarterChord_GP1_CgP1 = Fl + 0.75 * stackLeftLeg_GP1
+    stackCpp_GP1_CgP1 = stackRightThreeQuarterChord_GP1_CgP1 + 0.5 * (
+        stackLeftThreeQuarterChord_GP1_CgP1 - stackRightThreeQuarterChord_GP1_CgP1
+    )
+
+    # The unit normals, as in unitNormal_GP1: the diagonals' cross product, divided by
+    # its norm, which is taken one row at a time (see the docstring).
+    stackCross_GP1 = cross_rows(Fr - Bl, Fl - Br)
+    stackUnitNormal_GP1 = np.empty_like(stackCross_GP1)
+    for row, cross_GP1 in enumerate(stackCross_GP1):
+        stackUnitNormal_GP1[row] = cross_GP1 / np.linalg.norm(cross_GP1)
+
+    # The areas, as in area, from each Panel's corners in its own geometry axes. A deep
+    # copied Panel already carries its area, so this is skipped when every Panel has
+    # one.
+    stackCross_G: np.ndarray | None = None
+    if any(panel._area is None for panel in panels):
+        stackFrpp_G_Cg = np.array([panel._Frpp_G_Cg for panel in panels], dtype=float)
+        stackFlpp_G_Cg = np.array([panel._Flpp_G_Cg for panel in panels], dtype=float)
+        stackBlpp_G_Cg = np.array([panel._Blpp_G_Cg for panel in panels], dtype=float)
+        stackBrpp_G_Cg = np.array([panel._Brpp_G_Cg for panel in panels], dtype=float)
+        stackCross_G = cross_rows(
+            stackFrpp_G_Cg - stackBlpp_G_Cg, stackFlpp_G_Cg - stackBrpp_G_Cg
+        )
+
+    stacks = (
+        ("_rightLeg_GP1", stackRightLeg_GP1),
+        ("_frontLeg_GP1", stackFrontLeg_GP1),
+        ("_leftLeg_GP1", stackLeftLeg_GP1),
+        ("_backLeg_GP1", stackBackLeg_GP1),
+        ("_Frbvp_GP1_CgP1", stackFrbvp_GP1_CgP1),
+        ("_Flbvp_GP1_CgP1", stackFlbvp_GP1_CgP1),
+        ("_Cpp_GP1_CgP1", stackCpp_GP1_CgP1),
+        ("_unitNormal_GP1", stackUnitNormal_GP1),
+    )
+    for _, stack in stacks:
+        stack.flags.writeable = False
+
+    # Store each Panel's rows (read only views of the stacks) in its empty caches.
+    for row, panel in enumerate(panels):
+        for slot, stack in stacks:
+            if getattr(panel, slot) is None:
+                setattr(panel, slot, stack[row])
+        if panel._area is None:
+            assert stackCross_G is not None
+            panel._area = float(np.linalg.norm(stackCross_G[row]) / 2)
+
+
 class Panel:
     """A class used to contain the panels of a Wing.
 

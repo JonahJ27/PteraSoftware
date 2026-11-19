@@ -2432,3 +2432,75 @@ class TestFromEdgePoints(unittest.TestCase):
                         airfoil=ps.geometry.airfoil.Airfoil(name="naca0012"),
                         tip_trim_fraction=bad_fraction,
                     )
+
+
+class TestProjectedAreaMatchesPerPanelSum(unittest.TestCase):
+    """This is a class with functions to test that Wing.projected_area, which now
+    computes each Panel's projected area from gathered arrays, equals byte for byte the
+    per Panel sum it replaced (each Panel's calculate_projected_area with the Wing's z
+    axis, added in chordwise then spanwise order)."""
+
+    @staticmethod
+    def _per_panel_sum(wing: ps.geometry.wing.Wing) -> float:
+        """Computes a Wing's projected area the way projected_area used to: one
+        calculate_projected_area call per Panel, added in chordwise then spanwise order,
+        starting from 0.0.
+
+        :param wing: The meshed Wing.
+        :return: The projected area (square meters).
+        """
+        assert wing.panels is not None
+        WnZ_G = wing.WnZ_G
+        assert WnZ_G is not None
+        projected_area = 0.0
+        for chordwise_location in range(wing.panels.shape[0]):
+            for spanwise_location in range(wing.panels.shape[1]):
+                projected_area += wing.panels[
+                    chordwise_location, spanwise_location
+                ].calculate_projected_area(WnZ_G)
+        return projected_area
+
+    def test_matches_per_panel_sum(self) -> None:
+        """Test byte equality for each symmetry type, and for Wings with tapered, swept,
+        and twisted WingCrossSections (twisted by 15 and 30 degrees, like a strongly
+        deformed Wing)."""
+        cases: list[tuple[str, Any, int]] = [
+            ("type 1", geometry_fixtures.make_type_1_wing_fixture, 1),
+            ("type 2", geometry_fixtures.make_type_2_wing_fixture, 2),
+            ("type 3", geometry_fixtures.make_type_3_wing_fixture, 3),
+            ("type 4", geometry_fixtures.make_type_4_wing_fixture, 4),
+            (
+                "three section tapered",
+                geometry_fixtures.make_three_section_tapered_wing_fixture,
+                1,
+            ),
+            ("swept", geometry_fixtures.make_swept_wing_fixture, 1),
+            (
+                "twisted cross sections",
+                geometry_fixtures.make_wing_with_rotated_cross_sections_fixture,
+                1,
+            ),
+        ]
+        for name, make_wing, symmetry_type in cases:
+            with self.subTest(wing=name):
+                wing = make_wing()
+                wing.generate_mesh(symmetry_type)
+                expected = self._per_panel_sum(wing)
+                actual = wing.projected_area
+                assert actual is not None
+                self.assertEqual(
+                    np.float64(actual).tobytes(), np.float64(expected).tobytes()
+                )
+
+    def test_matches_per_panel_sum_after_a_deep_copy(self) -> None:
+        """Test that a deep copied Wing, whose projected area is reset and recomputed,
+        gives the same bits as the per Panel sum."""
+        wing = geometry_fixtures.make_wing_with_rotated_cross_sections_fixture()
+        wing.generate_mesh(1)
+        copied = copy.deepcopy(wing)
+        actual = copied.projected_area
+        assert actual is not None
+        self.assertEqual(
+            np.float64(actual).tobytes(),
+            np.float64(self._per_panel_sum(wing)).tobytes(),
+        )
