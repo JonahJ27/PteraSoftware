@@ -69,6 +69,19 @@ _FOUR_LAMB = 4.0 * _LAMB
 # different sizes without per-machine calibration.
 _GRAIN = 10_000
 
+# These set the chunk size of _collapsed_velocities_from_ring_vortices_vectorized, which
+# hands each thread whole chunks of consecutive points and vectorizes across a chunk's
+# points. The chunk size never changes the results, since every point's sum is computed
+# the same way in any chunk. It is chosen per launch so each thread gets about
+# _CHUNKS_PER_THREAD chunks (enough to balance the threads' work), but never fewer than
+# _MIN_CHUNK_SIZE points (a few vectors' worth, even with AVX-512's 8 doubles, so the
+# vectorized loop isn't dominated by its leftover iterations) and never more than
+# _MAX_CHUNK_SIZE points (beyond which larger chunks gain nothing). This adapts to the
+# machine's thread count and the launch's size without per machine tuning.
+_CHUNKS_PER_THREAD = 4
+_MIN_CHUNK_SIZE = 16
+_MAX_CHUNK_SIZE = 128
+
 
 def _ceiling() -> int:
     """Returns the largest share of the Numba thread pool that a kernel launch may use.
@@ -230,48 +243,89 @@ def collapsed_velocities_from_ring_vortices(
         the N points (in the first Airplane's geometry axes, observed from the Earth
         frame). The units are in meters per second.
     """
-    listStackSlvp_GP1_CgP1 = [
-        stackBrrvp_GP1_CgP1,
-        stackFrrvp_GP1_CgP1,
-        stackFlrvp_GP1_CgP1,
-        stackBlrvp_GP1_CgP1,
-    ]
-    listStackElvp_GP1_CgP1 = [
-        stackFrrvp_GP1_CgP1,
-        stackFlrvp_GP1_CgP1,
-        stackBlrvp_GP1_CgP1,
-        stackBrrvp_GP1_CgP1,
-    ]
+    # Changed for speed: this used to launch _collapsed_velocities_from_line_vortices
+    # four times, once per leg, and add each leg's result array (the commented out code
+    # below). One launch of _collapsed_velocities_from_ring_vortices_vectorized now
+    # handles all four legs, and computes several points per vector instruction. Every
+    # point still adds each leg's vortices in index order and then the four legs in the
+    # same order (right, front, left, back), so the results are bit-identical. See that
+    # function's docstring for how.
+    #
+    # octowrap: off
+    # listStackSlvp_GP1_CgP1 = [
+    #     stackBrrvp_GP1_CgP1,
+    #     stackFrrvp_GP1_CgP1,
+    #     stackFlrvp_GP1_CgP1,
+    #     stackBlrvp_GP1_CgP1,
+    # ]
+    # listStackElvp_GP1_CgP1 = [
+    #     stackFrrvp_GP1_CgP1,
+    #     stackFlrvp_GP1_CgP1,
+    #     stackBlrvp_GP1_CgP1,
+    #     stackBrrvp_GP1_CgP1,
+    # ]
+    # list_r_c0s = [np.ascontiguousarray(r_c0s[:, i]) for i in range(4)]
+    # stackVInd_GP1__E = np.zeros((stackP_GP1_CgP1.shape[0], 3), dtype=float)
+    # ...
+    # try:
+    #     for i in range(4):
+    #         stackVInd_GP1__E += _collapsed_velocities_from_line_vortices(
+    #             stackP_GP1_CgP1=stackP_GP1_CgP1,
+    #             stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
+    #             stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
+    #             strengths=strengths,
+    #             r_c0s=list_r_c0s[i],
+    #             singularity_counts=singularity_counts,
+    #             ages=ages,
+    #             nu=nu,
+    #         )
+    # finally:
+    #     numba.set_num_threads(external_cap)
+    # octowrap: on
 
-    list_r_c0s = [np.ascontiguousarray(r_c0s[:, i]) for i in range(4)]
+    num_points = stackP_GP1_CgP1.shape[0]
+    num_vortices = strengths.shape[0]
 
-    stackVInd_GP1__E = np.zeros((stackP_GP1_CgP1.shape[0], 3), dtype=float)
+    # Bound ring vortices have no ages. The line vortex kernel treated None as every age
+    # being 0.0, so pass that explicitly.
+    if ages is None:
+        ages = np.zeros(num_vortices, dtype=float)
 
     # Read the current thread mask so the dispatch honors any cap the user has set, and
-    # restore it once the kernel launches finish.
+    # restore it once the kernel launch finishes.
     external_cap = numba.get_num_threads()
-    numba.set_num_threads(
-        min(
-            _threads_for_launch(stackP_GP1_CgP1.shape[0], strengths.shape[0]),
-            external_cap,
-            _ceiling(),
-        )
+    num_threads = min(
+        _threads_for_launch(num_points, num_vortices),
+        external_cap,
+        _ceiling(),
+    )
+    numba.set_num_threads(num_threads)
+
+    # Choose the chunk size so each thread gets about _CHUNKS_PER_THREAD chunks, within
+    # the bounds the constants' comment explains. It only affects speed.
+    chunk_size = min(
+        _MAX_CHUNK_SIZE,
+        max(_MIN_CHUNK_SIZE, -(-num_points // (_CHUNKS_PER_THREAD * num_threads))),
     )
 
-    # Get the velocity induced by each leg of each ring vortex (in the first Airplane's
-    # geometry axes, observed from the Earth frame).
+    # Get the velocity induced by every leg of every ring vortex (in the first
+    # Airplane's geometry axes, observed from the Earth frame).
     try:
-        for i in range(4):
-            stackVInd_GP1__E += _collapsed_velocities_from_line_vortices(
-                stackP_GP1_CgP1=stackP_GP1_CgP1,
-                stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
-                stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
+        stackVInd_GP1__E: np.ndarray = (
+            _collapsed_velocities_from_ring_vortices_vectorized(
+                stackP_GP1_CgP1=np.ascontiguousarray(stackP_GP1_CgP1, dtype=float),
+                stackBrrvp_GP1_CgP1=stackBrrvp_GP1_CgP1,
+                stackFrrvp_GP1_CgP1=stackFrrvp_GP1_CgP1,
+                stackFlrvp_GP1_CgP1=stackFlrvp_GP1_CgP1,
+                stackBlrvp_GP1_CgP1=stackBlrvp_GP1_CgP1,
                 strengths=strengths,
-                r_c0s=list_r_c0s[i],
+                r_c0s=r_c0s,
                 singularity_counts=singularity_counts,
                 ages=ages,
                 nu=nu,
+                chunk_size=chunk_size,
             )
+        )
     finally:
         numba.set_num_threads(external_cap)
     return stackVInd_GP1__E
@@ -960,6 +1014,283 @@ def _collapsed_velocities_from_line_vortices(
             stackVInd_GP1__E[point_id, 0] += c_4 * r3X_GP1
             stackVInd_GP1__E[point_id, 1] += c_4 * r3Y_GP1
             stackVInd_GP1__E[point_id, 2] += c_4 * r3Z_GP1
+
+    # Aggregate per point singularity counts into the output array.
+    for k in range(1, 3):
+        for p in range(num_points):
+            singularity_counts[k] += point_singularity_counts[p, k]
+
+    return stackVInd_GP1__E
+
+
+# error_model="numpy" makes a floating point division by zero give inf or NaN instead of
+# raising. With the default "python" model, Numba checks every division, and those
+# checks stop LLVM from vectorizing the inner loop and Numba from running the outer loop
+# in parallel. The only division that can see a zero here is at a point exactly on a
+# vertex, and its value is discarded by a select (see below), so the results are the
+# same either way.
+@njit(cache=True, fastmath=False, parallel=True, error_model="numpy")
+def _collapsed_velocities_from_ring_vortices_vectorized(
+    stackP_GP1_CgP1: np.ndarray,
+    stackBrrvp_GP1_CgP1: np.ndarray,
+    stackFrrvp_GP1_CgP1: np.ndarray,
+    stackFlrvp_GP1_CgP1: np.ndarray,
+    stackBlrvp_GP1_CgP1: np.ndarray,
+    strengths: np.ndarray,
+    r_c0s: np.ndarray,
+    singularity_counts: np.ndarray,
+    ages: np.ndarray,
+    nu: float,
+    chunk_size: int,
+) -> np.ndarray:
+    """Takes in a group of points and the attributes of a group of ring vortices and
+    finds the cumulative induced velocity at every point, computing several points per
+    vector instruction.
+
+    This gives the same results, bit for bit, as calling the line vortex kernel
+    (_collapsed_velocities_from_line_vortices) once per leg (right, front, left, back)
+    and adding the four results, which is what collapsed_velocities_from_ring_vortices
+    used to do. It exists for speed: it handles all four legs in one launch, and its
+    innermost loop runs over a chunk of points, which LLVM vectorizes (on AVX-512, 8
+    points per instruction). Vectorizing across points rather than across vortices is
+    what keeps the results identical, since each point still adds its vortices one at a
+    time in index order.
+
+    Why the line vortex kernel is slower, even though Numba compiles it: the CPU's
+    vector units can process several double precision numbers per instruction (8 with
+    AVX-512), but that kernel computes one filament for one point per instruction, so
+    most of each vector unit sits idle, and it runs at a few percent of the CPU's peak.
+    LLVM, the compiler behind Numba, vectorizes a loop only if it can do so without
+    changing the results, and two things in that kernel stop it. First, its inner loop
+    runs over the vortices and adds into one sum per point, so vectorizing it would
+    reorder the additions, which changes the rounding, and LLVM correctly refuses.
+    Second, the loop has exits: a continue for each skipped pair, and the zero checks
+    Numba's default error model puts before every division, which are possible exception
+    exits. It also launches once per leg, so each ring vortex call starts the thread
+    team four times, reads every point four times, and allocates four temporary arrays.
+
+    This kernel turns the loop around: its innermost loop runs over points, which are
+    independent of each other, so several points (8 with AVX-512) are computed per
+    instruction with nothing reordered. The skips became selects, the division checks
+    are turned off with error_model="numpy", and one launch handles all four legs.
+
+    Each point's velocity is ((0.0 + right) + front) + left) + back, where each leg's
+    sum adds that leg's vortices in index order starting from 0.0, exactly as the four
+    launches and their additions did.
+
+    The per vortex quantities come from the same serial pre-pass as the line vortex
+    kernel's. Degenerate vortices are removed before the point loop (and counted)
+    instead of skipped inside it, so the rest are still added in the same order.
+
+    A point exactly on a vertex contributes exactly 0.0 instead of being skipped. A sum
+    that starts at 0.0 never becomes -0.0 in round to nearest arithmetic, so adding 0.0
+    to it never changes it. The skipped pair's own value (a 0 / 0) is replaced by a
+    select, not multiplied by zero, so a NaN can't reach the sum.
+
+    The two forms of the numerator are chosen per point by the same test, so each point
+    gets the same form as before. Square roots and divisions are correctly rounded in
+    IEEE arithmetic, so their vector forms give the same bits as their scalar forms.
+    fastmath stays off, so no operations are reordered or fused into multiply adds.
+
+    The chunk size only affects speed (see the module's chunk size constants).
+
+    :param stackP_GP1_CgP1: A (N,3) C contiguous ndarray of floats representing the
+        positions of N points (in the first Airplane's geometry axes, relative to the
+        first Airplane's CG). The units are in meters.
+    :param stackBrrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
+        M ring vortices' back right vertices (in the first Airplane's geometry axes,
+        relative to the first Airplane's CG). The units are in meters.
+    :param stackFrrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
+        the M ring vortices' front right vertices (in the first Airplane's geometry
+        axes, relative to the first Airplane's CG). The units are in meters.
+    :param stackFlrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
+        the M ring vortices' front left vertices (in the first Airplane's geometry axes,
+        relative to the first Airplane's CG). The units are in meters.
+    :param stackBlrvp_GP1_CgP1: A (M,3) ndarray of floats representing the positions of
+        the M ring vortices' back left vertices (in the first Airplane's geometry axes,
+        relative to the first Airplane's CG). The units are in meters.
+    :param strengths: A (M,) ndarray of floats representing the strengths of the M ring
+        vortices. The units are in meters squared per second.
+    :param r_c0s: A (M,4) ndarray of floats representing the initial core radii of the M
+        ring vortices' right, front, left, and back legs. The units are in meters.
+    :param singularity_counts: A (3,) ndarray of int64 representing the cumulative
+        counts of singularity events. Index mapping: [0] degenerate filament, [1] point
+        on start vertex, [2] point on end vertex. Counts are incremented in place and
+        accumulate across all four legs.
+    :param ages: A (M,) ndarray of floats representing the ages of the M ring vortices
+        in seconds. Pass zeros for bound ring vortices.
+    :param nu: A non negative float representing the kinematic viscosity of the fluid.
+        The units are in meters squared per second.
+    :param chunk_size: A positive int representing the number of consecutive points each
+        parallel iteration handles.
+    :return: A (N,3) ndarray of floats for the cumulative induced velocity at each of
+        the N points (in the first Airplane's geometry axes, observed from the Earth
+        frame). The units are in meters per second.
+    """
+    num_points = stackP_GP1_CgP1.shape[0]
+    num_vortices = strengths.shape[0]
+
+    # Pre compute each leg's per line vortex quantities in a serial pass, with the same
+    # arithmetic as _collapsed_velocities_from_line_vortices's pre-pass. Each leg's
+    # valid line vortices are stored compactly in index order in row leg of these (4,
+    # M) arrays, and degenerate ones are counted and left out. Leg order: right (back
+    # right to front right), front (front right to front left), left (front left to back
+    # left), back (back left to back right).
+    legStartsX = np.empty((4, num_vortices))
+    legStartsY = np.empty((4, num_vortices))
+    legStartsZ = np.empty((4, num_vortices))
+    legEndsX = np.empty((4, num_vortices))
+    legEndsY = np.empty((4, num_vortices))
+    legEndsZ = np.empty((4, num_vortices))
+    leg_c1 = np.empty((4, num_vortices))
+    leg_c2 = np.empty((4, num_vortices))
+    num_valid = np.zeros(4, dtype=np.int64)
+    for leg in range(4):
+        if leg == 0:
+            stackSlvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
+            stackElvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
+        elif leg == 1:
+            stackSlvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
+            stackElvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
+        elif leg == 2:
+            stackSlvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
+            stackElvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
+        else:
+            stackSlvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
+            stackElvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
+        count = 0
+        for vortex_id in range(num_vortices):
+            Slvp_GP1_CgP1 = stackSlvp_GP1_CgP1[vortex_id]
+            Elvp_GP1_CgP1 = stackElvp_GP1_CgP1[vortex_id]
+            r0X_GP1 = Elvp_GP1_CgP1[0] - Slvp_GP1_CgP1[0]
+            r0Y_GP1 = Elvp_GP1_CgP1[1] - Slvp_GP1_CgP1[1]
+            r0Z_GP1 = Elvp_GP1_CgP1[2] - Slvp_GP1_CgP1[2]
+            r0 = math.sqrt(r0X_GP1**2.0 + r0Y_GP1**2.0 + r0Z_GP1**2.0)
+
+            # Leave out degenerate filaments where the start and end points coincide.
+            if r0 < _EPS:
+                singularity_counts[0] += 1
+                continue
+
+            strength = strengths[vortex_id]
+            age = ages[vortex_id]
+            r_c0 = max(r_c0s[vortex_id, leg], _CORE_FRACTION * r0)
+            r_c_sq = r_c0**2.0 + _FOUR_LAMB * (nu + _SQUIRE * abs(strength)) * age
+
+            legStartsX[leg, count] = Slvp_GP1_CgP1[0]
+            legStartsY[leg, count] = Slvp_GP1_CgP1[1]
+            legStartsZ[leg, count] = Slvp_GP1_CgP1[2]
+            legEndsX[leg, count] = Elvp_GP1_CgP1[0]
+            legEndsY[leg, count] = Elvp_GP1_CgP1[1]
+            legEndsZ[leg, count] = Elvp_GP1_CgP1[2]
+            leg_c1[leg, count] = strength / _FOUR_PI
+            leg_c2[leg, count] = r0**2.0 * r_c_sq
+            count += 1
+        num_valid[leg] = count
+
+    # Split the points into their coordinates, so a chunk's coordinates are contiguous.
+    pointsX = np.ascontiguousarray(stackP_GP1_CgP1[:, 0])
+    pointsY = np.ascontiguousarray(stackP_GP1_CgP1[:, 1])
+    pointsZ = np.ascontiguousarray(stackP_GP1_CgP1[:, 2])
+
+    stackVInd_GP1__E = np.zeros((num_points, 3))
+
+    # Per point singularity counts avoid write races in the parallel loop. Index
+    # mapping: [1] point on start vertex, [2] point on end vertex.
+    point_singularity_counts = np.zeros((num_points, 3), dtype=np.int64)
+
+    num_chunks = (num_points + chunk_size - 1) // chunk_size
+    for chunk_id in prange(num_chunks):
+        start = chunk_id * chunk_size
+        n = min(chunk_size, num_points - start)
+        chunkX = pointsX[start : start + n]
+        chunkY = pointsY[start : start + n]
+        chunkZ = pointsZ[start : start + n]
+
+        # Each point's total over the four legs, which starts at 0.0 as the line vortex
+        # kernel's result array did.
+        allLegsX = np.zeros(n)
+        allLegsY = np.zeros(n)
+        allLegsZ = np.zeros(n)
+        start_vertex_counts = np.zeros(n, dtype=np.int64)
+        end_vertex_counts = np.zeros(n, dtype=np.int64)
+
+        for leg in range(4):
+            # Each point's sum over this leg's vortices, starting at 0.0.
+            legX = np.zeros(n)
+            legY = np.zeros(n)
+            legZ = np.zeros(n)
+            for v in range(num_valid[leg]):
+                SX = legStartsX[leg, v]
+                SY = legStartsY[leg, v]
+                SZ = legStartsZ[leg, v]
+                EX = legEndsX[leg, v]
+                EY = legEndsY[leg, v]
+                EZ = legEndsZ[leg, v]
+                c1 = leg_c1[leg, v]
+                c2 = leg_c2[leg, v]
+
+                # The r0_GP1 vector goes from the line vortex's start point to its end
+                # point (in the first Airplane's geometry axes).
+                r0X_GP1 = EX - SX
+                r0Y_GP1 = EY - SY
+                r0Z_GP1 = EZ - SZ
+
+                # This innermost loop over the chunk's points is the one LLVM
+                # vectorizes. Its formulas are the line vortex kernel's, in the same
+                # order.
+                for p in range(n):
+                    r1X_GP1 = SX - chunkX[p]
+                    r1Y_GP1 = SY - chunkY[p]
+                    r1Z_GP1 = SZ - chunkZ[p]
+                    r2X_GP1 = EX - chunkX[p]
+                    r2Y_GP1 = EY - chunkY[p]
+                    r2Z_GP1 = EZ - chunkZ[p]
+
+                    # r3_GP1 = r1_GP1 x r0_GP1, which equals r1_GP1 x r2_GP1 but avoids
+                    # cancellation far from the line vortex.
+                    r3X_GP1 = r1Y_GP1 * r0Z_GP1 - r1Z_GP1 * r0Y_GP1
+                    r3Y_GP1 = r1Z_GP1 * r0X_GP1 - r1X_GP1 * r0Z_GP1
+                    r3Z_GP1 = r1X_GP1 * r0Y_GP1 - r1Y_GP1 * r0X_GP1
+
+                    r1 = math.sqrt(r1X_GP1**2.0 + r1Y_GP1**2.0 + r1Z_GP1**2.0)
+                    r2 = math.sqrt(r2X_GP1**2.0 + r2Y_GP1**2.0 + r2Z_GP1**2.0)
+                    r3_sq = r3X_GP1**2.0 + r3Y_GP1**2.0 + r3Z_GP1**2.0
+                    r1_times_r2 = r1 * r2
+                    c_3 = r1X_GP1 * r2X_GP1 + r1Y_GP1 * r2Y_GP1 + r1Z_GP1 * r2Z_GP1
+
+                    # The denominator is zero only if the point is on a vertex. The line
+                    # vortex kernel skipped these pairs. Here they contribute exactly
+                    # 0.0 (see the docstring), and are counted.
+                    denominator = r1_times_r2 * (r3_sq + c2)
+                    on_vertex = denominator == 0.0
+
+                    # r1 * r2 - c_3 in the form that doesn't cancel for this angle.
+                    numerator = (
+                        r3_sq / (r1_times_r2 + c_3) if c_3 >= 0.0 else r1_times_r2 - c_3
+                    )
+                    c_4 = 0.0 if on_vertex else c1 * (r1 + r2) * numerator / denominator
+
+                    legX[p] += c_4 * r3X_GP1
+                    legY[p] += c_4 * r3Y_GP1
+                    legZ[p] += c_4 * r3Z_GP1
+                    start_vertex_counts[p] += 1 if (on_vertex and r1 == 0.0) else 0
+                    end_vertex_counts[p] += (
+                        1 if (on_vertex and r1 != 0.0 and r2 == 0.0) else 0
+                    )
+
+            # Add this leg's sums to the totals, in leg order.
+            for p in range(n):
+                allLegsX[p] += legX[p]
+                allLegsY[p] += legY[p]
+                allLegsZ[p] += legZ[p]
+
+        for p in range(n):
+            stackVInd_GP1__E[start + p, 0] = allLegsX[p]
+            stackVInd_GP1__E[start + p, 1] = allLegsY[p]
+            stackVInd_GP1__E[start + p, 2] = allLegsZ[p]
+            point_singularity_counts[start + p, 1] = start_vertex_counts[p]
+            point_singularity_counts[start + p, 2] = end_vertex_counts[p]
 
     # Aggregate per point singularity counts into the output array.
     for k in range(1, 3):

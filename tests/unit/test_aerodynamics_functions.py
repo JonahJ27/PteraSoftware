@@ -2605,7 +2605,7 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         when its kernel raises."""
         with patch.object(
             _aerodynamics_functions,
-            "_collapsed_velocities_from_line_vortices",
+            "_collapsed_velocities_from_ring_vortices_vectorized",
             side_effect=RuntimeError("Mock kernel failure."),
         ):
             with self.assertRaises(RuntimeError):
@@ -2685,7 +2685,7 @@ class TestParallelDispatchWrappers(unittest.TestCase):
 
         with patch.object(
             _aerodynamics_functions,
-            "_collapsed_velocities_from_line_vortices",
+            "_collapsed_velocities_from_ring_vortices_vectorized",
             new=_fake_kernel,
         ):
             _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
@@ -2705,17 +2705,17 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         """Test that a launch smaller than one grain runs its kernel with 1 thread."""
         recorded_thread_counts = self._record_kernel_thread_counts(self.single_point)
 
-        # The ring vortex wrapper launches the kernel once per leg, and each launch
-        # spans far less than one grain of evaluations.
-        self.assertEqual(recorded_thread_counts, [1, 1, 1, 1])
+        # The ring vortex wrapper launches its kernel once for all four legs, and the
+        # launch spans far less than one grain of evaluations.
+        self.assertEqual(recorded_thread_counts, [1])
 
     def test_multi_grain_launch_runs_kernel_with_work_proportional_threads(
         self,
     ) -> None:
         """Test that a launch spanning multiple grains runs its kernel with a work-
         proportional thread count, capped by the external thread mask."""
-        # With one ring vortex, this stack of points makes each leg's launch span
-        # exactly two grains of evaluations.
+        # With one ring vortex, this stack of points makes the launch span exactly two
+        # grains of evaluations.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             2 * _aerodynamics_functions._GRAIN
         )
@@ -2727,13 +2727,13 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         expected_num_threads = min(
             2, self.original_num_threads, _aerodynamics_functions._ceiling()
         )
-        self.assertEqual(recorded_thread_counts, [expected_num_threads] * 4)
+        self.assertEqual(recorded_thread_counts, [expected_num_threads])
 
     def test_external_thread_cap_limits_multi_grain_launch(self) -> None:
         """Test that an externally set thread mask caps the work-proportional thread
         count and survives the wrapper."""
-        # With one ring vortex, this stack of points makes each leg's launch span
-        # exactly two grains of evaluations.
+        # With one ring vortex, this stack of points makes the launch span exactly two
+        # grains of evaluations.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             2 * _aerodynamics_functions._GRAIN
         )
@@ -2744,7 +2744,7 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         recorded_thread_counts = self._record_kernel_thread_counts(stackP_GP1_CgP1)
 
         # The external cap of 1 thread beats the work-proportional count of 2.
-        self.assertEqual(recorded_thread_counts, [1, 1, 1, 1])
+        self.assertEqual(recorded_thread_counts, [1])
 
         # The wrapper must restore the user's cap, not the pool's full width.
         self.assertEqual(numba.get_num_threads(), 1)
@@ -2758,9 +2758,8 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         # three quarters of the pool width, rounded down, never below 1.
         ceiling = max((3 * numba.config.NUMBA_NUM_THREADS) // 4, 1)
 
-        # With one ring vortex, this stack of points makes each leg's launch span one
-        # more grain than the ceiling, so the work-proportional count exceeds the
-        # ceiling.
+        # With one ring vortex, this stack of points makes the launch span one more
+        # grain than the ceiling, so the work-proportional count exceeds the ceiling.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             (ceiling + 1) * _aerodynamics_functions._GRAIN
         )
@@ -2770,7 +2769,7 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         # The ceiling caps the count when the ambient thread mask sits at the pool's
         # full width. A narrower ambient mask caps it first.
         expected_num_threads = min(ceiling, self.original_num_threads)
-        self.assertEqual(recorded_thread_counts, [expected_num_threads] * 4)
+        self.assertEqual(recorded_thread_counts, [expected_num_threads])
 
     def test_mask_below_ceiling_is_honored_exactly(self) -> None:
         """Test that a thread mask set below the ceiling caps the kernel's thread count
@@ -2785,8 +2784,8 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         below_ceiling_mask = _aerodynamics_functions._ceiling() - 1
         numba.set_num_threads(below_ceiling_mask)
 
-        # With one ring vortex, this stack of points makes each leg's launch span one
-        # more grain than the ceiling, so only the mask holds its thread count below the
+        # With one ring vortex, this stack of points makes the launch span one more
+        # grain than the ceiling, so only the mask holds its thread count below the
         # ceiling.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             (_aerodynamics_functions._ceiling() + 1) * _aerodynamics_functions._GRAIN
@@ -2794,7 +2793,7 @@ class TestParallelDispatchWrappers(unittest.TestCase):
 
         recorded_thread_counts = self._record_kernel_thread_counts(stackP_GP1_CgP1)
 
-        self.assertEqual(recorded_thread_counts, [below_ceiling_mask] * 4)
+        self.assertEqual(recorded_thread_counts, [below_ceiling_mask])
 
         # The wrapper must restore the user's mask.
         self.assertEqual(numba.get_num_threads(), below_ceiling_mask)
@@ -2805,18 +2804,15 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         # Simulate a user capping the thread count exactly at the ceiling.
         numba.set_num_threads(_aerodynamics_functions._ceiling())
 
-        # With one ring vortex, this stack of points makes each leg's launch span one
-        # more grain than the ceiling, so the work-proportional count exceeds the
-        # ceiling.
+        # With one ring vortex, this stack of points makes the launch span one more
+        # grain than the ceiling, so the work-proportional count exceeds the ceiling.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             (_aerodynamics_functions._ceiling() + 1) * _aerodynamics_functions._GRAIN
         )
 
         recorded_thread_counts = self._record_kernel_thread_counts(stackP_GP1_CgP1)
 
-        self.assertEqual(
-            recorded_thread_counts, [_aerodynamics_functions._ceiling()] * 4
-        )
+        self.assertEqual(recorded_thread_counts, [_aerodynamics_functions._ceiling()])
 
         # The wrapper must restore the user's mask.
         self.assertEqual(numba.get_num_threads(), _aerodynamics_functions._ceiling())
@@ -2828,18 +2824,157 @@ class TestParallelDispatchWrappers(unittest.TestCase):
         # default, so the dispatch throttles both the same way.
         numba.set_num_threads(numba.config.NUMBA_NUM_THREADS)
 
-        # With one ring vortex, this stack of points makes each leg's launch span one
-        # more grain than the ceiling, so the work-proportional count exceeds the
-        # ceiling.
+        # With one ring vortex, this stack of points makes the launch span one more
+        # grain than the ceiling, so the work-proportional count exceeds the ceiling.
         stackP_GP1_CgP1 = aerodynamics_functions_fixtures.make_origin_points_fixture(
             (_aerodynamics_functions._ceiling() + 1) * _aerodynamics_functions._GRAIN
         )
 
         recorded_thread_counts = self._record_kernel_thread_counts(stackP_GP1_CgP1)
 
-        self.assertEqual(
-            recorded_thread_counts, [_aerodynamics_functions._ceiling()] * 4
-        )
+        self.assertEqual(recorded_thread_counts, [_aerodynamics_functions._ceiling()])
 
         # The wrapper must restore the full-width mask, not the ceiling.
         self.assertEqual(numba.get_num_threads(), numba.config.NUMBA_NUM_THREADS)
+
+
+class TestVectorizedRingVortexKernel(unittest.TestCase):
+    """This is a class with functions to test that
+    collapsed_velocities_from_ring_vortices, which now launches the vectorized ring
+    vortex kernel once for all four legs, gives the same results, bit for bit, as the
+    four per leg line vortex kernel launches it replaced."""
+
+    @staticmethod
+    def _four_launch_reference(
+        inputs: dict[str, Any], singularity_counts: np.ndarray
+    ) -> np.ndarray:
+        """Computes the induced velocities the original way: one line vortex kernel
+        launch per leg (right, front, left, back), each result added to a zeroed array.
+
+        :param inputs: A dict of the ring vortex inputs.
+        :param singularity_counts: A (3,) ndarray of int64 for the singularity counts.
+        :return: A (N,3) ndarray of floats of the induced velocities.
+        """
+        starts = (inputs["Br"], inputs["Fr"], inputs["Fl"], inputs["Bl"])
+        ends = (inputs["Fr"], inputs["Fl"], inputs["Bl"], inputs["Br"])
+        stackVInd_GP1__E = np.zeros((inputs["P"].shape[0], 3), dtype=float)
+        for leg in range(4):
+            stackVInd_GP1__E += (
+                _aerodynamics_functions._collapsed_velocities_from_line_vortices(
+                    stackP_GP1_CgP1=inputs["P"],
+                    stackSlvp_GP1_CgP1=starts[leg],
+                    stackElvp_GP1_CgP1=ends[leg],
+                    strengths=inputs["strengths"],
+                    r_c0s=np.ascontiguousarray(inputs["r_c0s"][:, leg]),
+                    singularity_counts=singularity_counts,
+                    ages=inputs["ages"],
+                    nu=inputs["nu"],
+                )
+            )
+        return stackVInd_GP1__E
+
+    @staticmethod
+    def _make_inputs(
+        rng: np.random.Generator,
+        num_points: int,
+        num_vortices: int,
+        wake: bool,
+        scale: float,
+    ) -> dict[str, Any]:
+        """Makes random ring vortex inputs.
+
+        :param rng: The random number generator.
+        :param num_points: The number of evaluation points.
+        :param num_vortices: The number of ring vortices.
+        :param wake: Set this to True for wake ring vortices (with ages and a viscosity)
+            and False for bound ones.
+        :param scale: The scale of the coordinates, in meters.
+        :return: A dict of the ring vortex inputs.
+        """
+        return {
+            "P": rng.uniform(-1.0, 1.0, (num_points, 3)) * scale,
+            "Br": rng.uniform(-1.0, 1.0, (num_vortices, 3)) * scale,
+            "Fr": rng.uniform(-1.0, 1.0, (num_vortices, 3)) * scale,
+            "Fl": rng.uniform(-1.0, 1.0, (num_vortices, 3)) * scale,
+            "Bl": rng.uniform(-1.0, 1.0, (num_vortices, 3)) * scale,
+            "strengths": rng.uniform(-1.0, 1.0, num_vortices),
+            "r_c0s": (
+                np.full((num_vortices, 4), 0.005)
+                if wake
+                else np.zeros((num_vortices, 4), dtype=float)
+            ),
+            "ages": rng.uniform(0.0, 0.2, num_vortices) if wake else None,
+            "nu": 1.5e-5 if wake else 0.0,
+        }
+
+    def _assert_matches_reference(self, inputs: dict[str, Any]) -> None:
+        """Asserts that collapsed_velocities_from_ring_vortices matches the four launch
+        reference byte for byte, including the singularity counts.
+
+        :param inputs: A dict of the ring vortex inputs.
+        :return: None
+        """
+        expected_counts = np.zeros(3, dtype=np.int64)
+        expected = self._four_launch_reference(inputs, expected_counts)
+        actual_counts = np.zeros(3, dtype=np.int64)
+        actual = _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
+            stackP_GP1_CgP1=inputs["P"],
+            stackBrrvp_GP1_CgP1=inputs["Br"],
+            stackFrrvp_GP1_CgP1=inputs["Fr"],
+            stackFlrvp_GP1_CgP1=inputs["Fl"],
+            stackBlrvp_GP1_CgP1=inputs["Bl"],
+            strengths=inputs["strengths"],
+            r_c0s=inputs["r_c0s"],
+            singularity_counts=actual_counts,
+            ages=inputs["ages"],
+            nu=inputs["nu"],
+        )
+        self.assertEqual(actual.shape, expected.shape)
+        # Comparing the raw bytes also tells 0.0 from -0.0.
+        self.assertEqual(actual.tobytes(), expected.tobytes())
+        npt.assert_array_equal(actual_counts, expected_counts)
+
+    def test_matches_four_launches_on_random_inputs(self) -> None:
+        """Test bit for bit agreement over point counts that do and don't fill whole
+        chunks, several vortex counts, bound and wake vortices, and several scales."""
+        rng = np.random.default_rng(0)
+        for num_points in (0, 1, 7, 16, 17, 100, 333):
+            for num_vortices in (0, 1, 50):
+                for wake in (False, True):
+                    for scale in (1e-3, 1.0, 1e3):
+                        with self.subTest(
+                            num_points=num_points,
+                            num_vortices=num_vortices,
+                            wake=wake,
+                            scale=scale,
+                        ):
+                            self._assert_matches_reference(
+                                self._make_inputs(
+                                    rng, num_points, num_vortices, wake, scale
+                                )
+                            )
+
+    def test_matches_four_launches_with_singular_configurations(self) -> None:
+        """Test bit for bit agreement, including the singularity counts, with points
+        exactly on vertices, degenerate line vortices, and zero strengths."""
+        rng = np.random.default_rng(1)
+        inputs = self._make_inputs(rng, 60, 40, wake=True, scale=1.0)
+        inputs["P"][:20] = inputs["Br"][:20]
+        inputs["P"][20:30] = inputs["Fl"][20:30]
+        inputs["Fr"][5:10] = inputs["Br"][5:10]
+        inputs["strengths"][10:15] = 0.0
+        self._assert_matches_reference(inputs)
+
+    def test_matches_four_launches_at_every_thread_count(self) -> None:
+        """Test that the thread count, which sets the chunk size, never changes the
+        results."""
+        rng = np.random.default_rng(2)
+        inputs = self._make_inputs(rng, 500, 400, wake=True, scale=1.0)
+        original_num_threads = numba.get_num_threads()
+        try:
+            for num_threads in sorted({1, 2, numba.config.NUMBA_NUM_THREADS}):
+                numba.set_num_threads(num_threads)
+                with self.subTest(num_threads=num_threads):
+                    self._assert_matches_reference(inputs)
+        finally:
+            numba.set_num_threads(original_num_threads)
