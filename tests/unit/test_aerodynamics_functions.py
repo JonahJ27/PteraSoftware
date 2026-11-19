@@ -2991,6 +2991,94 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
         finally:
             numba.set_num_threads(original_num_threads)
 
+    def test_chunk_size_is_a_multiple_of_the_vector_width(self) -> None:
+        """Test that collapsed_velocities_from_ring_vortices always launches the kernel
+        with a chunk size that is a multiple of _CHUNK_SIZE_MULTIPLE and within the
+        chunk size bounds, over point counts and thread counts whose balanced chunk size
+        is not a multiple of it."""
+        rng = np.random.default_rng(3)
+        kernel = (
+            _aerodynamics_functions._collapsed_velocities_from_ring_vortices_vectorized
+        )
+        thread_counts = sorted({1, 2, numba.config.NUMBA_NUM_THREADS})
+        point_counts = (1, 17, 100, 333, 730, 2000)
+        chunk_sizes: list[int] = []
+
+        def recording_kernel(**kwargs: Any) -> np.ndarray:
+            chunk_sizes.append(kwargs["chunk_size"])
+            return kernel(**kwargs)
+
+        original_num_threads = numba.get_num_threads()
+        try:
+            with patch.object(
+                _aerodynamics_functions,
+                "_collapsed_velocities_from_ring_vortices_vectorized",
+                side_effect=recording_kernel,
+            ):
+                for num_threads in thread_counts:
+                    numba.set_num_threads(num_threads)
+                    for num_points in point_counts:
+                        inputs = self._make_inputs(
+                            rng, num_points, 400, wake=True, scale=1.0
+                        )
+                        _aerodynamics_functions.collapsed_velocities_from_ring_vortices(
+                            stackP_GP1_CgP1=inputs["P"],
+                            stackBrrvp_GP1_CgP1=inputs["Br"],
+                            stackFrrvp_GP1_CgP1=inputs["Fr"],
+                            stackFlrvp_GP1_CgP1=inputs["Fl"],
+                            stackBlrvp_GP1_CgP1=inputs["Bl"],
+                            strengths=inputs["strengths"],
+                            r_c0s=inputs["r_c0s"],
+                            singularity_counts=np.zeros(3, dtype=np.int64),
+                            ages=inputs["ages"],
+                            nu=inputs["nu"],
+                        )
+        finally:
+            numba.set_num_threads(original_num_threads)
+
+        # One launch per call, so the test can't pass without checking any chunk size.
+        self.assertEqual(len(chunk_sizes), len(thread_counts) * len(point_counts))
+        for chunk_size in chunk_sizes:
+            with self.subTest(chunk_size=chunk_size):
+                self.assertEqual(
+                    chunk_size % _aerodynamics_functions._CHUNK_SIZE_MULTIPLE, 0
+                )
+                self.assertGreaterEqual(
+                    chunk_size, _aerodynamics_functions._MIN_CHUNK_SIZE
+                )
+                self.assertLessEqual(
+                    chunk_size, _aerodynamics_functions._MAX_CHUNK_SIZE
+                )
+
+    def test_kernel_results_do_not_depend_on_the_chunk_size(self) -> None:
+        """Test that the vectorized kernel gives the same results, bit for bit, as the
+        four launch reference at chunk sizes that are and aren't multiples of the vector
+        width, so rounding the chunk size up can't change the results."""
+        rng = np.random.default_rng(4)
+        for num_points in (100, 730):
+            inputs = self._make_inputs(rng, num_points, 300, wake=True, scale=1.0)
+            expected_counts = np.zeros(3, dtype=np.int64)
+            expected = self._four_launch_reference(inputs, expected_counts)
+            for chunk_size in (16, 23, 24, 31, 32, 43, 48, 128):
+                with self.subTest(num_points=num_points, chunk_size=chunk_size):
+                    actual_counts = np.zeros(3, dtype=np.int64)
+                    actual = _aerodynamics_functions._collapsed_velocities_from_ring_vortices_vectorized(
+                        stackP_GP1_CgP1=np.ascontiguousarray(inputs["P"]),
+                        stackBrrvp_GP1_CgP1=inputs["Br"],
+                        stackFrrvp_GP1_CgP1=inputs["Fr"],
+                        stackFlrvp_GP1_CgP1=inputs["Fl"],
+                        stackBlrvp_GP1_CgP1=inputs["Bl"],
+                        strengths=inputs["strengths"],
+                        r_c0s=inputs["r_c0s"],
+                        singularity_counts=actual_counts,
+                        ages=inputs["ages"],
+                        nu=inputs["nu"],
+                        chunk_size=chunk_size,
+                    )
+                    # Comparing the raw bytes also tells 0.0 from -0.0.
+                    self.assertEqual(actual.tobytes(), expected.tobytes())
+                    npt.assert_array_equal(actual_counts, expected_counts)
+
 
 class TestPhysicalCoreCeiling(unittest.TestCase):
     """This is a class with functions to test _physical_core_count and the kernel thread
