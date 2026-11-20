@@ -3193,6 +3193,161 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
                         )
 
 
+class TestExpandedKernelAccumulates(unittest.TestCase):
+    """This is a class with functions to test that the expanded line vortex kernel adds
+    into a given output array, and that the expanded ring and horseshoe vortex wrappers,
+    which now pass one output array to every leg's launch, give the same results bit for
+    bit as the old way: each leg's launch returning its own array, added with NumPy into
+    a zeroed array in leg order."""
+
+    @staticmethod
+    def _make_inputs(seed: int, wake: bool) -> dict[str, Any]:
+        """Makes random ring vortex inputs with points on vertices and degenerate legs.
+
+        :param seed: The random number generator's seed.
+        :param wake: Set this to True for wake ring vortices (with ages and a viscosity)
+            and False for bound ones.
+        :return: A dict of the ring vortex inputs.
+        """
+        inputs = TestVectorizedRingVortexKernel._make_inputs(
+            np.random.default_rng(seed), 60, 45, wake=wake, scale=1.0
+        )
+        inputs["P"][:10] = inputs["Br"][:10]
+        inputs["P"][10:15] = inputs["Fl"][10:15]
+        inputs["Fr"][20:25] = inputs["Br"][20:25]
+        return inputs
+
+    @staticmethod
+    def _per_leg_sum(
+        inputs: dict[str, Any], num_legs: int, singularity_counts: np.ndarray
+    ) -> np.ndarray:
+        """Computes the old way's result: one default kernel launch per leg, each
+        returned array added with NumPy into a zeroed array in leg order.
+
+        :param inputs: A dict of the ring vortex inputs.
+        :param num_legs: 4 for ring vortices, 3 for horseshoe vortices (the right,
+            front, and left legs).
+        :param singularity_counts: A (3,) ndarray of int64 for the singularity counts.
+        :return: A (N,M,3) ndarray of floats of the induced velocities.
+        """
+        starts = (inputs["Br"], inputs["Fr"], inputs["Fl"], inputs["Bl"])
+        ends = (inputs["Fr"], inputs["Fl"], inputs["Bl"], inputs["Br"])
+        gridVInd_GP1__E = np.zeros(
+            (inputs["P"].shape[0], inputs["strengths"].shape[0], 3), dtype=float
+        )
+        for leg in range(num_legs):
+            gridVInd_GP1__E += (
+                _aerodynamics_functions._expanded_velocities_from_line_vortices(
+                    stackP_GP1_CgP1=inputs["P"],
+                    stackSlvp_GP1_CgP1=starts[leg],
+                    stackElvp_GP1_CgP1=ends[leg],
+                    strengths=inputs["strengths"],
+                    r_c0s=np.ascontiguousarray(inputs["r_c0s"][:, leg]),
+                    singularity_counts=singularity_counts,
+                    ages=inputs["ages"] if num_legs == 4 else None,
+                    nu=inputs["nu"],
+                )
+            )
+        return gridVInd_GP1__E
+
+    def test_ring_wrapper_matches_per_leg_arrays(self) -> None:
+        """Test that expanded_velocities_from_ring_vortices matches the old per leg
+        array sum byte for byte, including the singularity counts, for bound and wake
+        ring vortices."""
+        for wake in (False, True):
+            with self.subTest(wake=wake):
+                inputs = self._make_inputs(seed=10, wake=wake)
+                expected_counts = np.zeros(3, dtype=np.int64)
+                expected = self._per_leg_sum(inputs, 4, expected_counts)
+                actual_counts = np.zeros(3, dtype=np.int64)
+                actual = _aerodynamics_functions.expanded_velocities_from_ring_vortices(
+                    stackP_GP1_CgP1=inputs["P"],
+                    stackBrrvp_GP1_CgP1=inputs["Br"],
+                    stackFrrvp_GP1_CgP1=inputs["Fr"],
+                    stackFlrvp_GP1_CgP1=inputs["Fl"],
+                    stackBlrvp_GP1_CgP1=inputs["Bl"],
+                    strengths=inputs["strengths"],
+                    r_c0s=inputs["r_c0s"],
+                    singularity_counts=actual_counts,
+                    ages=inputs["ages"],
+                    nu=inputs["nu"],
+                )
+                self.assertEqual(actual.shape, expected.shape)
+                # Comparing the raw bytes also tells 0.0 from -0.0.
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+                npt.assert_array_equal(actual_counts, expected_counts)
+                self.assertGreater(actual_counts[1], 0)
+
+    def test_horseshoe_wrapper_matches_per_leg_arrays(self) -> None:
+        """Test that expanded_velocities_from_horseshoe_vortices matches the old per leg
+        array sum byte for byte, including the singularity counts."""
+        inputs = self._make_inputs(seed=11, wake=False)
+        expected_counts = np.zeros(3, dtype=np.int64)
+        expected = self._per_leg_sum(inputs, 3, expected_counts)
+        actual_counts = np.zeros(3, dtype=np.int64)
+        actual = _aerodynamics_functions.expanded_velocities_from_horseshoe_vortices(
+            stackP_GP1_CgP1=inputs["P"],
+            stackBrhvp_GP1_CgP1=inputs["Br"],
+            stackFrhvp_GP1_CgP1=inputs["Fr"],
+            stackFlhvp_GP1_CgP1=inputs["Fl"],
+            stackBlhvp_GP1_CgP1=inputs["Bl"],
+            strengths=inputs["strengths"],
+            r_c0s=np.ascontiguousarray(inputs["r_c0s"][:, :3]),
+            singularity_counts=actual_counts,
+            nu=inputs["nu"],
+        )
+        self.assertEqual(actual.tobytes(), expected.tobytes())
+        npt.assert_array_equal(actual_counts, expected_counts)
+
+    def test_kernel_adds_into_given_array(self) -> None:
+        """Test that the kernel, given an output array that already holds values, adds
+        into it in place, returns that same array, and leaves the sums equal to the
+        starting values plus the default call's result, bit for bit."""
+        inputs = self._make_inputs(seed=12, wake=True)
+        arguments = dict(
+            stackP_GP1_CgP1=inputs["P"],
+            stackSlvp_GP1_CgP1=inputs["Br"],
+            stackElvp_GP1_CgP1=inputs["Fr"],
+            strengths=inputs["strengths"],
+            r_c0s=np.ascontiguousarray(inputs["r_c0s"][:, 0]),
+            ages=inputs["ages"],
+            nu=inputs["nu"],
+        )
+        default = _aerodynamics_functions._expanded_velocities_from_line_vortices(
+            singularity_counts=np.zeros(3, dtype=np.int64), **arguments
+        )
+        starting = np.random.default_rng(13).uniform(-1.0, 1.0, default.shape)
+        given = starting.copy()
+        returned = _aerodynamics_functions._expanded_velocities_from_line_vortices(
+            singularity_counts=np.zeros(3, dtype=np.int64),
+            gridVInd_GP1__E=given,
+            **arguments,
+        )
+        self.assertIs(returned, given)
+        self.assertEqual(given.tobytes(), (starting + default).tobytes())
+
+    def test_kernel_default_matches_zeroed_given_array(self) -> None:
+        """Test that the kernel's default call (no output array) and a call given a
+        zeroed output array give the same bytes."""
+        inputs = self._make_inputs(seed=14, wake=False)
+        arguments = dict(
+            stackP_GP1_CgP1=inputs["P"],
+            stackSlvp_GP1_CgP1=inputs["Fl"],
+            stackElvp_GP1_CgP1=inputs["Bl"],
+            strengths=inputs["strengths"],
+            r_c0s=np.ascontiguousarray(inputs["r_c0s"][:, 2]),
+        )
+        default = _aerodynamics_functions._expanded_velocities_from_line_vortices(
+            singularity_counts=np.zeros(3, dtype=np.int64), **arguments
+        )
+        given = _aerodynamics_functions._expanded_velocities_from_line_vortices(
+            singularity_counts=np.zeros(3, dtype=np.int64),
+            gridVInd_GP1__E=np.zeros_like(default),
+            **arguments,
+        )
+        self.assertEqual(given.tobytes(), default.tobytes())
+
+
 class TestPhysicalCoreCeiling(unittest.TestCase):
     """This is a class with functions to test _physical_core_count and the kernel thread
     ceiling built on it."""

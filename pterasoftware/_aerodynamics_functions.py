@@ -833,9 +833,31 @@ def expanded_velocities_from_ring_vortices(
 
     # Get the velocity induced by each leg of each ring vortex (in the first Airplane's
     # geometry axes, observed from the Earth frame).
+    #
+    # Changed for speed: each leg's launch used to return its own N x M x 3 array, which
+    # was then added into gridVInd_GP1__E with NumPy (the commented out code below). Now
+    # every launch adds its leg's velocities directly into gridVInd_GP1__E, in the same
+    # leg order (right, front, left, back), so no per leg arrays are allocated or added.
+    # The results are bit-identical (see the kernel's stores).
+    # octowrap: off
+    # try:
+    #     for i in range(4):
+    #         gridVInd_GP1__E += _expanded_velocities_from_line_vortices(
+    #             stackP_GP1_CgP1=stackP_GP1_CgP1,
+    #             stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
+    #             stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
+    #             strengths=strengths,
+    #             r_c0s=list_r_c0s[i],
+    #             singularity_counts=singularity_counts,
+    #             ages=ages,
+    #             nu=nu,
+    #         )
+    # finally:
+    #     numba.set_num_threads(external_cap)
+    # octowrap: on
     try:
         for i in range(4):
-            gridVInd_GP1__E += _expanded_velocities_from_line_vortices(
+            _expanded_velocities_from_line_vortices(
                 stackP_GP1_CgP1=stackP_GP1_CgP1,
                 stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
                 stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
@@ -844,6 +866,7 @@ def expanded_velocities_from_ring_vortices(
                 singularity_counts=singularity_counts,
                 ages=ages,
                 nu=nu,
+                gridVInd_GP1__E=gridVInd_GP1__E,
             )
     finally:
         numba.set_num_threads(external_cap)
@@ -1035,9 +1058,30 @@ def expanded_velocities_from_horseshoe_vortices(
 
     # Get the velocity induced by each leg of each horseshoe vortex (in the first
     # Airplane's geometry axes, observed from the Earth frame).
+    #
+    # Changed for speed: as in expanded_velocities_from_ring_vortices, every leg's
+    # launch now adds directly into gridVInd_GP1__E, in the same leg order, instead of
+    # returning its own N x M x 3 array to be added with NumPy (the commented out code
+    # below). The results are bit-identical (see the kernel's stores).
+    # octowrap: off
+    # try:
+    #     for i in range(3):
+    #         gridVInd_GP1__E += _expanded_velocities_from_line_vortices(
+    #             stackP_GP1_CgP1=stackP_GP1_CgP1,
+    #             stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
+    #             stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
+    #             strengths=strengths,
+    #             r_c0s=list_r_c0s[i],
+    #             singularity_counts=singularity_counts,
+    #             ages=None,
+    #             nu=nu,
+    #         )
+    # finally:
+    #     numba.set_num_threads(external_cap)
+    # octowrap: on
     try:
         for i in range(3):
-            gridVInd_GP1__E += _expanded_velocities_from_line_vortices(
+            _expanded_velocities_from_line_vortices(
                 stackP_GP1_CgP1=stackP_GP1_CgP1,
                 stackSlvp_GP1_CgP1=listStackSlvp_GP1_CgP1[i],
                 stackElvp_GP1_CgP1=listStackElvp_GP1_CgP1[i],
@@ -1046,6 +1090,7 @@ def expanded_velocities_from_horseshoe_vortices(
                 singularity_counts=singularity_counts,
                 ages=None,
                 nu=nu,
+                gridVInd_GP1__E=gridVInd_GP1__E,
             )
     finally:
         numba.set_num_threads(external_cap)
@@ -1636,6 +1681,7 @@ def _expanded_velocities_from_line_vortices(
     singularity_counts: np.ndarray,
     ages: np.ndarray | None = None,
     nu: float = 0.0,
+    gridVInd_GP1__E: np.ndarray | None = None,
 ) -> np.ndarray:
     """Takes in a group of points and the attributes of a group of line vortices and
     finds the induced velocity at every point due to each line vortex.
@@ -1647,6 +1693,12 @@ def _expanded_velocities_from_line_vortices(
     This function's performance has been highly optimized for unsteady simulations via
     Numba. While using Numba dramatically increases unsteady simulation performance, it
     does cause a performance drop for the less intense steady simulations.
+
+    Each velocity is added into gridVInd_GP1__E rather than stored, so the expanded ring
+    and horseshoe vortex wrappers pass one zeroed array to every leg's launch and get
+    the legs' sum without a temporary array per leg. Without gridVInd_GP1__E, the
+    function adds into a new zeroed array, which gives exactly the stored values (0.0 +
+    x is x), so its result is the same as before this parameter existed.
 
     **Citation:**
 
@@ -1685,16 +1737,32 @@ def _expanded_velocities_from_line_vortices(
         ages of the M line vortices in seconds. The default is None.
     :param nu: A non negative float representing the kinematic viscosity of the fluid.
         The units are in meters squared per second. The default is 0.0.
+    :param gridVInd_GP1__E: None, or a (N,M,3) C contiguous ndarray of floats that the
+        induced velocities (in the first Airplane's geometry axes, observed from the
+        Earth frame) are added into, in place. It must start zeroed, or hold the sums of
+        earlier calls for the same points and vortices. If None, a new zeroed array is
+        used. The units are in meters per second. The default is None.
     :return: A (N,M,3) ndarray of floats for the induced velocity at each of the N
         points (in the first Airplane's geometry axes, observed from the Earth frame)
-        due to each of the M line vortices. The units are in meters per second.
+        due to each of the M line vortices, added to gridVInd_GP1__E's starting values
+        if it was given. It is gridVInd_GP1__E itself if that was given. The units are
+        in meters per second.
     """
     num_vortices = stackSlvp_GP1_CgP1.shape[0]
     num_points = stackP_GP1_CgP1.shape[0]
 
-    # Initialize an empty array, which we will fill with the induced velocities (in the
-    # first Airplane's geometry axes, observed from the Earth frame).
-    gridVInd_GP1__E = np.zeros((num_points, num_vortices, 3))
+    # Changed for speed: the kernel used to always create its own array (the commented
+    # out line below) and store each velocity into it, and the expanded wrappers then
+    # added the per leg arrays together with NumPy. Each of those arrays is N x M x 3
+    # (about 12.7 MB at 728 Panels), so allocating one per leg and adding them cost more
+    # than the Biot-Savart arithmetic. Now a caller can pass one array that every leg's
+    # launch adds into (see the stores at the end of the point loop). If none is given,
+    # create a zeroed one, so the result is the same as before.
+    # octowrap: off
+    # gridVInd_GP1__E = np.zeros((num_points, num_vortices, 3))
+    # octowrap: on
+    if gridVInd_GP1__E is None:
+        gridVInd_GP1__E = np.zeros((num_points, num_vortices, 3))
 
     # If the user didn't specify any ages, set the age of each line vortex to 0.0
     # seconds.
@@ -1816,9 +1884,27 @@ def _expanded_velocities_from_line_vortices(
                 numerator = r1_times_r2 - c_3
 
             c_4 = vortex_c1[vortex_id] * (r1 + r2) * numerator / denominator
-            gridVInd_GP1__E[point_id, vortex_id, 0] = c_4 * r3X_GP1
-            gridVInd_GP1__E[point_id, vortex_id, 1] = c_4 * r3Y_GP1
-            gridVInd_GP1__E[point_id, vortex_id, 2] = c_4 * r3Z_GP1
+
+            # Changed for speed: add this line vortex's velocity into the array instead
+            # of storing it (the old stores are commented out below), so the wrappers'
+            # legs sum in place. This is bit-identical to the old way, where each leg's
+            # stored values were added with NumPy into a zeroed array in leg order:
+            #   - each element still gets ((0.0 + right) + front) + left) + back, the
+            #     same additions in the same order;
+            #   - a skipped pair (the continue statements above) adds nothing here,
+            #     where the old way added the temporary array's 0.0. That is the same,
+            #     because a sum that starts at +0.0 never becomes -0.0 in round to
+            #     nearest arithmetic, so adding 0.0 never changes it;
+            #   - fastmath stays off, so the additions aren't fused or reordered;
+            #   - each prange iteration owns one point's row, so there are no races.
+            # octowrap: off
+            # gridVInd_GP1__E[point_id, vortex_id, 0] = c_4 * r3X_GP1
+            # gridVInd_GP1__E[point_id, vortex_id, 1] = c_4 * r3Y_GP1
+            # gridVInd_GP1__E[point_id, vortex_id, 2] = c_4 * r3Z_GP1
+            # octowrap: on
+            gridVInd_GP1__E[point_id, vortex_id, 0] += c_4 * r3X_GP1
+            gridVInd_GP1__E[point_id, vortex_id, 1] += c_4 * r3Y_GP1
+            gridVInd_GP1__E[point_id, vortex_id, 2] += c_4 * r3Z_GP1
 
     # Aggregate per point singularity counts into the output array.
     for k in range(1, 3):
