@@ -82,9 +82,9 @@ FLAP_FREQUENCY = 3.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 10.0
 ANGLE_OF_ATTACK = 20.0
-STEPS_PER_FLAP = 40
+STEPS_PER_FLAP = 27
 PRESCRIBED_NUM_FLAPS = 1
-FREE_NUM_FLAPS = 10
+FREE_NUM_FLAPS = 6
 DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
 PRESCRIBED_NUM_STEPS = PRESCRIBED_NUM_FLAPS * STEPS_PER_FLAP
 FREE_NUM_STEPS = FREE_NUM_FLAPS * STEPS_PER_FLAP
@@ -114,7 +114,7 @@ MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 #     free flight time step). The free flaps' mean lift moved by at most 0.018%.
 # For comparison, a 1e-12 m/s change in the air speed moved them by at most 0.0002%: at
 # 10 m/s this model's free flight is much less sensitive than the FAAV's near hover.
-APPROXIMATIONS = "exact"
+APPROXIMATIONS = "coarse"
 
 # Define whether to save each run. A run is saved right after the simulation, before any
 # plots open, in its own folder, saved_results/<this script's name>/<date and

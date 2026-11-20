@@ -117,7 +117,7 @@ MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 #   - "coarse": Approximations.fast_coarse(), about 14% to 17% faster, but its free
 #     flight drift can exceed that, so use it where speed matters more than matching the
 #     exact run closely.
-APPROXIMATIONS = "exact"
+APPROXIMATIONS = "coarse"
 
 # Define whether to save each run. A run is saved right after the simulation, before any
 # plots open, in its own folder, saved_results/<this script's name>/<date and
