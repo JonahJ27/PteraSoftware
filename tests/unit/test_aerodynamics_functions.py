@@ -3001,6 +3001,28 @@ class TestVectorizedRingVortexKernel(unittest.TestCase):
         inputs["strengths"][10:15] = 0.0
         self._assert_matches_reference(inputs)
 
+    def test_matches_four_launches_with_degenerate_legs_in_many_rings(self) -> None:
+        """Test that degenerate legs of each kind (right, front, left, back), mixed into
+        many ring vortices, add nothing to the velocity and count no vertex hits.
+
+        The kernel evaluates every leg of every ring vortex and masks the degenerate
+        ones, where it used to leave them out of per leg lists, so this checks the
+        masking against the four launch reference, including points placed on the
+        vertices of degenerate and ordinary ring vortices.
+        """
+        rng = np.random.default_rng(7)
+        inputs = self._make_inputs(rng, 80, 120, wake=True, scale=1.0)
+        # Collapse one leg of each kind, in different ring vortices.
+        inputs["Fr"][0:10] = inputs["Br"][0:10]
+        inputs["Fl"][10:20] = inputs["Fr"][10:20]
+        inputs["Bl"][20:30] = inputs["Fl"][20:30]
+        inputs["Br"][30:40] = inputs["Bl"][30:40]
+        # Put points on vertices of degenerate and ordinary ring vortices.
+        inputs["P"][0:5] = inputs["Br"][0:5]
+        inputs["P"][5:10] = inputs["Fl"][45:50]
+        inputs["P"][10:15] = inputs["Bl"][20:25]
+        self._assert_matches_reference(inputs)
+
     def test_matches_four_launches_at_every_thread_count(self) -> None:
         """Test that the thread count, which sets the chunk size, never changes the
         results."""

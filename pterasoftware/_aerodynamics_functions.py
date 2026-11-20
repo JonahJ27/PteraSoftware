@@ -448,10 +448,11 @@ def collapsed_velocities_from_ring_vortices(
     # Changed for speed: this used to launch _collapsed_velocities_from_line_vortices
     # four times, once per leg, and add each leg's result array (the commented out code
     # below). One launch of _collapsed_velocities_from_ring_vortices_vectorized now
-    # handles all four legs, and computes several points per vector instruction. Every
-    # point still adds each leg's vortices in index order and then the four legs in the
-    # same order (right, front, left, back), so the results are bit-identical. See that
-    # function's docstring for how.
+    # handles all four legs, and computes several points per vector instruction. With
+    # its later changes for speed (fused multiply adds, and all four legs of a ring
+    # vortex evaluated together and added ring vortex by ring vortex), its results
+    # differ from the four launches at round off level. See that function's docstring
+    # for how.
     #
     # octowrap: off
     # listStackSlvp_GP1_CgP1 = [
@@ -1299,6 +1300,101 @@ def _collapsed_velocities_from_line_vortices(
     return stackVInd_GP1__E
 
 
+# This helper evaluates one leg (one straight side) of a ring vortex at one point, for
+# _collapsed_velocities_from_ring_vortices_vectorized. That kernel visits each ring
+# vortex once and calls this four times, once per leg, with the vertex distances it
+# computed once and shares between the two legs that meet at each vertex. inline
+# "always" makes Numba paste this function's body into the kernel's loop, so there is no
+# call overhead and LLVM still vectorizes the loop across points. The decorator's other
+# options match the kernel's, so the arithmetic compiles the same way.
+@njit(inline="always", fastmath={"contract"}, error_model="numpy")
+def _ring_vortex_leg(
+    r1X_GP1: float,
+    r1Y_GP1: float,
+    r1Z_GP1: float,
+    r1: float,
+    r2X_GP1: float,
+    r2Y_GP1: float,
+    r2Z_GP1: float,
+    r2: float,
+    r0X_GP1: float,
+    r0Y_GP1: float,
+    r0Z_GP1: float,
+    c1: float,
+    c2: float,
+) -> tuple[float, float, float, float, float]:
+    """Evaluates one leg of a ring vortex at one point, for
+    _collapsed_velocities_from_ring_vortices_vectorized.
+
+    The formulas and their order are exactly those of the kernel's old per leg loop (and
+    of the line vortex kernel), so a leg's c_4 and r3_GP1 have the same bits as before.
+    It returns c_4 and r3_GP1 separately, rather than their product, so that the caller
+    writes sum += c_4 * r3_GP1, the same expression as before. Returning the product
+    instead changed which multiplies and adds LLVM fuses in the loop's scalar remainder,
+    which changed the last bit of some results.
+
+    :param r1X_GP1: The x component of the vector from the point to the leg's start
+        vertex (in the first Airplane's geometry axes). The units are in meters.
+    :param r1Y_GP1: Its y component. The units are in meters.
+    :param r1Z_GP1: Its z component. The units are in meters.
+    :param r1: The length of that vector. The units are in meters.
+    :param r2X_GP1: The x component of the vector from the point to the leg's end vertex
+        (in the first Airplane's geometry axes). The units are in meters.
+    :param r2Y_GP1: Its y component. The units are in meters.
+    :param r2Z_GP1: Its z component. The units are in meters.
+    :param r2: The length of that vector. The units are in meters.
+    :param r0X_GP1: The x component of the vector from the leg's start vertex to its end
+        vertex (in the first Airplane's geometry axes). The units are in meters.
+    :param r0Y_GP1: Its y component. The units are in meters.
+    :param r0Z_GP1: Its z component. The units are in meters.
+    :param c1: The ring vortex's strength divided by 4 pi. The units are in meters
+        squared per second.
+    :param c2: The leg's length squared times its core radius squared, or 0.0 for a
+        degenerate leg. The units are in meters to the fourth power.
+    :return: A tuple of c_4 (the Biot-Savart factor, 0.0 if the point is on one of the
+        leg's vertices or the leg is degenerate), the x, y, and z components of r3_GP1
+        (in the first Airplane's geometry axes, in square meters), and the packed vertex
+        hit term (1.0 for a start vertex hit, _VERTEX_HIT_BASE_FLOAT for an end vertex
+        hit, and 0.0 otherwise, see _VERTEX_HIT_BASE).
+    """
+    # r3_GP1 = r1_GP1 x r0_GP1, which equals r1_GP1 x r2_GP1 but avoids cancellation far
+    # from the leg.
+    r3X_GP1 = r1Y_GP1 * r0Z_GP1 - r1Z_GP1 * r0Y_GP1
+    r3Y_GP1 = r1Z_GP1 * r0X_GP1 - r1X_GP1 * r0Z_GP1
+    r3Z_GP1 = r1X_GP1 * r0Y_GP1 - r1Y_GP1 * r0X_GP1
+
+    r3_sq = r3X_GP1**2.0 + r3Y_GP1**2.0 + r3Z_GP1**2.0
+    r1_times_r2 = r1 * r2
+    c_3 = r1X_GP1 * r2X_GP1 + r1Y_GP1 * r2Y_GP1 + r1Z_GP1 * r2Z_GP1
+
+    # The denominator is zero if the point is exactly on one of the leg's vertices. It
+    # is also zero for a degenerate leg: its r0_GP1 is zero, so r3_GP1 is zero, and its
+    # c2 is 0.0. Either way the select below makes the leg contribute exactly 0.0.
+    denominator = r1_times_r2 * (r3_sq + c2)
+    on_vertex = denominator == 0.0
+
+    # r1 * r2 - c_3 in the form that doesn't cancel for this angle.
+    numerator = r3_sq / (r1_times_r2 + c_3) if c_3 >= 0.0 else r1_times_r2 - c_3
+    c_4 = 0.0 if on_vertex else c1 * (r1 + r2) * numerator / denominator
+
+    # The packed vertex hit term, the same expression as before. It counts whether the
+    # point is exactly on this leg's start vertex (adds 1.0) or, if not, exactly on its
+    # end vertex (adds _VERTEX_HIT_BASE_FLOAT), and adds 0.0 otherwise. The kernel adds
+    # these terms into one float per point that packs both counts (see _VERTEX_HIT_BASE
+    # for why that is exact). Testing only r1 and r2 is enough: if either is 0.0, the
+    # denominator above is 0.0 too, so this is the same as asking whether the point is
+    # on a vertex. The two compares joined by a bitwise or (|) compile to two vector
+    # compares and one blend, which is much faster in the vectorized loop than a chain
+    # of "and" tests. The kernel masks this term with the leg's valid flag, because a
+    # degenerate leg's two vertices coincide, and degenerate legs never counted hits.
+    hit = (
+        (1.0 if r1 == 0.0 else _VERTEX_HIT_BASE_FLOAT)
+        if ((r1 == 0.0) | (r2 == 0.0))
+        else 0.0
+    )
+    return c_4, r3X_GP1, r3Y_GP1, r3Z_GP1, hit
+
+
 # error_model="numpy" makes a floating point division by zero give inf or NaN instead of
 # raising. With the default "python" model, Numba checks every division, and those
 # checks stop LLVM from vectorizing the inner loop and Numba from running the outer loop
@@ -1361,13 +1457,22 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
     instruction with nothing reordered. The skips became selects, the division checks
     are turned off with error_model="numpy", and one launch handles all four legs.
 
-    Each point's velocity is ((0.0 + right) + front) + left) + back, where each leg's
-    sum adds that leg's vortices in index order starting from 0.0, exactly as the four
-    launches and their additions did.
+    Each ring vortex is visited once, and all four of its legs are evaluated together.
+    For each point, the distance to each of the ring's four vertices is computed once
+    and shared by the two legs that meet at that vertex (4 square roots per ring vortex
+    instead of 8), and the four legs' terms go into one running sum per component. Each
+    leg's term is computed with exactly the same arithmetic as in the four line vortex
+    launches (see _ring_vortex_leg). Only the order of the additions differs: the
+    launches added each leg's vortices separately and then the four legs, ((0.0 + right)
+    + front) + left) + back, while this kernel adds the four legs of each ring vortex in
+    turn. So each point's velocity differs from the launches' sum at round off level
+    (about 1e-14 of the largest velocity on real inputs).
 
-    The per vortex quantities come from the same serial pre-pass as the line vortex
-    kernel's. Degenerate vortices are removed before the point loop (and counted)
-    instead of skipped inside it, so the rest are still added in the same order.
+    The per vortex quantities come from a serial pre-pass with the same arithmetic as
+    the line vortex kernel's. A degenerate leg (zero length) is counted there, as
+    before, and gets a zero core term and a zero valid flag. In the point loop it then
+    contributes exactly 0.0 (its denominator is zero, so the same select as for a point
+    on a vertex applies), and the valid flag keeps it from counting vertex hits.
 
     A point exactly on a vertex contributes exactly 0.0 instead of being skipped. A sum
     that starts at 0.0 never becomes -0.0 in round to nearest arithmetic, so adding 0.0
@@ -1427,63 +1532,145 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
     num_points = stackP_GP1_CgP1.shape[0]
     num_vortices = strengths.shape[0]
 
-    # Pre compute each leg's per line vortex quantities in a serial pass, with the same
-    # arithmetic as _collapsed_velocities_from_line_vortices's pre-pass. Each leg's
-    # valid line vortices are stored compactly in index order in row leg of these (4,
-    # M) arrays, and degenerate ones are counted and left out. Leg order: right (back
-    # right to front right), front (front right to front left), left (front left to back
-    # left), back (back left to back right).
-    legStartsX = np.empty((4, num_vortices))
-    legStartsY = np.empty((4, num_vortices))
-    legStartsZ = np.empty((4, num_vortices))
-    legEndsX = np.empty((4, num_vortices))
-    legEndsY = np.empty((4, num_vortices))
-    legEndsZ = np.empty((4, num_vortices))
-    leg_c1 = np.empty((4, num_vortices))
-    leg_c2 = np.empty((4, num_vortices))
-    num_valid = np.zeros(4, dtype=np.int64)
+    # octowrap: off
+    # legStartsX = np.empty((4, num_vortices))
+    # legStartsY = np.empty((4, num_vortices))
+    # legStartsZ = np.empty((4, num_vortices))
+    # legEndsX = np.empty((4, num_vortices))
+    # legEndsY = np.empty((4, num_vortices))
+    # legEndsZ = np.empty((4, num_vortices))
+    # leg_c1 = np.empty((4, num_vortices))
+    # leg_c2 = np.empty((4, num_vortices))
+    # num_valid = np.zeros(4, dtype=np.int64)
+    # for leg in range(4):
+    #     if leg == 0:
+    #         stackSlvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
+    #         stackElvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
+    #     elif leg == 1:
+    #         stackSlvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
+    #         stackElvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
+    #     elif leg == 2:
+    #         stackSlvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
+    #         stackElvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
+    #     else:
+    #         stackSlvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
+    #         stackElvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
+    #     count = 0
+    #     for vortex_id in range(num_vortices):
+    #         Slvp_GP1_CgP1 = stackSlvp_GP1_CgP1[vortex_id]
+    #         Elvp_GP1_CgP1 = stackElvp_GP1_CgP1[vortex_id]
+    #         r0X_GP1 = Elvp_GP1_CgP1[0] - Slvp_GP1_CgP1[0]
+    #         r0Y_GP1 = Elvp_GP1_CgP1[1] - Slvp_GP1_CgP1[1]
+    #         r0Z_GP1 = Elvp_GP1_CgP1[2] - Slvp_GP1_CgP1[2]
+    #         r0 = math.sqrt(r0X_GP1**2.0 + r0Y_GP1**2.0 + r0Z_GP1**2.0)
+    #
+    #         if r0 < _EPS:
+    #             singularity_counts[0] += 1
+    #             continue
+    #
+    #         strength = strengths[vortex_id]
+    #         age = ages[vortex_id]
+    #         r_c0 = max(r_c0s[vortex_id, leg], _CORE_FRACTION * r0)
+    #         r_c_sq = r_c0**2.0 + _FOUR_LAMB * (nu + _SQUIRE * abs(strength)) * age
+    #
+    #         legStartsX[leg, count] = Slvp_GP1_CgP1[0]
+    #         legStartsY[leg, count] = Slvp_GP1_CgP1[1]
+    #         legStartsZ[leg, count] = Slvp_GP1_CgP1[2]
+    #         legEndsX[leg, count] = Elvp_GP1_CgP1[0]
+    #         legEndsY[leg, count] = Elvp_GP1_CgP1[1]
+    #         legEndsZ[leg, count] = Elvp_GP1_CgP1[2]
+    #         leg_c1[leg, count] = strength / _FOUR_PI
+    #         leg_c2[leg, count] = r0**2.0 * r_c_sq
+    #         count += 1
+    #     num_valid[leg] = count
+    # octowrap: on
+    # Changed for speed: the pre-pass above (commented out) built, for each leg (right,
+    # front, left, back), a compact list of that leg's valid line vortices, for a point
+    # loop that evaluated each kind of leg in its own pass over the ring vortices. The
+    # point loop below instead visits each ring vortex once and evaluates all four of
+    # its legs together. So this pre-pass stores, for each ring vortex, its four
+    # vertices and c1, and for each of its legs, c2 and a valid flag. Each quantity is
+    # computed with the same arithmetic as before. A degenerate leg (its two vertices
+    # coincide) is still counted in singularity_counts[0], as before, but instead of
+    # being left out of a list it keeps c2 = 0.0 and a valid flag of 0.0, which make it
+    # contribute nothing (see _ring_vortex_leg and the point loop).
+    #
+    # The vertices of each ring vortex are numbered 0 back right, 1 front right, 2 front
+    # left, and 3 back left. Leg k runs from vertex k to vertex (k + 1) % 4, so legs 0
+    # to 3 are the right, front, left, and back legs, in the same order and direction as
+    # before.
+    ringVerticesX_GP1_CgP1 = np.empty((4, num_vortices), dtype=float)
+    ringVerticesY_GP1_CgP1 = np.empty((4, num_vortices), dtype=float)
+    ringVerticesZ_GP1_CgP1 = np.empty((4, num_vortices), dtype=float)
+    ring_c1 = np.empty(num_vortices, dtype=float)
+    leg_c2 = np.zeros((4, num_vortices), dtype=float)
+    leg_valid = np.zeros((4, num_vortices), dtype=float)
+    for vortex_id in range(num_vortices):
+        ringVerticesX_GP1_CgP1[0, vortex_id] = stackBrrvp_GP1_CgP1[vortex_id, 0]
+        ringVerticesY_GP1_CgP1[0, vortex_id] = stackBrrvp_GP1_CgP1[vortex_id, 1]
+        ringVerticesZ_GP1_CgP1[0, vortex_id] = stackBrrvp_GP1_CgP1[vortex_id, 2]
+        ringVerticesX_GP1_CgP1[1, vortex_id] = stackFrrvp_GP1_CgP1[vortex_id, 0]
+        ringVerticesY_GP1_CgP1[1, vortex_id] = stackFrrvp_GP1_CgP1[vortex_id, 1]
+        ringVerticesZ_GP1_CgP1[1, vortex_id] = stackFrrvp_GP1_CgP1[vortex_id, 2]
+        ringVerticesX_GP1_CgP1[2, vortex_id] = stackFlrvp_GP1_CgP1[vortex_id, 0]
+        ringVerticesY_GP1_CgP1[2, vortex_id] = stackFlrvp_GP1_CgP1[vortex_id, 1]
+        ringVerticesZ_GP1_CgP1[2, vortex_id] = stackFlrvp_GP1_CgP1[vortex_id, 2]
+        ringVerticesX_GP1_CgP1[3, vortex_id] = stackBlrvp_GP1_CgP1[vortex_id, 0]
+        ringVerticesY_GP1_CgP1[3, vortex_id] = stackBlrvp_GP1_CgP1[vortex_id, 1]
+        ringVerticesZ_GP1_CgP1[3, vortex_id] = stackBlrvp_GP1_CgP1[vortex_id, 2]
+
+        # c1 depends only on the ring vortex's strength, so it is the same for all four
+        # legs and is computed once per ring vortex, with the same expression as before.
+        ring_c1[vortex_id] = strengths[vortex_id] / _FOUR_PI
+
     for leg in range(4):
-        if leg == 0:
-            stackSlvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
-            stackElvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
-        elif leg == 1:
-            stackSlvp_GP1_CgP1 = stackFrrvp_GP1_CgP1
-            stackElvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
-        elif leg == 2:
-            stackSlvp_GP1_CgP1 = stackFlrvp_GP1_CgP1
-            stackElvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
-        else:
-            stackSlvp_GP1_CgP1 = stackBlrvp_GP1_CgP1
-            stackElvp_GP1_CgP1 = stackBrrvp_GP1_CgP1
-        count = 0
+        end_vertex = (leg + 1) % 4
         for vortex_id in range(num_vortices):
-            Slvp_GP1_CgP1 = stackSlvp_GP1_CgP1[vortex_id]
-            Elvp_GP1_CgP1 = stackElvp_GP1_CgP1[vortex_id]
-            r0X_GP1 = Elvp_GP1_CgP1[0] - Slvp_GP1_CgP1[0]
-            r0Y_GP1 = Elvp_GP1_CgP1[1] - Slvp_GP1_CgP1[1]
-            r0Z_GP1 = Elvp_GP1_CgP1[2] - Slvp_GP1_CgP1[2]
+            # The r0_GP1 vector goes from the leg's start vertex to its end vertex (in
+            # the first Airplane's geometry axes).
+            r0X_GP1 = (
+                ringVerticesX_GP1_CgP1[end_vertex, vortex_id]
+                - ringVerticesX_GP1_CgP1[leg, vortex_id]
+            )
+            r0Y_GP1 = (
+                ringVerticesY_GP1_CgP1[end_vertex, vortex_id]
+                - ringVerticesY_GP1_CgP1[leg, vortex_id]
+            )
+            r0Z_GP1 = (
+                ringVerticesZ_GP1_CgP1[end_vertex, vortex_id]
+                - ringVerticesZ_GP1_CgP1[leg, vortex_id]
+            )
             r0 = math.sqrt(r0X_GP1**2.0 + r0Y_GP1**2.0 + r0Z_GP1**2.0)
 
-            # Leave out degenerate filaments where the start and end points coincide.
+            # Count degenerate legs, as before. They keep c2 = 0.0 and valid = 0.0.
             if r0 < _EPS:
                 singularity_counts[0] += 1
                 continue
 
+            # The ring vortex's strength (circulation), and how long ago it was shed
+            # into the wake (0.0 for the wing's own bound ring vortices).
             strength = strengths[vortex_id]
             age = ages[vortex_id]
+
+            # The leg's initial vortex core radius: the given one, but never less than a
+            # fixed fraction of the leg's length, so a short leg can't have an
+            # unrealistically thin core.
             r_c0 = max(r_c0s[vortex_id, leg], _CORE_FRACTION * r0)
+
+            # The core radius squared after it has grown with age (the Lamb-Oseen
+            # model): a wake vortex's core spreads over time, at a rate set by the air's
+            # kinematic viscosity nu plus a turbulent part proportional to the vortex's
+            # strength (Squire's parameter).
             r_c_sq = r_c0**2.0 + _FOUR_LAMB * (nu + _SQUIRE * abs(strength)) * age
 
-            legStartsX[leg, count] = Slvp_GP1_CgP1[0]
-            legStartsY[leg, count] = Slvp_GP1_CgP1[1]
-            legStartsZ[leg, count] = Slvp_GP1_CgP1[2]
-            legEndsX[leg, count] = Elvp_GP1_CgP1[0]
-            legEndsY[leg, count] = Elvp_GP1_CgP1[1]
-            legEndsZ[leg, count] = Elvp_GP1_CgP1[2]
-            leg_c1[leg, count] = strength / _FOUR_PI
-            leg_c2[leg, count] = r0**2.0 * r_c_sq
-            count += 1
-        num_valid[leg] = count
+            # c2, the leg's length squared times its core radius squared, is the term
+            # added to the Biot-Savart denominator (see _ring_vortex_leg). It smooths
+            # the induced velocity near the leg, so it doesn't grow without bound as a
+            # point approaches the vortex line.
+            leg_c2[leg, vortex_id] = r0**2.0 * r_c_sq
+
+            # Mark the leg as valid (not degenerate), so its vertex hits are counted.
+            leg_valid[leg, vortex_id] = 1.0
 
     # Split the points into their coordinates, so a chunk's coordinates are contiguous.
     pointsX = np.ascontiguousarray(stackP_GP1_CgP1[:, 0])
@@ -1523,128 +1710,184 @@ def _collapsed_velocities_from_ring_vortices_vectorized(
         # octowrap: on
         packed_vertex_hits = np.zeros(n)
 
-        for leg in range(4):
-            # Each point's sum over this leg's vortices, starting at 0.0.
-            legX = np.zeros(n)
-            legY = np.zeros(n)
-            legZ = np.zeros(n)
-            for v in range(num_valid[leg]):
-                SX = legStartsX[leg, v]
-                SY = legStartsY[leg, v]
-                SZ = legStartsZ[leg, v]
-                EX = legEndsX[leg, v]
-                EY = legEndsY[leg, v]
-                EZ = legEndsZ[leg, v]
-                c1 = leg_c1[leg, v]
-                c2 = leg_c2[leg, v]
+        # octowrap: off
+        # for leg in range(4):
+        #     legX = np.zeros(n)
+        #     legY = np.zeros(n)
+        #     legZ = np.zeros(n)
+        #     for v in range(num_valid[leg]):
+        #         SX = legStartsX[leg, v]
+        #         SY = legStartsY[leg, v]
+        #         SZ = legStartsZ[leg, v]
+        #         EX = legEndsX[leg, v]
+        #         EY = legEndsY[leg, v]
+        #         EZ = legEndsZ[leg, v]
+        #         c1 = leg_c1[leg, v]
+        #         c2 = leg_c2[leg, v]
+        #
+        #         r0X_GP1 = EX - SX
+        #         r0Y_GP1 = EY - SY
+        #         r0Z_GP1 = EZ - SZ
+        #
+        #         for p in range(n):
+        #             r1X_GP1 = SX - chunkX[p]
+        #             r1Y_GP1 = SY - chunkY[p]
+        #             r1Z_GP1 = SZ - chunkZ[p]
+        #             r2X_GP1 = EX - chunkX[p]
+        #             r2Y_GP1 = EY - chunkY[p]
+        #             r2Z_GP1 = EZ - chunkZ[p]
+        #
+        #             r3X_GP1 = r1Y_GP1 * r0Z_GP1 - r1Z_GP1 * r0Y_GP1
+        #             r3Y_GP1 = r1Z_GP1 * r0X_GP1 - r1X_GP1 * r0Z_GP1
+        #             r3Z_GP1 = r1X_GP1 * r0Y_GP1 - r1Y_GP1 * r0X_GP1
+        #
+        #             r1 = math.sqrt(r1X_GP1**2.0 + r1Y_GP1**2.0 + r1Z_GP1**2.0)
+        #             r2 = math.sqrt(r2X_GP1**2.0 + r2Y_GP1**2.0 + r2Z_GP1**2.0)
+        #             r3_sq = r3X_GP1**2.0 + r3Y_GP1**2.0 + r3Z_GP1**2.0
+        #             r1_times_r2 = r1 * r2
+        #             c_3 = r1X_GP1 * r2X_GP1 + r1Y_GP1 * r2Y_GP1 + r1Z_GP1 * r2Z_GP1
+        #
+        #             denominator = r1_times_r2 * (r3_sq + c2)
+        #             on_vertex = denominator == 0.0
+        #
+        #             numerator = (
+        #                 r3_sq / (r1_times_r2 + c_3) if c_3 >= 0.0 else r1_times_r2 - c_3
+        #             )
+        #             c_4 = 0.0 if on_vertex else c1 * (r1 + r2) * numerator / denominator
+        #
+        #             legX[p] += c_4 * r3X_GP1
+        #             legY[p] += c_4 * r3Y_GP1
+        #             legZ[p] += c_4 * r3Z_GP1
+        #
+        #             packed_vertex_hits[p] += (
+        #                 (1.0 if r1 == 0.0 else _VERTEX_HIT_BASE_FLOAT)
+        #                 if ((r1 == 0.0) | (r2 == 0.0))
+        #                 else 0.0
+        #             )
+        #
+        #     for p in range(n):
+        #         allLegsX[p] += legX[p]
+        #         allLegsY[p] += legY[p]
+        #         allLegsZ[p] += legZ[p]
+        # octowrap: on
+        # Changed for speed: the point loop above (commented out) went over the ring
+        # vortices four times, once per kind of leg (right, front, left, back). Each
+        # pass added that kind of leg into its own per point sums (legX, legY, legZ),
+        # which were added into the totals after each pass. Every vertex is shared by
+        # two legs, so each point computed every vertex's distance twice (8 square roots
+        # per ring vortex), and read every vertex's coordinates twice.
+        #
+        # Now the loop goes over the ring vortices once. For each ring vortex and point,
+        # it computes the vector to each of the four vertices and its length once (4
+        # square roots), evaluates the four legs from them with exactly the old
+        # arithmetic (see _ring_vortex_leg), and adds the four legs' terms into one
+        # running sum per component (allLegsX, allLegsY, allLegsZ). That halves the
+        # square roots and the vertex reads, and replaces four sets of running sums with
+        # one, which together made the whole run about 7% faster (12% at 1 thread).
+        #
+        # The one change in the results: the four legs' terms are now added ring vortex
+        # by ring vortex, instead of all the right legs, then all the front legs, and so
+        # on. Floating point addition rounds after every step, so adding the same terms
+        # in a different order changes the last digits: the velocities differ from the
+        # old ones at round off level (about 1e-14 of the largest velocity on real
+        # inputs).
+        for vortex_id in range(num_vortices):
+            # This ring vortex's vertices, c1, and per leg c2 and valid flags, read once
+            # for all of the chunk's points.
+            V0X = ringVerticesX_GP1_CgP1[0, vortex_id]
+            V0Y = ringVerticesY_GP1_CgP1[0, vortex_id]
+            V0Z = ringVerticesZ_GP1_CgP1[0, vortex_id]
+            V1X = ringVerticesX_GP1_CgP1[1, vortex_id]
+            V1Y = ringVerticesY_GP1_CgP1[1, vortex_id]
+            V1Z = ringVerticesZ_GP1_CgP1[1, vortex_id]
+            V2X = ringVerticesX_GP1_CgP1[2, vortex_id]
+            V2Y = ringVerticesY_GP1_CgP1[2, vortex_id]
+            V2Z = ringVerticesZ_GP1_CgP1[2, vortex_id]
+            V3X = ringVerticesX_GP1_CgP1[3, vortex_id]
+            V3Y = ringVerticesY_GP1_CgP1[3, vortex_id]
+            V3Z = ringVerticesZ_GP1_CgP1[3, vortex_id]
+            c1 = ring_c1[vortex_id]
+            c2_0 = leg_c2[0, vortex_id]
+            c2_1 = leg_c2[1, vortex_id]
+            c2_2 = leg_c2[2, vortex_id]
+            c2_3 = leg_c2[3, vortex_id]
+            valid_0 = leg_valid[0, vortex_id]
+            valid_1 = leg_valid[1, vortex_id]
+            valid_2 = leg_valid[2, vortex_id]
+            valid_3 = leg_valid[3, vortex_id]
 
-                # The r0_GP1 vector goes from the line vortex's start point to its end
-                # point (in the first Airplane's geometry axes).
-                r0X_GP1 = EX - SX
-                r0Y_GP1 = EY - SY
-                r0Z_GP1 = EZ - SZ
+            # Each leg's r0_GP1, from its start vertex to its end vertex (in the first
+            # Airplane's geometry axes), computed as before.
+            r0X_0 = V1X - V0X
+            r0Y_0 = V1Y - V0Y
+            r0Z_0 = V1Z - V0Z
+            r0X_1 = V2X - V1X
+            r0Y_1 = V2Y - V1Y
+            r0Z_1 = V2Z - V1Z
+            r0X_2 = V3X - V2X
+            r0Y_2 = V3Y - V2Y
+            r0Z_2 = V3Z - V2Z
+            r0X_3 = V0X - V3X
+            r0Y_3 = V0Y - V3Y
+            r0Z_3 = V0Z - V3Z
 
-                # This innermost loop over the chunk's points is the one LLVM
-                # vectorizes. Its formulas are the line vortex kernel's, in the same
-                # order.
-                for p in range(n):
-                    r1X_GP1 = SX - chunkX[p]
-                    r1Y_GP1 = SY - chunkY[p]
-                    r1Z_GP1 = SZ - chunkZ[p]
-                    r2X_GP1 = EX - chunkX[p]
-                    r2Y_GP1 = EY - chunkY[p]
-                    r2Z_GP1 = EZ - chunkZ[p]
-
-                    # r3_GP1 = r1_GP1 x r0_GP1, which equals r1_GP1 x r2_GP1 but avoids
-                    # cancellation far from the line vortex.
-                    r3X_GP1 = r1Y_GP1 * r0Z_GP1 - r1Z_GP1 * r0Y_GP1
-                    r3Y_GP1 = r1Z_GP1 * r0X_GP1 - r1X_GP1 * r0Z_GP1
-                    r3Z_GP1 = r1X_GP1 * r0Y_GP1 - r1Y_GP1 * r0X_GP1
-
-                    r1 = math.sqrt(r1X_GP1**2.0 + r1Y_GP1**2.0 + r1Z_GP1**2.0)
-                    r2 = math.sqrt(r2X_GP1**2.0 + r2Y_GP1**2.0 + r2Z_GP1**2.0)
-                    r3_sq = r3X_GP1**2.0 + r3Y_GP1**2.0 + r3Z_GP1**2.0
-                    r1_times_r2 = r1 * r2
-                    c_3 = r1X_GP1 * r2X_GP1 + r1Y_GP1 * r2Y_GP1 + r1Z_GP1 * r2Z_GP1
-
-                    # The denominator is zero only if the point is on a vertex. The line
-                    # vortex kernel skipped these pairs. Here they contribute exactly
-                    # 0.0 (see the docstring), and are counted.
-                    denominator = r1_times_r2 * (r3_sq + c2)
-                    on_vertex = denominator == 0.0
-
-                    # r1 * r2 - c_3 in the form that doesn't cancel for this angle.
-                    numerator = (
-                        r3_sq / (r1_times_r2 + c_3) if c_3 >= 0.0 else r1_times_r2 - c_3
-                    )
-                    c_4 = 0.0 if on_vertex else c1 * (r1 + r2) * numerator / denominator
-
-                    legX[p] += c_4 * r3X_GP1
-                    legY[p] += c_4 * r3Y_GP1
-                    legZ[p] += c_4 * r3Z_GP1
-
-                    # Changed for speed: count this pair's vertex hit in the packed
-                    # float instead of the two integer arrays (the old code is commented
-                    # out below). The conditions are the old ones exactly:
-                    #   - point on the start vertex (on_vertex and r1 == 0.0): add 1.0,
-                    #     which counts one in the start count's digits;
-                    #   - otherwise, point on the end vertex (on_vertex and r2 == 0.0,
-                    #     and r1 != 0.0 because the first branch wasn't taken): add
-                    #     _VERTEX_HIT_BASE_FLOAT (2^26), which counts one in the end
-                    #     count's digits;
-                    #   - otherwise: add 0.0, no hit.
-                    # Every value added is a whole number and the total stays far below
-                    # 2^53, so each addition is exact (see _VERTEX_HIT_BASE).
-                    # octowrap: off
-                    # start_vertex_counts[p] += 1 if (on_vertex and r1 == 0.0) else 0
-                    # end_vertex_counts[p] += (
-                    #     1 if (on_vertex and r1 != 0.0 and r2 == 0.0) else 0
-                    # )
-                    # octowrap: on
-                    #
-                    # Changed for speed again: the packed count update below used to
-                    # test on_vertex in both branches (the commented out code just
-                    # below). It now tests only r1 and r2, combined with a bitwise or
-                    # (|), which LLVM turns into two vector compares and one blend,
-                    # while the "and" chain compiled into a much longer mask and blend
-                    # sequence. This made the kernel about 5% to 13% faster and the
-                    # whole run about 4% faster, with bit-identical results.
-                    #
-                    # Why the counts are the same as before: if r1 == 0.0, then
-                    # r1_times_r2 == 0.0, so denominator == 0.0 and on_vertex is True
-                    # (the same holds for r2). So "on_vertex and r1 == 0.0" is the same
-                    # test as "r1 == 0.0", and likewise for r2. The new update gives:
-                    #   - r1 == 0.0: add 1.0 (a start vertex hit), as before;
-                    #   - r1 != 0.0 and r2 == 0.0: add _VERTEX_HIT_BASE_FLOAT (an end
-                    #     vertex hit), as before;
-                    #   - neither: add 0.0 (no hit), as before.
-                    # The one exception needs a non finite number: if r2 or (r3_sq + c2)
-                    # were inf, then 0.0 * inf is NaN, on_vertex would be False, and the
-                    # old code wouldn't count the hit while the new code would. That
-                    # needs coordinates near 1e154 m or an overflowing core radius,
-                    # which don't occur, and even then only the logged singularity count
-                    # could differ. The velocities never depend on this update: c_4
-                    # above still uses on_vertex.
-                    # octowrap: off
-                    # packed_vertex_hits[p] += (
-                    #     1.0
-                    #     if (on_vertex and r1 == 0.0)
-                    #     else (
-                    #         _VERTEX_HIT_BASE_FLOAT if (on_vertex and r2 == 0.0) else 0.0
-                    #     )
-                    # )
-                    # octowrap: on
-                    packed_vertex_hits[p] += (
-                        (1.0 if r1 == 0.0 else _VERTEX_HIT_BASE_FLOAT)
-                        if ((r1 == 0.0) | (r2 == 0.0))
-                        else 0.0
-                    )
-
-            # Add this leg's sums to the totals, in leg order.
+            # This innermost loop over the chunk's points is the one LLVM vectorizes.
             for p in range(n):
-                allLegsX[p] += legX[p]
-                allLegsY[p] += legY[p]
-                allLegsZ[p] += legZ[p]
+                # The vector from the point to each vertex (in the first Airplane's
+                # geometry axes), and its length. These are the old r1_GP1 and r2_GP1
+                # computed once per vertex instead of once per leg end, with the same
+                # expressions, so they have the same bits as before.
+                d0X = V0X - chunkX[p]
+                d0Y = V0Y - chunkY[p]
+                d0Z = V0Z - chunkZ[p]
+                d1X = V1X - chunkX[p]
+                d1Y = V1Y - chunkY[p]
+                d1Z = V1Z - chunkZ[p]
+                d2X = V2X - chunkX[p]
+                d2Y = V2Y - chunkY[p]
+                d2Z = V2Z - chunkZ[p]
+                d3X = V3X - chunkX[p]
+                d3Y = V3Y - chunkY[p]
+                d3Z = V3Z - chunkZ[p]
+                n0 = math.sqrt(d0X**2.0 + d0Y**2.0 + d0Z**2.0)
+                n1 = math.sqrt(d1X**2.0 + d1Y**2.0 + d1Z**2.0)
+                n2 = math.sqrt(d2X**2.0 + d2Y**2.0 + d2Z**2.0)
+                n3 = math.sqrt(d3X**2.0 + d3Y**2.0 + d3Z**2.0)
+
+                # Evaluate the four legs. Leg k runs from vertex k to vertex k + 1, so
+                # its r1 is the vector to vertex k and its r2 the vector to vertex k +
+                # 1.
+                c4_0, r3X_0, r3Y_0, r3Z_0, hit_0 = _ring_vortex_leg(
+                    d0X, d0Y, d0Z, n0, d1X, d1Y, d1Z, n1, r0X_0, r0Y_0, r0Z_0, c1, c2_0
+                )
+                c4_1, r3X_1, r3Y_1, r3Z_1, hit_1 = _ring_vortex_leg(
+                    d1X, d1Y, d1Z, n1, d2X, d2Y, d2Z, n2, r0X_1, r0Y_1, r0Z_1, c1, c2_1
+                )
+                c4_2, r3X_2, r3Y_2, r3Z_2, hit_2 = _ring_vortex_leg(
+                    d2X, d2Y, d2Z, n2, d3X, d3Y, d3Z, n3, r0X_2, r0Y_2, r0Z_2, c1, c2_2
+                )
+                c4_3, r3X_3, r3Y_3, r3Z_3, hit_3 = _ring_vortex_leg(
+                    d3X, d3Y, d3Z, n3, d0X, d0Y, d0Z, n0, r0X_3, r0Y_3, r0Z_3, c1, c2_3
+                )
+
+                # Add this ring vortex's four legs, in leg order (right, front, left,
+                # back), into the point's one running sum per component. This is where
+                # the order of the additions differs from before (see above).
+                allLegsX[p] += c4_0 * r3X_0 + c4_1 * r3X_1 + c4_2 * r3X_2 + c4_3 * r3X_3
+                allLegsY[p] += c4_0 * r3Y_0 + c4_1 * r3Y_1 + c4_2 * r3Y_2 + c4_3 * r3Y_3
+                allLegsZ[p] += c4_0 * r3Z_0 + c4_1 * r3Z_1 + c4_2 * r3Z_2 + c4_3 * r3Z_3
+
+                # Count the vertex hits, with each leg's hit term masked by its valid
+                # flag: a degenerate leg's vertices coincide, so without the mask a
+                # point on them would count hits the old loop (which never evaluated
+                # degenerate legs) didn't. Every term is a whole number, so the packed
+                # sum stays exact (see _VERTEX_HIT_BASE).
+                packed_vertex_hits[p] += (
+                    valid_0 * hit_0
+                    + valid_1 * hit_1
+                    + valid_2 * hit_2
+                    + valid_3 * hit_3
+                )
 
         for p in range(n):
             stackVInd_GP1__E[start + p, 0] = allLegsX[p]
