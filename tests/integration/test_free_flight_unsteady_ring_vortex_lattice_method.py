@@ -354,7 +354,7 @@ class TestFreeFlightFastApproximations(unittest.TestCase):
 
     # The largest allowed force difference at any time step between the exact run and
     # the fast() run, relative to the exact run's peak force. The measured difference
-    # was at most 1.4e-5.
+    # was at most 1.1e-5 (1.4e-5 before fast() included reuse_final_trial).
     _FORCE_TOLERANCE = 1e-4
 
     exact_factors: dict[int, list[float]]
@@ -478,6 +478,111 @@ class TestFreeFlightFastApproximations(unittest.TestCase):
         np.testing.assert_allclose(
             self.fast_forces_W,
             self.exact_forces_W,
+            rtol=0.0,
+            atol=self._FORCE_TOLERANCE * peak,
+        )
+
+
+class TestFreeFlightReuseFinalTrial(unittest.TestCase):
+    """This is a class for testing the flapping-wing free flight solver with the
+    reuse_final_trial approximation alone against the same run without it."""
+
+    # The number of free flight time steps, from the first, over which the forces are
+    # compared. Free flight without attitude control is chaotic, so any difference grows
+    # over a run, and only the first free flight time steps measure the approximation
+    # itself.
+    _NUM_COMPARED_FREE_STEPS = 5
+
+    # The largest allowed force difference over the compared time steps between the
+    # exact run and the reuse_final_trial run, relative to the exact run's peak force.
+    # The measured difference was 5.8e-7.
+    _FORCE_TOLERANCE = 1e-5
+
+    exact_factors: dict[int, list[float]]
+    exact_forces_W: np.ndarray
+    exact_full_solves: int
+    reuse_factors: dict[int, list[float]]
+    reuse_forces_W: np.ndarray
+    reuse_full_solves: int
+    reuse_caps: int
+    num_steps: int
+
+    @classmethod
+    def _run(
+        cls, approximations: ps.approximations.Approximations | None
+    ) -> tuple[dict[int, list[float]], np.ndarray, int, int]:
+        """Runs the flapping free flight fixture, counting its full solves.
+
+        :param approximations: The problem's Approximations, or None for none.
+        :return: A tuple of a dict mapping each free flight time step to the relaxation
+            factors its sub-iterations logged, the (N,3) ndarray of floats of each time
+            step's forces in wind axes, the number of cap warnings, and the number of
+            full solves (each one solves for the bound ring vortex strengths).
+        """
+        solver_class = (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+        )
+        original = solver_class._calculate_vortex_strengths
+        with patch.object(
+            solver_class,
+            "_calculate_vortex_strengths",
+            autospec=True,
+            side_effect=original,
+        ) as counted:
+            factors, forces_W, caps = TestFreeFlightFastApproximations._run(
+                approximations
+            )
+        return factors, forces_W, caps, counted.call_count
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """This method sets up the test by running the flapping free flight fixture once
+        without approximations and once with only reuse_final_trial.
+
+        :return: None
+        """
+        (
+            cls.exact_factors,
+            cls.exact_forces_W,
+            _,
+            cls.exact_full_solves,
+        ) = cls._run(None)
+        (
+            cls.reuse_factors,
+            cls.reuse_forces_W,
+            cls.reuse_caps,
+            cls.reuse_full_solves,
+        ) = cls._run(ps.approximations.Approximations(reuse_final_trial=True))
+        cls.num_steps = cls.exact_forces_W.shape[0]
+
+    def test_each_coupled_step_skips_one_full_solve(self) -> None:
+        """Test that the official solve after every converged coupling reuses the final
+        trial: the run solves in full once per time step and once per trial, less one
+        solve per coupled time step."""
+        self.assertEqual(self.reuse_caps, 0)
+        num_trials = sum(len(factors) for factors in self.reuse_factors.values())
+        num_coupled_steps = len(self.reuse_factors)
+        self.assertGreater(num_coupled_steps, 1)
+        self.assertEqual(
+            self.reuse_full_solves,
+            self.num_steps + num_trials - num_coupled_steps,
+        )
+        exact_trials = sum(len(factors) for factors in self.exact_factors.values())
+        self.assertEqual(self.exact_full_solves, self.num_steps + exact_trials)
+
+    def test_forces_match_the_exact_run(self) -> None:
+        """Test that the held time steps are identical, and the first free flight time
+        steps within _FORCE_TOLERANCE of the peak force, to the exact run."""
+        first_free_step = min(self.exact_factors)
+        np.testing.assert_array_equal(
+            self.reuse_forces_W[: first_free_step + 1],
+            self.exact_forces_W[: first_free_step + 1],
+        )
+        last_compared_step = first_free_step + 1 + self._NUM_COMPARED_FREE_STEPS
+        peak = float(np.max(np.abs(self.exact_forces_W)))
+        np.testing.assert_allclose(
+            self.reuse_forces_W[:last_compared_step],
+            self.exact_forces_W[:last_compared_step],
             rtol=0.0,
             atol=self._FORCE_TOLERANCE * peak,
         )

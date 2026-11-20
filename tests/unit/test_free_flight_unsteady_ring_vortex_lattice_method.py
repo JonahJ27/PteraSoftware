@@ -150,6 +150,9 @@ class TestFreeFlightUnsteadyRingVortexLatticeMethodSolver(unittest.TestCase):
                 "_substep_gamma_n",
                 "_substep_gamma_n_minus_1",
                 "_substep_saved_state",
+                "_substep_final_trial",
+                "_stepStackPanelForces_GP1",
+                "_stepStackPanelMoments_GP1_CgP1",
             ),
         )
         with self.assertRaises(AttributeError):
@@ -351,3 +354,154 @@ class TestFreeFlightSolverSubstepLifecycle(unittest.TestCase):
             # build computes the velocity itself.
             self.solver._populate_next_airplanes_wake()
             self.assertIsNone(mock_points.call_args.args[0])
+
+
+class TestFreeFlightSolverFinalTrialReuse(unittest.TestCase):
+    """Tests for keeping the final coupling trial and reusing it as the next time step's
+    official solve (the reuse_final_trial approximation)."""
+
+    def setUp(self) -> None:
+        """Set up a fresh solver for each test."""
+        self.solver = solver_fixtures.make_free_flight_unsteady_ring_solver_fixture()
+
+    def _make_final_trial(self, step: int) -> Any:
+        """Makes a kept final trial for a given time step with distinct arrays.
+
+        :param step: The time step the trial belongs to.
+        :return: The kept final trial.
+        """
+        # noinspection PyProtectedMember
+        from pterasoftware.free_flight_unsteady_ring_vortex_lattice_method import (
+            _FinalTrial,
+        )
+
+        return _FinalTrial(
+            step=step,
+            strengths=np.array([1.0, 2.0, 3.0]),
+            grid_wing_wing_influences=np.eye(3),
+            stack_freestream_wing_influences=np.full(3, 4.0),
+            stack_wake_wing_influences=np.full(3, 5.0),
+            stackPanelForces_GP1=np.full((3, 3), 6.0),
+            stackPanelMoments_GP1_CgP1=np.full((3, 3), 7.0),
+        )
+
+    def test_process_panel_loads_hook_records_the_loads(self) -> None:
+        """Test that the load hook records references to the per Panel loads and still
+        passes them to the parent's hook."""
+        forces_GP1 = np.ones((3, 3))
+        moments_GP1_CgP1 = np.zeros((3, 3))
+        with patch.object(
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+            "_process_panel_loads_hook",
+        ) as mock_parent_hook:
+            self.solver._process_panel_loads_hook(forces_GP1, moments_GP1_CgP1)
+
+        mock_parent_hook.assert_called_once_with(forces_GP1, moments_GP1_CgP1)
+        self.assertIs(self.solver._stepStackPanelForces_GP1, forces_GP1)
+        self.assertIs(self.solver._stepStackPanelMoments_GP1_CgP1, moments_GP1_CgP1)
+
+    def test_keep_final_trial_keeps_references(self) -> None:
+        """Test that keep_final_trial keeps references to the final trial's strengths,
+        influences, and recorded loads, with the time step the trial solved."""
+        self.solver._substep_next_step = 1
+        self.solver._current_step = 1
+        self.solver.first_results_step = 0
+        strengths = np.ones(3)
+        forces_GP1 = np.ones((3, 3))
+        moments_GP1_CgP1 = np.zeros((3, 3))
+        self.solver._current_bound_vortex_strengths = strengths
+        self.solver._currentGridWingWingInfluences__E = np.eye(3)
+        self.solver._currentStackFreestreamWingInfluences__E = np.zeros(3)
+        self.solver._currentStackWakeWingInfluences__E = np.zeros(3)
+        self.solver._stepStackPanelForces_GP1 = forces_GP1
+        self.solver._stepStackPanelMoments_GP1_CgP1 = moments_GP1_CgP1
+
+        self.solver.keep_final_trial()
+
+        final_trial = self.solver._substep_final_trial
+        assert final_trial is not None
+        self.assertEqual(final_trial.step, 1)
+        self.assertIs(final_trial.strengths, strengths)
+        self.assertIs(final_trial.stackPanelForces_GP1, forces_GP1)
+        self.assertIs(final_trial.stackPanelMoments_GP1_CgP1, moments_GP1_CgP1)
+
+    def test_keep_final_trial_before_first_results_step_keeps_nothing(self) -> None:
+        """Test that a trial before the first results step, which calculated no loads,
+        is not kept."""
+        self.solver._substep_next_step = 1
+        self.solver._current_step = 1
+        self.solver.first_results_step = 2
+
+        self.solver.keep_final_trial()
+
+        self.assertIsNone(self.solver._substep_final_trial)
+
+    def test_kept_trial_survives_restore_substep(self) -> None:
+        """Test that restore_substep, which puts back every other slot, leaves the kept
+        trial in place for the next time step's official solve."""
+        final_trial = self._make_final_trial(step=1)
+        self.solver._substep_final_trial = final_trial
+        self.solver._substep_next_step = 1
+        self.solver._substep_saved_state = {"_current_step": 0}
+
+        self.solver.restore_substep(step=0)
+
+        self.assertIs(self.solver._substep_final_trial, final_trial)
+
+    def test_evaluate_uses_the_kept_trial_once(self) -> None:
+        """Test that the official solve of the kept trial's time step builds the
+        geometry but takes the strengths, influences, and loads from the trial instead
+        of solving, and that the trial is used only once."""
+        final_trial = self._make_final_trial(step=1)
+        self.solver._substep_final_trial = final_trial
+        self.solver._substep_next_step = None
+        self.solver._current_step = 1
+
+        # The solver has slots, so patch the methods on the classes.
+        solver_class = type(self.solver)
+        with (
+            patch.object(
+                ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                "_evaluate_step_aerodynamics",
+            ) as mock_full_solve,
+            patch.object(solver_class, "_prepare_step_geometry") as mock_geometry,
+            patch.object(solver_class, "_process_panel_loads_hook") as mock_loads,
+        ):
+            self.solver._evaluate_step_aerodynamics()
+
+            mock_full_solve.assert_not_called()
+            mock_geometry.assert_called_once_with()
+            mock_loads.assert_called_once_with(
+                final_trial.stackPanelForces_GP1, final_trial.stackPanelMoments_GP1_CgP1
+            )
+            self.assertIs(
+                self.solver._current_bound_vortex_strengths, final_trial.strengths
+            )
+            self.assertIs(
+                self.solver._currentGridWingWingInfluences__E,
+                final_trial.grid_wing_wing_influences,
+            )
+            self.assertIsNone(self.solver._substep_final_trial)
+
+            # The trial is used once: the next solve is a full one.
+            self.solver._evaluate_step_aerodynamics()
+            mock_full_solve.assert_called_once_with()
+
+    def test_evaluate_solves_for_another_step_or_inside_a_substep(self) -> None:
+        """Test that a kept trial is discarded, and the time step solved in full, when
+        it belongs to a different time step or when a coupling trial is running."""
+        for current_step, substep_next_step in ((2, None), (1, 1)):
+            with self.subTest(
+                current_step=current_step, substep_next_step=substep_next_step
+            ):
+                self.solver._substep_final_trial = self._make_final_trial(step=1)
+                self.solver._current_step = current_step
+                self.solver._substep_next_step = substep_next_step
+                with patch.object(
+                    ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+                    "_evaluate_step_aerodynamics",
+                ) as mock_full_solve:
+                    self.solver._evaluate_step_aerodynamics()
+
+                mock_full_solve.assert_called_once_with()
+                self.assertIsNone(self.solver._substep_final_trial)

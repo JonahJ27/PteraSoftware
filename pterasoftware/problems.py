@@ -1598,6 +1598,16 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             self._approximations, last_aitken_factor, self._carried_relaxation_factor
         )
 
+        # Changed for speed (opt in): with reuse_final_trial, keep the final trial's
+        # solution, which the solver still holds, so the next time step's official solve
+        # can reuse it instead of solving again (see the solver's
+        # _evaluate_step_aerodynamics). Only after a converged coupling: a capped
+        # coupling's final trial can be far from the accepted state, so the next time
+        # step is then solved as usual. This must come before restore_substep, which
+        # puts the current time step's state back on the solver.
+        if converged and self._approximations.reuse_final_trial:
+            solver.keep_final_trial()
+
         if not converged:
             _logger.warning(
                 _logging.indent()
@@ -3717,6 +3727,16 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         self._carried_relaxation_factor = _relaxation_factor_to_carry(
             self._approximations, last_aitken_factor, self._carried_relaxation_factor
         )
+
+        # Changed for speed (opt in): with reuse_final_trial, keep the final trial's
+        # solution, which the solver still holds, so the next time step's official solve
+        # can reuse it instead of solving again (see the solver's
+        # _evaluate_step_aerodynamics). Only after a converged coupling: a capped
+        # coupling's final trial can be far from the accepted state, so the next time
+        # step is then solved as usual. This must come before restore_substep, which
+        # puts the current time step's state back on the solver.
+        if converged and self._approximations.reuse_final_trial:
+            solver.keep_final_trial()
 
         if not converged:
             _logger.warning(

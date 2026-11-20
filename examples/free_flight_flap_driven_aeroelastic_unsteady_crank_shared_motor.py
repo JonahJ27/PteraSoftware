@@ -112,9 +112,9 @@ MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 # it. Measured on this vehicle (2 held and 6 free flaps at hover, 1 m/s, 3 m/s, and 6
 # m/s, perfect tracking). Set it to one of:
 #   - "exact": no approximations, so the results are exactly the reference results.
-#   - "fast": Approximations.fast(), about 10% to 12% faster, with free flight drift
+#   - "fast": Approximations.fast(), about 12% to 19% faster, with free flight drift
 #     below what a 1e-12 m/s change in the air speed already causes.
-#   - "coarse": Approximations.fast_coarse(), about 14% to 17% faster, but its free
+#   - "coarse": Approximations.fast_coarse(), about 17% to 24% faster, but its free
 #     flight drift can exceed that, so use it where speed matters more than matching the
 #     exact run closely.
 APPROXIMATIONS = "coarse"

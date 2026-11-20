@@ -15,6 +15,7 @@ steps and then moves in free flight.
 """
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -362,4 +363,45 @@ class TestFreeFlightFlapDrivenAeroelasticUnsteadyRingVortexLatticeMethod(
         )
         self._assert_matches_stored(
             problem, _SOLVER_TOLERANCE, num_steps=movement.prescribed_num_steps + 1
+        )
+
+    def test_reuse_final_trial_matches_stored_solution(self) -> None:
+        """Test that a run with the reuse_final_trial approximation reuses the final
+        coupling trial on every coupled time step, reproduces the stored results through
+        the held time steps and the first free flight time step (which follows a held
+        time step and so is solved in full), and agrees with them closely over the next
+        free flight time steps.
+
+        The later time steps aren't compared, for the same reason as in
+        test_numerical_spring_solver_matches_stored_solution. Over the compared time
+        steps the reuse run differs from the stored results by at most about 6e-6 of
+        each history's largest magnitude.
+        """
+        problem = flap_drive_fixtures.make_free_flight_flap_driven_problem(
+            approximations=ps.approximations.Approximations(reuse_final_trial=True)
+        )
+        solver_class = (
+            ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver
+        )
+        with patch.object(
+            solver_class,
+            "keep_final_trial",
+            autospec=True,
+            side_effect=solver_class.keep_final_trial,
+        ) as counted_keep:
+            _solve(problem)
+        movement = problem.movement
+        assert isinstance(
+            movement, ps.movements.free_flight_movement.FreeFlightAeroelasticMovement
+        )
+        prescribed = movement.prescribed_num_steps
+
+        # Every free flight time step except the last one couples the next time step,
+        # and each of those couplings converges and keeps its final trial.
+        self.assertEqual(counted_keep.call_count, problem.num_steps - 1 - prescribed)
+        self._assert_matches_stored(
+            problem, _REPRODUCTION_TOLERANCE, num_steps=prescribed + 1
+        )
+        self._assert_matches_stored(
+            problem, _SOLVER_TOLERANCE * 10, num_steps=prescribed + 4
         )

@@ -601,6 +601,50 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         :return: None
         """
+        # Changed for clarity: the array setup and geometry collapse that used to be
+        # written inline here are now in _prepare_step_geometry, unchanged, so that the
+        # free flight solvers can build a time step's geometry without solving it (see
+        # their _evaluate_step_aerodynamics). This method still does the same work in
+        # the same order.
+        self._prepare_step_geometry()
+
+        # Find the matrix of Wing Wing influence coefficients associated with the
+        # Airplanes' geometries at this time step.
+        _logger.debug(_logging.indent() + "Calculating the Wing Wing influences")
+        self._calculate_wing_wing_influences()
+
+        # Find the normal velocity (in the first Airplane's geometry axes, observed from
+        # the Earth frame) at every collocation point due solely to the freestream.
+        _logger.debug(_logging.indent() + "Calculating the freestream Wing influences")
+        self._calculate_freestream_wing_influences()
+
+        # Find the normal velocity (in the first Airplane's geometry axes, observed from
+        # the Earth frame) at every collocation point due solely to the wake ring
+        # vortices.
+        _logger.debug(_logging.indent() + "Calculating the wake Wing influences")
+        self._calculate_wake_wing_influences()
+
+        # Solve for each bound ring vortex's strength.
+        _logger.debug(_logging.indent() + "Calculating bound ring vortex strengths")
+        self._calculate_vortex_strengths()
+
+        # Solve for the forces (in the first Airplane's geometry axes) and moments (in
+        # the first Airplane's geometry axes, relative to the first Airplane's CG) on
+        # each Panel.
+        if self._current_step >= self.first_results_step:
+            _logger.debug(_logging.indent() + "Calculating forces and moments")
+            self._calculate_loads()
+
+    def _prepare_step_geometry(self) -> None:
+        """Reinitializes the current time step's working arrays and collapses its bound
+        and wake geometry into the solver's stacks.
+
+        This is the first part of _evaluate_step_aerodynamics: everything it does before
+        the influence coefficients. The caller must have already set the current step,
+        Airplanes, and OperatingPoint, and built this step's bound ring vortex geometry.
+
+        :return: None
+        """
         step = self._current_step
 
         # TODO: I think these steps are redundant, at least during the first time step.
@@ -696,33 +740,6 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # Collapse the Katz-method-specific geometry data if needed.
         if self._force_method == "katz":
             self._collapse_geometry_katz_data()
-
-        # Find the matrix of Wing Wing influence coefficients associated with the
-        # Airplanes' geometries at this time step.
-        _logger.debug(_logging.indent() + "Calculating the Wing Wing influences")
-        self._calculate_wing_wing_influences()
-
-        # Find the normal velocity (in the first Airplane's geometry axes, observed from
-        # the Earth frame) at every collocation point due solely to the freestream.
-        _logger.debug(_logging.indent() + "Calculating the freestream Wing influences")
-        self._calculate_freestream_wing_influences()
-
-        # Find the normal velocity (in the first Airplane's geometry axes, observed from
-        # the Earth frame) at every collocation point due solely to the wake ring
-        # vortices.
-        _logger.debug(_logging.indent() + "Calculating the wake Wing influences")
-        self._calculate_wake_wing_influences()
-
-        # Solve for each bound ring vortex's strength.
-        _logger.debug(_logging.indent() + "Calculating bound ring vortex strengths")
-        self._calculate_vortex_strengths()
-
-        # Solve for the forces (in the first Airplane's geometry axes) and moments (in
-        # the first Airplane's geometry axes, relative to the first Airplane's CG) on
-        # each Panel.
-        if self._current_step >= self.first_results_step:
-            _logger.debug(_logging.indent() + "Calculating forces and moments")
-            self._calculate_loads()
 
     def initialize_step_geometry(self, step: int) -> None:
         """Initializes geometry for a specific step without solving.

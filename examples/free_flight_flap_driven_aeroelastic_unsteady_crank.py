@@ -105,13 +105,15 @@ MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 # Define whether to opt in to approximations that make the free flight run faster. See
 # ps.approximations.Approximations for what each one changes and what was measured for
 # it. Measured on this model (10 m/s, 3 Hz, 1 held and 2 free flaps, perfect tracking),
-# where the exact run took about 10.4 s with 4.69 coupling sub-iterations per free
-# flight time step. Set it to one of:
+# where the exact run took about 9.4 s with 4.69 coupling sub-iterations per free flight
+# time step. Set it to one of:
 #   - "exact": no approximations, so the results are exactly the reference results.
-#   - "fast": Approximations.fast(), about 12% faster (2.96 sub-iterations per free
-#     flight time step). The free flaps' mean lift moved by at most 0.0004%.
-#   - "coarse": Approximations.fast_coarse(), about 17% faster (2.36 sub-iterations per
-#     free flight time step). The free flaps' mean lift moved by at most 0.018%.
+#   - "fast": Approximations.fast(), about 17% faster (2.96 sub-iterations per free
+#     flight time step, each free flight time step's official solve reusing its
+#     coupling's final trial). The free flaps' mean lift moved by at most 0.0006%.
+#   - "coarse": Approximations.fast_coarse(), about 20% faster (2.36 sub-iterations per
+#     free flight time step, also reusing the final trial). The free flaps' mean lift
+#     moved by at most 0.015%.
 # For comparison, a 1e-12 m/s change in the air speed moved them by at most 0.0002%: at
 # 10 m/s this model's free flight is much less sensitive than the FAAV's near hover.
 APPROXIMATIONS = "coarse"

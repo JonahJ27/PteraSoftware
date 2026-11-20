@@ -280,6 +280,7 @@ def make_free_flight_flap_driven_problem(
     prescribed_num_steps: int = 4,
     free_num_steps: int = 12,
     use_analytical_spring_solver: bool = True,
+    approximations: ps.approximations.Approximations | None = None,
 ) -> (
     ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFlightFlapDrivenAeroelasticUnsteadyProblem
 ):
@@ -291,6 +292,8 @@ def make_free_flight_flap_driven_problem(
     :param free_num_steps: The number of free flight time steps. The default is 12.
     :param use_analytical_spring_solver: Whether the torsional springs are solved
         analytically. The default is True.
+    :param approximations: The problem's Approximations, or None for none. The default
+        is None.
     :return free_flight_flap_driven_problem:
         FreeFlightFlapDrivenAeroelasticUnsteadyProblem This is the problem.
     """
@@ -313,6 +316,7 @@ def make_free_flight_flap_driven_problem(
         flap_drives=[make_tracking_drive()],
         step_discards=STEP_DISCARDS,
         use_analytical_spring_solver=use_analytical_spring_solver,
+        approximations=approximations,
     )
 
     return free_flight_flap_driven_problem

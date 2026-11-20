@@ -22,6 +22,7 @@ class TestApproximations(unittest.TestCase):
         default = approximations.Approximations()
         self.assertFalse(default.adaptive_relaxation)
         self.assertEqual(default.coupling_relative_tolerance, 1e-6)
+        self.assertFalse(default.reuse_final_trial)
         self.assertFalse(default.any_enabled)
         self.assertEqual(default.describe(), "none")
 
@@ -35,21 +36,24 @@ class TestApproximations(unittest.TestCase):
         )
 
     def test_fast(self) -> None:
-        """Test that fast() turns on adaptive_relaxation and sets the tolerance to
-        1e-5."""
+        """Test that fast() turns on adaptive_relaxation and reuse_final_trial and sets
+        the tolerance to 1e-5."""
         fast = approximations.Approximations.fast()
         self.assertTrue(fast.adaptive_relaxation)
         self.assertEqual(fast.coupling_relative_tolerance, 1e-5)
+        self.assertTrue(fast.reuse_final_trial)
         self.assertTrue(fast.any_enabled)
         self.assertEqual(
-            fast.describe(), "adaptive_relaxation, coupling_relative_tolerance=1e-05"
+            fast.describe(),
+            "adaptive_relaxation, coupling_relative_tolerance=1e-05, reuse_final_trial",
         )
 
     def test_fast_coarse(self) -> None:
-        """Test that fast_coarse() turns on adaptive_relaxation and sets the tolerance
-        to 1e-4, the coarsest allowed."""
+        """Test that fast_coarse() turns on adaptive_relaxation and reuse_final_trial
+        and sets the tolerance to 1e-4, the coarsest allowed."""
         coarse = approximations.Approximations.fast_coarse()
         self.assertTrue(coarse.adaptive_relaxation)
+        self.assertTrue(coarse.reuse_final_trial)
         self.assertEqual(coarse.coupling_relative_tolerance, 1e-4)
         # noinspection PyProtectedMember
         self.assertEqual(
@@ -62,13 +66,17 @@ class TestApproximations(unittest.TestCase):
         )
 
     def test_each_option_alone_is_enabled(self) -> None:
-        """Test that any_enabled is True when either option alone is on."""
+        """Test that any_enabled is True when any option alone is on, and that
+        describe() names it."""
         self.assertTrue(
             approximations.Approximations(adaptive_relaxation=True).any_enabled
         )
         self.assertTrue(
             approximations.Approximations(coupling_relative_tolerance=1e-4).any_enabled
         )
+        reuse = approximations.Approximations(reuse_final_trial=True)
+        self.assertTrue(reuse.any_enabled)
+        self.assertEqual(reuse.describe(), "reuse_final_trial")
 
     def test_adaptive_relaxation_validation(self) -> None:
         """Test that adaptive_relaxation must be a bool-like, and that a numpy bool is
@@ -78,6 +86,15 @@ class TestApproximations(unittest.TestCase):
             approximations.Approximations(adaptive_relaxation=bad_value)
         converted = approximations.Approximations(adaptive_relaxation=np.bool_(True))
         self.assertIs(converted.adaptive_relaxation, True)
+
+    def test_reuse_final_trial_validation(self) -> None:
+        """Test that reuse_final_trial must be a bool-like, and that a numpy bool is
+        converted to a bool."""
+        bad_value: Any = "yes"
+        with self.assertRaises(TypeError):
+            approximations.Approximations(reuse_final_trial=bad_value)
+        converted = approximations.Approximations(reuse_final_trial=np.bool_(True))
+        self.assertIs(converted.reuse_final_trial, True)
 
     def test_coupling_relative_tolerance_validation(self) -> None:
         """Test that coupling_relative_tolerance must be a number in [1e-6, 1e-4], and
@@ -104,6 +121,8 @@ class TestApproximations(unittest.TestCase):
             fast.adaptive_relaxation = False
         with self.assertRaises(AttributeError):
             fast.coupling_relative_tolerance = 1e-6
+        with self.assertRaises(AttributeError):
+            fast.reuse_final_trial = False
 
     def test_slots(self) -> None:
         """Test that Approximations has no __dict__ and rejects new attributes."""

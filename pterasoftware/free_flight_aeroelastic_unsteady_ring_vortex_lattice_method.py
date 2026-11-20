@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
+from typing import NamedTuple, cast
 
 import numpy as np
 
@@ -24,6 +24,44 @@ from .unsteady_ring_vortex_lattice_method import _logger
 # geometry axes negates the x and z components.
 _BP1_TO_GP1_FLIP = np.array([-1.0, 1.0, -1.0], dtype=float)
 _BP1_TO_GP1_FLIP.flags.writeable = False
+
+
+class _FinalTrial(NamedTuple):
+    """The final coupling trial's solution at the next time step, kept by
+    keep_final_trial for that time step's official solve.
+
+    **Contains the following fields:**
+
+    step: The time step the trial solved, which is the next time step of the coupling
+    that kept it.
+
+    strengths: A (N,) ndarray of floats of the trial's bound ring vortex strengths. The
+    units are in meters squared per second.
+
+    grid_wing_wing_influences: A (N,N) ndarray of floats of the trial's Wing Wing
+    influence coefficients (observed from the Earth frame).
+
+    stack_freestream_wing_influences: A (N,) ndarray of floats of the trial's freestream
+    Wing influence coefficients (observed from the Earth frame).
+
+    stack_wake_wing_influences: A (N,) ndarray of floats of the trial's wake Wing
+    influence coefficients (observed from the Earth frame).
+
+    stackPanelForces_GP1: A (N,3) ndarray of floats of the trial's forces (in the first
+    Airplane's geometry axes) on every Panel. The units are in Newtons.
+
+    stackPanelMoments_GP1_CgP1: A (N,3) ndarray of floats of the trial's moments (in the
+    first Airplane's geometry axes, relative to the first Airplane's CG) on every Panel.
+    The units are in Newton-meters.
+    """
+
+    step: int
+    strengths: np.ndarray
+    grid_wing_wing_influences: np.ndarray
+    stack_freestream_wing_influences: np.ndarray
+    stack_wake_wing_influences: np.ndarray
+    stackPanelForces_GP1: np.ndarray
+    stackPanelMoments_GP1_CgP1: np.ndarray
 
 
 class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
@@ -63,6 +101,9 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         "_substep_gamma_n",
         "_substep_gamma_n_minus_1",
         "_substep_saved_state",
+        "_substep_final_trial",
+        "_stepStackPanelForces_GP1",
+        "_stepStackPanelMoments_GP1_CgP1",
     )
 
     _models_body_rates = True
@@ -105,6 +146,20 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         # freeze_substep saves it before the trials overwrite the solver's attributes,
         # and restore_substep puts it back afterwards.
         self._substep_saved_state: dict[str, object] | None = None
+        # The final coupling trial's solution, kept by keep_final_trial for the next
+        # time step's official solve when the problem's Approximations has
+        # reuse_final_trial, or None. Its name starts with _substep so that
+        # restore_substep, which puts back every other slot, leaves it alone: it must
+        # survive restore_substep and the official wake build until the next time step's
+        # official solve uses it.
+        self._substep_final_trial: _FinalTrial | None = None
+        # These are the per Panel forces (in the first Airplane's geometry axes) and
+        # moments (in the first Airplane's geometry axes, relative to the first
+        # Airplane's CG) of the most recent load calculation, recorded by
+        # _process_panel_loads_hook so keep_final_trial can keep the final trial's. Each
+        # is an (N,3) ndarray of floats, or None before the first load calculation.
+        self._stepStackPanelForces_GP1: np.ndarray | None = None
+        self._stepStackPanelMoments_GP1_CgP1: np.ndarray | None = None
 
         super().__init__(free_flight_unsteady_problem)
 
@@ -342,6 +397,42 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
 
         return self.current_airplanes[0]
 
+    def keep_final_trial(self) -> None:
+        """Keeps the final coupling trial's solution for the next time step's official
+        solve.
+
+        Called by the problem's step solve after the sub-iteration converges, while the
+        solver still holds the final trial's solution at the next time step, and before
+        restore_substep. _evaluate_step_aerodynamics then uses the kept solution in
+        place of solving the next time step again (see there). The kept arrays are
+        references, not copies: each solve creates new arrays rather than writing into
+        existing ones, so nothing changes them before they are used.
+
+        :return: None
+        """
+        assert self._substep_next_step is not None
+        assert self._current_step == self._substep_next_step
+
+        # A trial at a time step before the first results step calculated no loads, so
+        # there is nothing to reuse, and the next time step is solved as usual.
+        if self._current_step < self.first_results_step:
+            self._substep_final_trial = None
+            return
+
+        assert self._stepStackPanelForces_GP1 is not None
+        assert self._stepStackPanelMoments_GP1_CgP1 is not None
+        self._substep_final_trial = _FinalTrial(
+            step=self._current_step,
+            strengths=self._current_bound_vortex_strengths,
+            grid_wing_wing_influences=self._currentGridWingWingInfluences__E,
+            stack_freestream_wing_influences=(
+                self._currentStackFreestreamWingInfluences__E
+            ),
+            stack_wake_wing_influences=self._currentStackWakeWingInfluences__E,
+            stackPanelForces_GP1=self._stepStackPanelForces_GP1,
+            stackPanelMoments_GP1_CgP1=self._stepStackPanelMoments_GP1_CgP1,
+        )
+
     def restore_substep(self, step: int) -> None:
         """Restores the solver's current-step state after a strongly coupled step solve.
 
@@ -394,6 +485,101 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
         # self._substepStackVIndGridWrvp_GP1__E = None
         self._substep_gamma_n = None
         self._substep_gamma_n_minus_1 = None
+
+    def _evaluate_step_aerodynamics(self) -> None:
+        """Evaluates the aerodynamics for the current time step, either with a full
+        solve or by reusing the final coupling trial kept for this time step.
+
+        The parent's full solve has two halves: first it builds this time step's
+        geometry and wake (_prepare_step_geometry), then it calculates the influence
+        coefficients, solves for the bound ring vortex strengths, and calculates the
+        loads. This method takes one of two paths:
+
+        Full solve (the parent's method, both halves): on every time step without
+        reuse_final_trial, on held time steps, on the first free flight time step, after
+        a coupling that reached k_max, and inside the coupling's own trials.
+
+        Reuse (the first half only): when the coupling of the previous time step kept
+        its final trial for this time step. The geometry and wake are built exactly as
+        in the full solve, and the strengths, influence coefficients, and per Panel
+        loads are taken from the final trial instead of calculated. The trial was solved
+        at a body state within the coupling tolerance of the accepted one, so its
+        solution differs from the full solve's by about the same relative amount.
+
+        The geometry is built rather than taken from the trial because part of it
+        depends on the freestream (the trailing edge Panels' back ring vortex corners),
+        and it must match the official wake, whose first row sits exactly on those
+        corners, to the last bit. Otherwise a corner and a wake point a tiny distance
+        apart induce a huge velocity on each other where they should cancel.
+
+        :return: None
+        """
+        # Take the kept trial, if any, and clear it, so it can be used at most once.
+        final_trial = self._substep_final_trial
+        self._substep_final_trial = None
+
+        # Reuse the kept trial only for the official solve of the time step it belongs
+        # to. A trial kept for another time step is stale. The coupling's own trials run
+        # while a substep is active (_substep_next_step is set), and they must always
+        # solve in full, since each one is a new body state.
+        reuse_final_trial = (
+            final_trial is not None
+            and final_trial.step == self._current_step
+            and self._substep_next_step is None
+        )
+
+        if not reuse_final_trial:
+            # Full solve: the parent builds the geometry and wake, then calculates the
+            # influence coefficients, strengths, and loads.
+            super()._evaluate_step_aerodynamics()
+            return
+
+        # Reuse (changed for speed, opt in): build only the geometry and wake, the first
+        # half of the full solve, and take the rest from the final trial instead of
+        # calculating it.
+        assert final_trial is not None
+        self._prepare_step_geometry()
+
+        # In place of the influence coefficients and the linear solve.
+        self._currentGridWingWingInfluences__E = final_trial.grid_wing_wing_influences
+        self._currentStackFreestreamWingInfluences__E = (
+            final_trial.stack_freestream_wing_influences
+        )
+        self._currentStackWakeWingInfluences__E = final_trial.stack_wake_wing_influences
+        self._current_bound_vortex_strengths = final_trial.strengths
+
+        # In place of the load calculation: write the trial's per Panel loads onto this
+        # time step's official Airplanes and Panels through the same hook the load
+        # calculation ends with. It finds the Airplanes' total loads and coefficients
+        # with this time step's OperatingPoint (and, in the aeroelastic solver, the
+        # moments about each strip's leading edge point from this time step's official
+        # Panels, which the structural solve reads).
+        self._process_panel_loads_hook(
+            final_trial.stackPanelForces_GP1, final_trial.stackPanelMoments_GP1_CgP1
+        )
+
+    def _process_panel_loads_hook(
+        self,
+        forces_GP1: np.ndarray,
+        moments_GP1_CgP1: np.ndarray,
+    ) -> None:
+        """Records the per Panel loads, then processes them as the parent does.
+
+        keep_final_trial reads the recorded loads of the final coupling trial. The
+        arrays are newly created by each load calculation and never written into
+        afterwards, so keeping references is enough.
+
+        :param forces_GP1: A (N,3) ndarray of floats representing the forces (in the
+            first Airplane's geometry axes) on every Panel at the current time step. The
+            units are in Newtons.
+        :param moments_GP1_CgP1: A (N,3) ndarray of floats representing the moments (in
+            the first Airplane's geometry axes, relative to the first Airplane's CG) on
+            every Panel at the current time step. The units are in Newton-meters.
+        :return: None
+        """
+        self._stepStackPanelForces_GP1 = forces_GP1
+        self._stepStackPanelMoments_GP1_CgP1 = moments_GP1_CgP1
+        super()._process_panel_loads_hook(forces_GP1, moments_GP1_CgP1)
 
     def _populate_next_airplanes_wake(self) -> None:
         """Updates the next time step's Airplanes' wakes.
