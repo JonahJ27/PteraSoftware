@@ -72,6 +72,21 @@ class TestFreeFlightFlapDrivenAeroelasticUnsteadyProblem(unittest.TestCase):
                 ),
             )
 
+    def test_passes_approximations_through(self) -> None:
+        """Test that the approximations reach the parent problem, defaulting to an exact
+        Approximations, and that a fast() problem solves."""
+        default = (
+            flap_drive_fixtures.make_free_flight_flap_driven_aeroelastic_problem_fixture()
+        )
+        self.assertFalse(default.approximations.any_enabled)
+        fast = ps.approximations.Approximations.fast()
+        problem = flap_drive_fixtures.make_free_flight_flap_driven_aeroelastic_problem_fixture(
+            step_discards=1, approximations=fast
+        )
+        self.assertIs(problem.approximations, fast)
+        _solve(problem)
+        self.assertEqual(len(problem.steady_problems), problem.num_steps)
+
     def test_uses_analytical_spring_solver_by_default(self) -> None:
         """Test that a FreeFlightFlapDrivenAeroelasticUnsteadyProblem solves its
         torsional springs analytically unless told otherwise."""

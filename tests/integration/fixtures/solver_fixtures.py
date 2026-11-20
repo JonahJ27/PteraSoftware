@@ -312,17 +312,23 @@ def make_simple_glider_free_flight_solver(
     return simple_glider_free_flight_solver
 
 
-def make_flapping_free_flight_solver() -> (
+def make_flapping_free_flight_solver(
+    approximations: ps.approximations.Approximations | None = None,
+) -> (
     ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver
 ):
     """This function creates the flapping-wing free flight solver to be used as a
     fixture.
 
+    :param approximations: The problem's Approximations, or None for none. The default
+        is None.
     :return flapping_free_flight_solver: FreeFlightUnsteadyRingVortexLatticeMethodSolver
         This is the flapping-wing FreeFlightUnsteadyRingVortexLatticeMethodSolver
         fixture.
     """
-    flapping_free_flight_problem = problem_fixtures.make_flapping_free_flight_problem()
+    flapping_free_flight_problem = problem_fixtures.make_flapping_free_flight_problem(
+        approximations=approximations
+    )
 
     flapping_free_flight_solver = ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         flapping_free_flight_problem

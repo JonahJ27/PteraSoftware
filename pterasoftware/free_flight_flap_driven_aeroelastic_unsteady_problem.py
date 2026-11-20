@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
+from . import approximations as approximations_mod
 from . import flap_drive as flap_drive_mod
 from . import flap_driven_aeroelastic_unsteady_problem as flap_problem_mod
 from . import geometry
@@ -114,6 +115,7 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
         mujoco_assets: dict[str, bytes] | None = None,
         step_discards: int = 5,
         use_analytical_spring_solver: bool | np.bool = True,
+        approximations: approximations_mod.Approximations | None = None,
     ) -> None:
         """The initialization method.
 
@@ -156,6 +158,8 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
             fluid applied no torque. It must be a non negative int. The default is 5.
         :param use_analytical_spring_solver: See FlapDrivenAeroelasticUnsteadyProblem.
             Can be a bool or a numpy bool. The default is True.
+        :param approximations: See FreeFlightAeroelasticUnsteadyProblem. The default is
+            None, which turns every approximation off.
         :return: None
         """
         if not isinstance(
@@ -184,6 +188,7 @@ class FreeFlightFlapDrivenAeroelasticUnsteadyProblem(
             mujoco_assets=mujoco_assets,
             step_discards=step_discards,
             use_analytical_spring_solver=use_analytical_spring_solver,
+            approximations=approximations,
         )
 
         # Seed the FlapDrives' histories from the first time step.

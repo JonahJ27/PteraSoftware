@@ -87,7 +87,7 @@ FLAP_FREQUENCY = 5.0
 FLAP_PERIOD = 1.0 / FLAP_FREQUENCY
 AIR_SPEED = 6.0
 ANGLE_OF_ATTACK = 15.0
-STEPS_PER_FLAP = 20
+STEPS_PER_FLAP = 27
 PRESCRIBED_NUM_FLAPS = 1
 FREE_NUM_FLAPS = 10
 DELTA_TIME = FLAP_PERIOD / STEPS_PER_FLAP
@@ -103,9 +103,21 @@ DURATION = NUM_STEPS * DELTA_TIME
 # linearly with the flight time. The oldest rows, which are far behind the vehicle (or,
 # near hover, piled up under it), are dropped. Raise it for more accuracy, or set
 # MAX_WAKE_ROWS to None to keep the whole wake.
-MAX_WAKE_FLAPS = 1
+MAX_WAKE_FLAPS = 2
 MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 # MAX_WAKE_ROWS: int | None = None
+
+# Define whether to opt in to approximations that make the free flight run faster. See
+# ps.approximations.Approximations for what each one changes and what was measured for
+# it. Measured on this vehicle (2 held and 6 free flaps at hover, 1 m/s, 3 m/s, and 6
+# m/s, perfect tracking). Set it to one of:
+#   - "exact": no approximations, so the results are exactly the reference results.
+#   - "fast": Approximations.fast(), about 10% to 12% faster, with free flight drift
+#     below what a 1e-12 m/s change in the air speed already causes.
+#   - "coarse": Approximations.fast_coarse(), about 14% to 17% faster, but its free
+#     flight drift can exceed that, so use it where speed matters more than matching the
+#     exact run closely.
+APPROXIMATIONS = "exact"
 
 # Define whether to save each run. A run is saved right after the simulation, before any
 # plots open, in its own folder, saved_results/<this script's name>/<date and
@@ -596,6 +608,11 @@ example_problem = ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFl
     flap_drives=example_flap_drives,
     external_loads_fn=None,
     step_discards=5,
+    approximations={
+        "exact": None,
+        "fast": ps.approximations.Approximations.fast(),
+        "coarse": ps.approximations.Approximations.fast_coarse(),
+    }[APPROXIMATIONS],
 )
 
 example_solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(

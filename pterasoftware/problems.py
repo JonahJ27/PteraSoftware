@@ -21,9 +21,9 @@ from . import (
     _parameter_validation,
     _private_access,
     _transformations,
-    geometry,
-    movements,
 )
+from . import approximations as approximations_mod
+from . import geometry, movements
 from . import operating_point as operating_point_mod
 from .movements import aeroelastic_movement as aeroelastic_movement_mod
 from .movements import aeroelastic_wing_movement as aeroelastic_wing_movement_mod
@@ -67,6 +67,19 @@ _SUBITERATION_ABSOLUTE_TOLERANCE = 1e-10
 _SUBITERATION_DIVERGENCE_TOLERANCE = 1e-20
 _SUBITERATION_INITIAL_RELAXATION_FACTOR = 0.5
 
+# These are the bounds of the relaxation factor that a free flight problem whose
+# Approximations has adaptive_relaxation carries from one free flight time step to the
+# next. When a time step's last Aitken factor is within them, the next time step's first
+# sub-iteration update uses it instead of _SUBITERATION_INITIAL_RELAXATION_FACTOR. When
+# it is outside them, the next time step starts again at
+# _SUBITERATION_INITIAL_RELAXATION_FACTOR, because a factor above 1.0 would over-relax
+# the first update (the stability concern of docs/STRONG_COUPLING.md, Section 9), and a
+# factor below 0.1 (or negative) means the previous time step behaved unusually, so it
+# says little about the next one. On the FAAV the last Aitken factor stayed between 0.85
+# and 1.01, so it is carried on almost every time step.
+_ADAPTIVE_RELAXATION_MIN_FACTOR = 0.1
+_ADAPTIVE_RELAXATION_MAX_FACTOR = 1.0
+
 # These are tolerances for the torsional spring-damper ODE integration in
 # _spring_numerical_ode. They are a few orders of magnitude stricter than scipy's
 # defaults because the integration is re-seeded from the previous state at every outer
@@ -85,6 +98,126 @@ _SPRING_ODE_ABSOLUTE_TOLERANCE_RAD = 1e-9
 # analytical solve is exact for it. flap_driven_aeroelastic_unsteady_problem.py defines
 # its _FLAP_ACCELERATION_SAMPLES as this constant, so changing this one changes both.
 _SPRING_FORCING_SAMPLES = 100
+
+
+def _validate_approximations(
+    approximations: object,
+) -> approximations_mod.Approximations:
+    """Validates a free flight problem's approximations parameter.
+
+    :param approximations: The value to validate. It must be an Approximations or None.
+    :return: The Approximations, or a default (exact) Approximations if it was None.
+    """
+    # None means "no approximations". Replace it with a default Approximations, whose
+    # every option is the exact behavior (adaptive_relaxation is False and
+    # coupling_relative_tolerance is _SUBITERATION_RELATIVE_TOLERANCE), so the problem's
+    # _approximations slot always holds an Approximations. The coupling loops can then
+    # read its options directly, without checking for None, and still behave exactly as
+    # they did before this parameter existed.
+    if approximations is None:
+        return approximations_mod.Approximations()
+
+    # Anything else must already be an Approximations. A bool or a number here is most
+    # likely a user passing one option directly (for example approximations=True), so
+    # refuse it instead of guessing which option was meant.
+    if not isinstance(approximations, approximations_mod.Approximations):
+        raise TypeError("approximations must be an Approximations or None.")
+
+    # An Approximations validates its own options when it is built, and it is immutable,
+    # so it can be stored as is, without a copy.
+    return approximations
+
+
+def _first_relaxation_factor(
+    approximations: approximations_mod.Approximations,
+    carried_relaxation_factor: float | None,
+) -> float:
+    """Returns the relaxation factor for a free flight time step's first sub-iteration
+    update.
+
+    Without adaptive_relaxation, or before any factor has been carried, this is
+    _SUBITERATION_INITIAL_RELAXATION_FACTOR, so the default behavior is unchanged. With
+    adaptive_relaxation, it is the factor carried from the previous free flight time
+    step (see _relaxation_factor_to_carry).
+
+    :param approximations: The problem's Approximations.
+    :param carried_relaxation_factor: The factor carried from the previous free flight
+        time step, or None if there is none.
+    :return: The relaxation factor for the first update.
+    """
+    # The first update of a free flight time step can't use the Aitken formula, which
+    # needs the residuals of two earlier sub-iterations, so it needs a factor from
+    # somewhere else.
+    #
+    # With adaptive_relaxation, use the factor carried from the previous free flight
+    # time step: the last Aitken factor that time step computed, which is the damping
+    # the iteration measured on this vehicle one time step ago. carried is None on the
+    # first free flight time step (nothing has been carried yet) and after a time step
+    # whose last Aitken factor was out of bounds (see _relaxation_factor_to_carry), and
+    # then the conservative initial factor is used instead.
+    if approximations.adaptive_relaxation and carried_relaxation_factor is not None:
+        return carried_relaxation_factor
+
+    # Otherwise, use the fixed initial factor, 0.5 (docs/STRONG_COUPLING.md, Section 9).
+    # Without adaptive_relaxation this is the only path, so the default behavior is the
+    # same as before this function existed.
+    return _SUBITERATION_INITIAL_RELAXATION_FACTOR
+
+
+def _relaxation_factor_to_carry(
+    approximations: approximations_mod.Approximations,
+    last_aitken_factor: float | None,
+    carried_relaxation_factor: float | None,
+) -> float | None:
+    """Returns the relaxation factor to carry from a free flight time step to the next
+    one's first sub-iteration update.
+
+    The last Aitken factor of a time step is carried if it is within
+    [_ADAPTIVE_RELAXATION_MIN_FACTOR, _ADAPTIVE_RELAXATION_MAX_FACTOR]. If it is outside
+    them, nothing is carried, so the next time step starts again at
+    _SUBITERATION_INITIAL_RELAXATION_FACTOR. If the time step converged on its first
+    trial, it computed no Aitken factor, so the factor it was carrying is kept.
+
+    :param approximations: The problem's Approximations. Without adaptive_relaxation,
+        nothing is ever carried.
+    :param last_aitken_factor: The last Aitken factor the time step computed, including
+        one computed on the iteration that converged (before it would have been
+        applied), or None if it computed none.
+    :param carried_relaxation_factor: The factor the time step started with, if it was a
+        carried one, or None.
+    :return: The factor to carry, or None to start the next time step at
+        _SUBITERATION_INITIAL_RELAXATION_FACTOR.
+    """
+    # Without adaptive_relaxation, nothing is ever carried. Returning None keeps the
+    # problem's _carried_relaxation_factor at None, so _first_relaxation_factor always
+    # returns the fixed initial factor.
+    if not approximations.adaptive_relaxation:
+        return None
+
+    # A time step that converged on its first trial (iteration 0) never computed an
+    # Aitken factor, because the Aitken formula is only used from the second trial on.
+    # It learned nothing new about the vehicle, so keep whatever it was carrying (a
+    # factor from an earlier time step, or None).
+    if last_aitken_factor is None:
+        return carried_relaxation_factor
+
+    # Carry the last Aitken factor if it is within [0.1, 1.0]. This includes the factor
+    # computed on the iteration that converged, which was never applied: it is still the
+    # best estimate of the damping this vehicle needs. On the FAAV it stays between
+    # about 0.85 and 1.01, so it is carried on almost every time step.
+    if (
+        _ADAPTIVE_RELAXATION_MIN_FACTOR
+        <= last_aitken_factor
+        <= _ADAPTIVE_RELAXATION_MAX_FACTOR
+    ):
+        return last_aitken_factor
+
+    # Out of bounds: above 1.0 the next time step's first update would over-relax (the
+    # stability concern of docs/STRONG_COUPLING.md, Section 9), and below 0.1 (or
+    # negative) the time step behaved unusually, so its factor says little about the
+    # next one. Carry nothing, so the next time step starts again at the conservative
+    # _SUBITERATION_INITIAL_RELAXATION_FACTOR, as the first free flight time step does.
+    return None
 
 
 def _spring_piece_map(
@@ -574,6 +707,8 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         "_external_loads_validated",
         "_k_max",
         "_mujoco_model",
+        "_approximations",
+        "_carried_relaxation_factor",
     )
 
     def __init__(
@@ -595,6 +730,7 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         integrator: str = "RK4",
         extra_xml: dict[str, str] | None = None,
         mujoco_assets: dict[str, bytes] | None = None,
+        approximations: approximations_mod.Approximations | None = None,
     ) -> None:
         """The initialization method.
 
@@ -662,6 +798,11 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             supplied is left to MuJoCo, so this is an advanced-user parameter. The
             assets are serialized into saved files, so a FreeFlightUnsteadyProblem built
             with mujoco_assets saves and loads without touching the filesystem.
+        :param approximations: An Approximations holding the opt in approximations that
+            make the strongly coupled sub-iteration faster in exchange for small,
+            measured changes to the results (see the Approximations class), or None. If
+            None, a default Approximations is used, which turns every approximation off,
+            so the results are exactly the reference results. The default is None.
         :return: None
         """
         if not isinstance(movement, free_flight_movement.FreeFlightMovement):
@@ -754,6 +895,21 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             min_val=0,
             min_inclusive=False,
         )
+
+        # These are the opt in approximations of the strongly coupled sub-iteration (see
+        # the Approximations class). None means every approximation is off. The run's
+        # log says when any is on, since its results are then not the reference ones.
+        self._approximations = _validate_approximations(approximations)
+        if self._approximations.any_enabled:
+            _logger.info(
+                "Free flight approximations are on: %s.",
+                self._approximations.describe(),
+            )
+
+        # This is the relaxation factor carried from one free flight time step to the
+        # next when adaptive_relaxation is on. It is None until a time step has carried
+        # one, and it stays None when adaptive_relaxation is off.
+        self._carried_relaxation_factor: float | None = None
 
         # Validate the integrator name against the supported MuJoCo integrators. The
         # MuJoCoModel sets the validated name in the generated model XML's option
@@ -872,6 +1028,10 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
     @property
     def k_max(self) -> int:
         return self._k_max
+
+    @property
+    def approximations(self) -> approximations_mod.Approximations:
+        return self._approximations
 
     @property
     def external_loads_fn(
@@ -1343,7 +1503,19 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         )
         trial_x = self._state_to_vector(self._advance_body(snapshot_interval_loads))
 
-        relaxation_factor = _SUBITERATION_INITIAL_RELAXATION_FACTOR
+        # Changed for speed (opt in): the first update's relaxation factor used to
+        # always be _SUBITERATION_INITIAL_RELAXATION_FACTOR (the commented out line
+        # below). It still is, unless the Approximations has adaptive_relaxation and a
+        # factor was carried from the previous free flight time step (see
+        # _first_relaxation_factor). The same factor is the Aitken fallback below, as in
+        # the measured prototype. last_aitken_factor records the last Aitken factor this
+        # time step computes, for _relaxation_factor_to_carry after the loop.
+        # relaxation_factor = _SUBITERATION_INITIAL_RELAXATION_FACTOR
+        first_relaxation_factor = _first_relaxation_factor(
+            self._approximations, self._carried_relaxation_factor
+        )
+        relaxation_factor = first_relaxation_factor
+        last_aitken_factor: float | None = None
         previous_residual: np.ndarray | None = None
         residual_norm = 0.0
         converged = False
@@ -1374,14 +1546,19 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             # first iteration, the Aitken factor thereafter.
             if iteration > 0:
                 assert previous_residual is not None
+                # Changed for speed (opt in): the fallback factor was
+                # _SUBITERATION_INITIAL_RELAXATION_FACTOR. It is now this time step's
+                # first factor, which is the same value unless adaptive_relaxation
+                # carried one.
                 relaxation_factor = _fixed_point_relaxation.aitken_relaxation_factor(
                     weights,
                     residual,
                     previous_residual,
                     relaxation_factor,
-                    _SUBITERATION_INITIAL_RELAXATION_FACTOR,
+                    first_relaxation_factor,
                     _SUBITERATION_DIVERGENCE_TOLERANCE,
                 )
+                last_aitken_factor = relaxation_factor
 
             _logger.debug(
                 _logging.indent()
@@ -1393,11 +1570,14 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
                 relaxation_factor,
             )
 
+            # Changed for speed (opt in): the relative tolerance was always
+            # _SUBITERATION_RELATIVE_TOLERANCE. It is now the Approximations'
+            # coupling_relative_tolerance, which is the same 1e-6 by default.
             if _fixed_point_relaxation.is_converged(
                 weights,
                 residual,
                 increment,
-                _SUBITERATION_RELATIVE_TOLERANCE,
+                self._approximations.coupling_relative_tolerance,
                 _SUBITERATION_ABSOLUTE_TOLERANCE,
             ):
                 converged = True
@@ -1408,6 +1588,15 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
 
             trial_x = trial_x + relaxation_factor * residual
             previous_residual = residual
+
+        # With adaptive_relaxation, carry this time step's last Aitken factor to the
+        # next free flight time step's first update if it is within the bounds, and
+        # otherwise restart the next time step at
+        # _SUBITERATION_INITIAL_RELAXATION_FACTOR (see _relaxation_factor_to_carry).
+        # Without it, nothing is carried.
+        self._carried_relaxation_factor = _relaxation_factor_to_carry(
+            self._approximations, last_aitken_factor, self._carried_relaxation_factor
+        )
 
         if not converged:
             _logger.warning(
@@ -2615,6 +2804,8 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         "_external_loads_validated",
         "_k_max",
         "_mujoco_model",
+        "_approximations",
+        "_carried_relaxation_factor",
     )
 
     def __init__(
@@ -2641,6 +2832,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         mujoco_assets: dict[str, bytes] | None = None,
         step_discards: int = 5,
         use_analytical_spring_solver: bool | np.bool = False,
+        approximations: approximations_mod.Approximations | None = None,
     ) -> None:
         """The initialization method.
 
@@ -2719,6 +2911,11 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             (False). It is passed to AeroelasticUnsteadyProblem, whose initialization
             method describes the two. Can be a bool or a numpy bool. The default is
             False.
+        :param approximations: An Approximations holding the opt in approximations that
+            make the strongly coupled sub-iteration faster in exchange for small,
+            measured changes to the results (see the Approximations class), or None. If
+            None, a default Approximations is used, which turns every approximation off,
+            so the results are exactly the reference results. The default is None.
         :return: None
         """
         if not isinstance(movement, free_flight_movement.FreeFlightAeroelasticMovement):
@@ -2815,6 +3012,21 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             min_val=0,
             min_inclusive=False,
         )
+
+        # These are the opt in approximations of the strongly coupled sub-iteration (see
+        # the Approximations class). None means every approximation is off. The run's
+        # log says when any is on, since its results are then not the reference ones.
+        self._approximations = _validate_approximations(approximations)
+        if self._approximations.any_enabled:
+            _logger.info(
+                "Free flight approximations are on: %s.",
+                self._approximations.describe(),
+            )
+
+        # This is the relaxation factor carried from one free flight time step to the
+        # next when adaptive_relaxation is on. It is None until a time step has carried
+        # one, and it stays None when adaptive_relaxation is off.
+        self._carried_relaxation_factor: float | None = None
 
         # Validate the integrator name against the supported MuJoCo integrators. The
         # MuJoCoModel sets the validated name in the generated model XML's option
@@ -2933,6 +3145,10 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
     @property
     def k_max(self) -> int:
         return self._k_max
+
+    @property
+    def approximations(self) -> approximations_mod.Approximations:
+        return self._approximations
 
     @property
     def external_loads_fn(
@@ -3407,7 +3623,19 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         )
         trial_x = self._state_to_vector(self._advance_body(snapshot_interval_loads))
 
-        relaxation_factor = _SUBITERATION_INITIAL_RELAXATION_FACTOR
+        # Changed for speed (opt in): the first update's relaxation factor used to
+        # always be _SUBITERATION_INITIAL_RELAXATION_FACTOR (the commented out line
+        # below). It still is, unless the Approximations has adaptive_relaxation and a
+        # factor was carried from the previous free flight time step (see
+        # _first_relaxation_factor). The same factor is the Aitken fallback below, as in
+        # the measured prototype. last_aitken_factor records the last Aitken factor this
+        # time step computes, for _relaxation_factor_to_carry after the loop.
+        # relaxation_factor = _SUBITERATION_INITIAL_RELAXATION_FACTOR
+        first_relaxation_factor = _first_relaxation_factor(
+            self._approximations, self._carried_relaxation_factor
+        )
+        relaxation_factor = first_relaxation_factor
+        last_aitken_factor: float | None = None
         previous_residual: np.ndarray | None = None
         residual_norm = 0.0
         converged = False
@@ -3438,14 +3666,19 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             # first iteration, the Aitken factor thereafter.
             if iteration > 0:
                 assert previous_residual is not None
+                # Changed for speed (opt in): the fallback factor was
+                # _SUBITERATION_INITIAL_RELAXATION_FACTOR. It is now this time step's
+                # first factor, which is the same value unless adaptive_relaxation
+                # carried one.
                 relaxation_factor = _fixed_point_relaxation.aitken_relaxation_factor(
                     weights,
                     residual,
                     previous_residual,
                     relaxation_factor,
-                    _SUBITERATION_INITIAL_RELAXATION_FACTOR,
+                    first_relaxation_factor,
                     _SUBITERATION_DIVERGENCE_TOLERANCE,
                 )
+                last_aitken_factor = relaxation_factor
 
             _logger.debug(
                 _logging.indent()
@@ -3457,11 +3690,14 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 relaxation_factor,
             )
 
+            # Changed for speed (opt in): the relative tolerance was always
+            # _SUBITERATION_RELATIVE_TOLERANCE. It is now the Approximations'
+            # coupling_relative_tolerance, which is the same 1e-6 by default.
             if _fixed_point_relaxation.is_converged(
                 weights,
                 residual,
                 increment,
-                _SUBITERATION_RELATIVE_TOLERANCE,
+                self._approximations.coupling_relative_tolerance,
                 _SUBITERATION_ABSOLUTE_TOLERANCE,
             ):
                 converged = True
@@ -3472,6 +3708,15 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
 
             trial_x = trial_x + relaxation_factor * residual
             previous_residual = residual
+
+        # With adaptive_relaxation, carry this time step's last Aitken factor to the
+        # next free flight time step's first update if it is within the bounds, and
+        # otherwise restart the next time step at
+        # _SUBITERATION_INITIAL_RELAXATION_FACTOR (see _relaxation_factor_to_carry).
+        # Without it, nothing is carried.
+        self._carried_relaxation_factor = _relaxation_factor_to_carry(
+            self._approximations, last_aitken_factor, self._carried_relaxation_factor
+        )
 
         if not converged:
             _logger.warning(

@@ -102,6 +102,20 @@ MAX_WAKE_FLAPS = 2
 MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 # MAX_WAKE_ROWS: int | None = None
 
+# Define whether to opt in to approximations that make the free flight run faster. See
+# ps.approximations.Approximations for what each one changes and what was measured for
+# it. Measured on this model (10 m/s, 3 Hz, 1 held and 2 free flaps, perfect tracking),
+# where the exact run took about 10.4 s with 4.69 coupling sub-iterations per free
+# flight time step. Set it to one of:
+#   - "exact": no approximations, so the results are exactly the reference results.
+#   - "fast": Approximations.fast(), about 12% faster (2.96 sub-iterations per free
+#     flight time step). The free flaps' mean lift moved by at most 0.0004%.
+#   - "coarse": Approximations.fast_coarse(), about 17% faster (2.36 sub-iterations per
+#     free flight time step). The free flaps' mean lift moved by at most 0.018%.
+# For comparison, a 1e-12 m/s change in the air speed moved them by at most 0.0002%: at
+# 10 m/s this model's free flight is much less sensitive than the FAAV's near hover.
+APPROXIMATIONS = "exact"
+
 # Define whether to save each run. A run is saved right after the simulation, before any
 # plots open, in its own folder, saved_results/<this script's name>/<date and
 # time>_wake_<MAX_WAKE_ROWS>/, next to this script (git ignores saved_results), so no
@@ -587,6 +601,11 @@ example_problem = ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFl
     flap_drives=example_flap_drives,
     external_loads_fn=None,
     step_discards=5,
+    approximations={
+        "exact": None,
+        "fast": ps.approximations.Approximations.fast(),
+        "coarse": ps.approximations.Approximations.fast_coarse(),
+    }[APPROXIMATIONS],
 )
 
 example_solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(

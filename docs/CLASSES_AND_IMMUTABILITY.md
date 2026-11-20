@@ -19,6 +19,7 @@ This document describes the consistent pattern of immutability and lazy caching 
 - `Airfoil`
 - `Panel`
 - `MuJoCoModel`
+- `Approximations`
 
 The `Core*` classes live in `pterasoftware/_core.py` and own the shared slots and properties. The public classes extend their core parents, sometimes adding additional slots and sometimes inheriting everything with an empty `__slots__`. See each class section below for details on which attributes are defined at which level.
 
@@ -251,6 +252,7 @@ Each is stored in a `_`-prefixed backing slot and exposed through a read-only pr
 | `mass`              | `float`            | Mass of the first `Airplane` (kg)                                                                            |
 | `k_max`             | `int`              | Maximum strongly coupled sub-iterations per free-flight time step (a capped step is accepted with a warning) |
 | `external_loads_fn` | `Callable \| None` | Optional callback returning additional (force, moment) loads to apply each step, or `None`                   |
+| `approximations`    | `Approximations`   | The opt in approximations of the sub-iteration. `None` at construction is stored as a default (exact) `Approximations` |
 
 The rigid body dynamics engine lives in the private `_mujoco_model` slot (a `MuJoCoModel`). Like the attributes above, it is set in `__init__` and never reassigned, and the reference stays fixed while the engine's own state advances during the solve. It has no public property: users never interact with the engine directly (see the `MuJoCoModel` section).
 
@@ -267,10 +269,24 @@ This is allocated in `__init__` (the validation guard as `False`) and updated by
 | Attribute                   | Type   | Notes                                                                                                      |
 |-----------------------------|--------|------------------------------------------------------------------------------------------------------------|
 | `_external_loads_validated` | `bool` | Once-only guard. Flips to `True` after the `external_loads_fn` return is validated on its first invocation |
+| `_carried_relaxation_factor` | `float \| None` | The relaxation factor carried from one free flight time step to the next when `approximations.adaptive_relaxation` is on. `None` until one is carried, after a time step whose last Aitken factor was outside [0.1, 1.0], and always when `adaptive_relaxation` is off |
+
+`FreeFlightAeroelasticUnsteadyProblem` declares the same `_k_max`, `_approximations`, and `_carried_relaxation_factor` slots with the same meaning.
 
 #### Construction-only parameters
 
 `integrator`, `extra_xml`, and `mujoco_assets` are constructor parameters, not attributes: all three are validated here (`integrator` a str naming a supported MuJoCo integrator, `extra_xml` a dict or `None` with keys restricted to the permitted injection points and str values, and `mujoco_assets` a dict or `None` mapping str filenames to bytes, where each filename must be a bare basename with a nonempty extension), then forwarded to the `MuJoCoModel` constructed in `__init__` and not stored on the problem, so none has a slot or an attribute-category entry above. They are the only raw user input reaching the `MuJoCoModel`, which performs no validation of its own. Deeper XML and asset-reference correctness is left to MuJoCo, except that construction raises if the generated model XML references files that `mujoco_assets` does not cover, which keeps machine-specific paths out of saved files and every constructed problem saveable. See Construction-Only Parameters under Design Principles.
+
+## `Approximations` Class (`approximations.py`)
+
+`Approximations` holds the opt in approximations of a free flight problem's strongly coupled sub-iteration. Every attribute is immutable (set in `__init__`, stored in a `_`-prefixed backing slot, exposed through a read-only property). The default instance turns every approximation off, so a problem built with it gives exactly the reference results. `Approximations.fast()` returns the vetted set.
+
+| Attribute                     | Type    | Notes                                                                                                                 |
+|-------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------|
+| `adaptive_relaxation`         | `bool`  | Start each free flight time step at the previous one's last Aitken factor when within [0.1, 1.0]. Default `False`    |
+| `coupling_relative_tolerance` | `float` | The sub-iteration's relative convergence tolerance, in [1e-6, 1e-4]. Default 1e-6 (exact)                             |
+
+`any_enabled` is a derived property recomputed on every access (no backing slot): `True` when any option differs from the exact behavior.
 
 ## `CoreMovement` / `Movement` Class (`_core.py`, `movements/movement.py`)
 

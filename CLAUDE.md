@@ -97,6 +97,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_serialization.py`: Serialization and deserialization (save/load) to and from `.psz` files, which are zip archives of JSON members chunked by time step
     - `_transformations.py`: Coordinate transformations and rotations
     - `aeroelastic_unsteady_ring_vortex_lattice_method.py`: Aeroelastic UVLM solver subclass with first-order structural deformation
+    - `approximations.py`: `Approximations` class, the opt in approximations (off by default) that make the free flight sub-iteration faster in exchange for small, measured changes to the results
     - `convergence.py`: Convergence analysis tools
     - `free_flight_unsteady_ring_vortex_lattice_method.py`: Free flight UVLM solver subclass with six-DOF MuJoCo coupling
     - `operating_point.py`: `OperatingPoint` class

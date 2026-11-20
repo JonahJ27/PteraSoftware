@@ -116,6 +116,15 @@ class TestFreeFlightAeroelasticUnsteadyProblem(unittest.TestCase):
         self.assertEqual(self.problem.k_max, 20)
         self.assertEqual(_make_problem(k_max=7).k_max, 7)
 
+    def test_approximations_default_override_and_validation(self) -> None:
+        """Test that approximations defaults to an exact Approximations, stores a given
+        one, and rejects anything else."""
+        self.assertFalse(self.problem.approximations.any_enabled)
+        fast = ps.approximations.Approximations.fast()
+        self.assertIs(_make_problem(approximations=fast).approximations, fast)
+        with self.assertRaises(TypeError):
+            _make_problem(approximations=True)
+
     def test_slots(self) -> None:
         """Test that instances have no dict and reject new attributes."""
         self.assertFalse(hasattr(self.problem, "__dict__"))

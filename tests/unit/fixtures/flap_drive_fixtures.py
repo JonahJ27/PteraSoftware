@@ -423,6 +423,7 @@ def make_free_flight_flap_driven_aeroelastic_problem_fixture(
     reference: flap_drive.FlapReference | None = None,
     step_discards: int = 5,
     drive: flap_drive.FlapDrive | None = None,
+    approximations: ps.approximations.Approximations | None = None,
 ) -> (
     ps.free_flight_flap_driven_aeroelastic_unsteady_problem.FreeFlightFlapDrivenAeroelasticUnsteadyProblem
 ):
@@ -437,6 +438,8 @@ def make_free_flight_flap_driven_aeroelastic_problem_fixture(
     :param step_discards: The problem's step_discards. The default is 5.
     :param drive: None, or the FlapDrive to use. If None, the tracking FlapDrive fixture
         is used. The default is None.
+    :param approximations: The problem's Approximations, or None for none. The default
+        is None.
     :return free_flight_flap_driven_aeroelastic_problem_fixture:
         FreeFlightFlapDrivenAeroelasticUnsteadyProblem This is the problem, with a
         direct drive FlapDrive for both Wings, a 1.0 kg vehicle, and no gravity.
@@ -458,6 +461,7 @@ def make_free_flight_flap_driven_aeroelastic_problem_fixture(
             )
         ],
         step_discards=step_discards,
+        approximations=approximations,
     )
 
     return free_flight_flap_driven_aeroelastic_problem_fixture

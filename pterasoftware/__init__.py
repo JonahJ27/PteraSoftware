@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 # Eager imports: core modules always needed to define simulations.
+import pterasoftware.approximations
 import pterasoftware.crank_linkage
 import pterasoftware.flap_drive
 import pterasoftware.flap_driven_aeroelastic_unsteady_problem

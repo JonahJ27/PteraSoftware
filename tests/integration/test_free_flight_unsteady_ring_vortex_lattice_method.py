@@ -25,6 +25,7 @@ whose mean lift approximately balances the glider's weight.
 """
 
 import logging
+import re
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -345,6 +346,141 @@ class TestFreeFlightUnsteadyRingVortexLatticeMethodFlapping(unittest.TestCase):
         self.assertLess(float(np.max(np.abs(self.betas))), 1.0)
         self.assertLess(float(np.max(np.abs(self.crosswind_forces))), 1.0)
         self.assertLess(float(np.max(np.abs(self.positions_E_Eo[:, 1]))), 1.0e-3)
+
+
+class TestFreeFlightFastApproximations(unittest.TestCase):
+    """This is a class for testing the flapping-wing free flight solver with the opt in
+    approximations of Approximations.fast() against the same run without them."""
+
+    # The largest allowed force difference at any time step between the exact run and
+    # the fast() run, relative to the exact run's peak force. The measured difference
+    # was at most 1.4e-5.
+    _FORCE_TOLERANCE = 1e-4
+
+    exact_factors: dict[int, list[float]]
+    exact_forces_W: np.ndarray
+    exact_caps: int
+    fast_factors: dict[int, list[float]]
+    fast_forces_W: np.ndarray
+    fast_caps: int
+
+    _pattern = re.compile(
+        r"step (\d+), sub-iteration (\d+): weighted residual norm (\S+), relaxation "
+        r"factor (\S+)"
+    )
+
+    @classmethod
+    def _run(
+        cls, approximations: ps.approximations.Approximations | None
+    ) -> tuple[dict[int, list[float]], np.ndarray, int]:
+        """Runs the flapping free flight fixture and records each free flight time
+        step's relaxation factors from the sub-iteration's debug log.
+
+        :param approximations: The problem's Approximations, or None for none.
+        :return: A tuple of a dict mapping each free flight time step to the relaxation
+            factors its sub-iterations logged, in order, the (N,3) ndarray of floats of
+            each time step's forces in wind axes, and the number of cap warnings.
+        """
+        messages: list[str] = []
+
+        class _Collector(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                messages.append(record.getMessage())
+
+        problems_logger = logging.getLogger("pterasoftware.problems")
+        original_level = problems_logger.level
+        problems_logger.setLevel(logging.DEBUG)
+        collector = _Collector(level=logging.DEBUG)
+        problems_logger.addHandler(collector)
+        try:
+            solver = solver_fixtures.make_flapping_free_flight_solver(approximations)
+            solver.run(prescribed_wake=True, show_progress=False)
+        finally:
+            problems_logger.removeHandler(collector)
+            problems_logger.setLevel(original_level)
+
+        factors: dict[int, list[float]] = {}
+        for message in messages:
+            match = cls._pattern.search(message)
+            if match:
+                factors.setdefault(int(match.group(1)), []).append(
+                    float(match.group(4))
+                )
+        forces_W = np.array(
+            [
+                steady_problem.airplanes[0].forces_W
+                for steady_problem in solver.unsteady_problem.steady_problems
+            ]
+        )
+        cap_warnings = sum("cap" in message for message in messages)
+        return factors, forces_W, cap_warnings
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """This method sets up the test by running the flapping free flight fixture once
+        without approximations and once with Approximations.fast().
+
+        :return: None
+        """
+        cls.exact_factors, cls.exact_forces_W, cls.exact_caps = cls._run(None)
+        cls.fast_factors, cls.fast_forces_W, cls.fast_caps = cls._run(
+            ps.approximations.Approximations.fast()
+        )
+
+    def test_exact_run_starts_every_step_at_the_initial_factor(self) -> None:
+        """Test that without approximations every free flight time step's first update
+        uses the initial relaxation factor, 0.5."""
+        self.assertGreater(len(self.exact_factors), 1)
+        for step, factors in self.exact_factors.items():
+            with self.subTest(step=step):
+                self.assertEqual(factors[0], 0.5)
+
+    def test_fast_run_carries_the_last_aitken_factor(self) -> None:
+        """Test that with adaptive_relaxation the first free flight time step starts at
+        0.5, and each later one at the previous time step's last Aitken factor when it
+        is within [0.1, 1.0], and at 0.5 otherwise."""
+        steps = sorted(self.fast_factors)
+        self.assertEqual(self.fast_factors[steps[0]][0], 0.5)
+        for previous, current in zip(steps, steps[1:]):
+            with self.subTest(step=current):
+                previous_factors = self.fast_factors[previous]
+                if len(previous_factors) == 1:
+                    # The previous time step converged on its first trial, so it
+                    # computed no Aitken factor, and the one it carried is kept.
+                    expected = previous_factors[0]
+                else:
+                    last = previous_factors[-1]
+                    expected = last if 0.1 <= last <= 1.0 else 0.5
+                # The log prints 3 significant digits.
+                self.assertAlmostEqual(
+                    self.fast_factors[current][0], expected, delta=5e-3 * expected
+                )
+
+    def test_fast_run_takes_fewer_trials_without_cap_hits(self) -> None:
+        """Test that the fast() run converges every free flight time step within the
+        cap, as the exact run does, using fewer sub-iterations in total."""
+        self.assertEqual(self.exact_caps, 0)
+        self.assertEqual(self.fast_caps, 0)
+        exact_trials = sum(len(factors) for factors in self.exact_factors.values())
+        fast_trials = sum(len(factors) for factors in self.fast_factors.values())
+        self.assertLess(fast_trials, exact_trials)
+
+    def test_fast_run_forces_match_the_exact_run(self) -> None:
+        """Test that the fast() run's forces match the exact run's at every time step,
+        within _FORCE_TOLERANCE of the peak force, and exactly in the prescribed phase,
+        where the sub-iteration doesn't run."""
+        self.assertEqual(self.fast_forces_W.shape, self.exact_forces_W.shape)
+        first_free_step = min(self.exact_factors)
+        np.testing.assert_array_equal(
+            self.fast_forces_W[:first_free_step], self.exact_forces_W[:first_free_step]
+        )
+        peak = float(np.max(np.abs(self.exact_forces_W)))
+        np.testing.assert_allclose(
+            self.fast_forces_W,
+            self.exact_forces_W,
+            rtol=0.0,
+            atol=self._FORCE_TOLERANCE * peak,
+        )
 
 
 class TestFreeFlightUnsteadyRingVortexLatticeMethodKatzForceMethod(unittest.TestCase):

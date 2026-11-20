@@ -365,6 +365,7 @@ def make_simple_glider_free_flight_problem(
 
 def make_flapping_free_flight_problem(
     explode_into_strips: bool = False,
+    approximations: ps.approximations.Approximations | None = None,
 ) -> ps.problems.FreeFlightUnsteadyProblem:
     """This function creates the flapping-wing FreeFlightUnsteadyProblem to be used as a
     fixture.
@@ -378,6 +379,8 @@ def make_flapping_free_flight_problem(
 
     :param explode_into_strips: Whether the main Wing is exploded into one
         WingCrossSection per spanwise strip. The default is False.
+    :param approximations: The problem's Approximations, or None for none. The default
+        is None.
     :return flapping_free_flight_problem: FreeFlightUnsteadyProblem This is the
         flapping-wing FreeFlightUnsteadyProblem fixture.
     """
@@ -408,6 +411,7 @@ def make_flapping_free_flight_problem(
         mass=mass,
         I_BP1_CgP1=I_BP1_CgP1,
         external_loads_fn=None,
+        approximations=approximations,
     )
 
     return flapping_free_flight_problem
