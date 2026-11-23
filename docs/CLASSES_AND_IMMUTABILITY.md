@@ -332,6 +332,8 @@ This is allocated in `__init__` (the validation guard as `False`) and updated by
 | `airplanes`            | `tuple[tuple[Airplane, ...], ...]` | `FreeFlightMovement`  | Pre-generated prescribed `Airplane` geometry, indexed `[airplane_movement][step]` |
 | `operating_points`     | `tuple[OperatingPoint, ...]`       | `AeroelasticMovement` | Pre-generated prescribed `OperatingPoint`s                                        |
 
+**`FreeFlightAeroelasticMovement` (in `free_flight_movement.py`)** combines the two: it pre-generates its prescribed `OperatingPoint`s, but its `airplanes` is derived and lazily cached (Derived (Immutable), manual lazy caching: the `_airplanes` slot is `None` until the property is first read, then holds the nested tuple). Its problem rebuilds each time step's `Airplane` during the run (with the deformation and the flap angle), so building them all at construction cost about 1 ms and 1 MB per time step for nothing. It still checks at construction that no `Wing` changes symmetry type, from each time step's parameters (`geometry/_symmetry.py`'s `wing_symmetry_type`, the decision `Airplane.process_wing_symmetry` makes), and skips the check for an `Airplane` whose `Wing`s have no position or angle motion, since only that motion can change a symmetry type. A deep copy or a saved file holds `None` in `_airplanes` if it was never read, and the property builds the `Airplane`s when it is.
+
 ## `CoreAirplaneMovement` / `AirplaneMovement` Class (`_core.py`, `movements/airplane_movement.py`)
 
 `AirplaneMovement` extends `CoreAirplaneMovement`. All slots are defined on `CoreAirplaneMovement`. `AirplaneMovement` has empty `__slots__` and only narrows the `wing_movements` type to require `WingMovement` children.

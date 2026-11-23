@@ -8,6 +8,7 @@ import numpy as np
 
 from .. import _core, _parameter_validation, _step_parameters, geometry
 from .. import operating_point as operating_point_mod
+from ..geometry import _symmetry
 from . import aeroelastic_airplane_movement as aeroelastic_airplane_movement_mod
 from . import airplane_movement as airplane_movement_mod
 from . import (
@@ -201,9 +202,12 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
 
     In free flight, airplane geometry is prescribed (flapping, CG oscillation, etc.) but
     OperatingPoints are dynamically determined by the solver as it integrates rigid body
-    dynamics at each time step. FreeFlightMovement pre generates all Airplanes upfront
-    and provides a FreeFlightOperatingPointMovement whose mutable operating_points list
-    the solver populates during simulation.
+    dynamics at each time step. Unlike FreeFlightMovement, it doesn't build every time
+    step's Airplane when it is created, because the problem rebuilds each one during the
+    run with its deformation. It checks every time step's symmetry types from the
+    movement's parameters instead, and builds the prescribed Airplanes only when its
+    airplanes property is first read. It provides a FreeFlightOperatingPointMovement
+    whose mutable operating_points list the solver populates during simulation.
 
     The simulation is divided into two phases. During the prescribed phase, the solver
     uses the operating conditions from the initial OperatingPoint. During the free
@@ -302,39 +306,108 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
         self._prescribed_num_steps = prescribed_num_steps
         self._free_num_steps = free_num_steps
 
-        # --- Batch generate Airplanes ---
-        # Generate a list of lists of Airplanes that are the steps through each
-        # AirplaneMovement. The first index identifies the AirplaneMovement, and the
-        # second index identifies the time step.
-        airplanes_temp: list[list[geometry.airplane.Airplane]] = []
-        for airplane_movement in self.airplane_movements:
-            airplanes_temp.append(
-                airplane_movement.generate_airplanes(
-                    num_steps=self._num_steps, delta_time=self._delta_time
-                )
-            )
+        # Changed for the arrays rewrite: the Airplanes are no longer built for every
+        # time step here. The aeroelastic free flight problem rebuilds each time step's
+        # Airplane during the run (with its deformation and, for flap driven Wings, its
+        # flap angle), so the ones built here went unused, while costing about 1 ms and
+        # 1 MB per time step. The symmetry type check now uses each time step's
+        # parameters, which needs no Airplanes, and the airplanes property builds them
+        # the first time it is read. The old code was:
+        # octowrap: off
+        # # --- Batch generate Airplanes ---
+        # # Generate a list of lists of Airplanes that are the steps through each
+        # # AirplaneMovement. The first index identifies the AirplaneMovement, and the
+        # # second index identifies the time step.
+        # airplanes_temp: list[list[geometry.airplane.Airplane]] = []
+        # for airplane_movement in self.airplane_movements:
+        #     airplanes_temp.append(
+        #         airplane_movement.generate_airplanes(
+        #             num_steps=self._num_steps, delta_time=self._delta_time
+        #         )
+        #     )
+        #
+        # # Validate that all Wings maintain their symmetry type across all time steps.
+        # for airplane_movement_id, airplane_list in enumerate(airplanes_temp):
+        #     # Get the base Airplane (first time step).
+        #     base_airplane = airplane_list[0]
+        #
+        #     # Store the symmetry types of the base Wings.
+        #     base_wing_symmetry_types = []
+        #     for wing in base_airplane.wings:
+        #         base_wing_symmetry_types.append(wing.symmetry_type)
+        #
+        #     # Validate all subsequent time steps.
+        #     for step_id, airplane in enumerate(airplane_list):
+        #         # Check that Wings maintain their symmetry types.
+        #         for wing_id, wing in enumerate(airplane.wings):
+        #             base_symmetry_type = base_wing_symmetry_types[wing_id]
+        #             if wing.symmetry_type != base_symmetry_type:
+        #                 raise ValueError(
+        #                     f"Wing {wing_id} in AirplaneMovement "
+        #                     f"{airplane_movement_id} changed from type "
+        #                     f"{base_symmetry_type} symmetry at time step 0 "
+        #                     f"to type {wing.symmetry_type} symmetry at time "
+        #                     f"step {step_id}. Wings cannot undergo motion "
+        #                     f"that changes their symmetry type. This happens "
+        #                     f"when a symmetric Wing moves such that its "
+        #                     f"symmetry plane is no longer coincident with "
+        #                     f"the wing axes' yz plane or vice versa."
+        #                 )
+        #
+        # # Store as tuple of tuples to prevent external mutation.
+        # self._airplanes: tuple[tuple[geometry.airplane.Airplane, ...], ...] = tuple(
+        #     tuple(airplane_list) for airplane_list in airplanes_temp
+        # )
+        # octowrap: on
 
         # Validate that all Wings maintain their symmetry type across all time steps.
-        for airplane_movement_id, airplane_list in enumerate(airplanes_temp):
-            # Get the base Airplane (first time step).
-            base_airplane = airplane_list[0]
-
-            # Store the symmetry types of the base Wings.
-            base_wing_symmetry_types = []
-            for wing in base_airplane.wings:
-                base_wing_symmetry_types.append(wing.symmetry_type)
-
-            # Validate all subsequent time steps.
-            for step_id, airplane in enumerate(airplane_list):
-                # Check that Wings maintain their symmetry types.
-                for wing_id, wing in enumerate(airplane.wings):
+        # Each time step's symmetry types are found from its parameters, with the same
+        # decision the Airplane makes when it is built, so no Airplanes are built here.
+        for airplane_movement_id, airplane_movement in enumerate(
+            self.airplane_movements
+        ):
+            base_wings = [
+                wing_movement.base_wing
+                for wing_movement in airplane_movement.wing_movements
+            ]
+            # Only a Wing's own position and angle motion can change its symmetry type
+            # (its WingCrossSections' motion can't), so an Airplane whose Wings have
+            # neither keeps its symmetry types at every time step, and needs no check.
+            # Flap driven Wings are such Wings: their flap angle isn't prescribed.
+            if not any(
+                np.any(wing_movement.ampLer_Gs_Cgs != 0.0)
+                or np.any(wing_movement.ampAngles_Gs_to_Wn_ixyz != 0.0)
+                for wing_movement in airplane_movement.wing_movements
+            ):
+                continue
+            base_wing_symmetry_types: list[int] = []
+            for step_id in range(self._num_steps):
+                airplane_parameters = (
+                    airplane_movement._generate_airplane_parameters_at_time_step(
+                        step_id, self._delta_time
+                    )
+                )
+                for wing_id, (base_wing, wing_parameters) in enumerate(
+                    zip(base_wings, airplane_parameters.wings)
+                ):
+                    symmetry_type = _symmetry.wing_symmetry_type(
+                        symmetric=base_wing.symmetric,
+                        mirror_only=base_wing.mirror_only,
+                        symmetryNormal_G=base_wing.symmetryNormal_G,
+                        symmetryPoint_G_Cg=base_wing.symmetryPoint_G_Cg,
+                        angles_Gs_to_Wn_ixyz=wing_parameters.angles_Gs_to_Wn_ixyz,
+                        Ler_Gs_Cgs=wing_parameters.Ler_Gs_Cgs,
+                    )
+                    if step_id == 0:
+                        base_wing_symmetry_types.append(symmetry_type)
+                        continue
                     base_symmetry_type = base_wing_symmetry_types[wing_id]
-                    if wing.symmetry_type != base_symmetry_type:
+                    if symmetry_type != base_symmetry_type:
                         raise ValueError(
                             f"Wing {wing_id} in AirplaneMovement "
                             f"{airplane_movement_id} changed from type "
                             f"{base_symmetry_type} symmetry at time step 0 "
-                            f"to type {wing.symmetry_type} symmetry at time "
+                            f"to type {symmetry_type} symmetry at time "
                             f"step {step_id}. Wings cannot undergo motion "
                             f"that changes their symmetry type. This happens "
                             f"when a symmetric Wing moves such that its "
@@ -342,9 +415,10 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
                             f"the wing axes' yz plane or vice versa."
                         )
 
-        # Store as tuple of tuples to prevent external mutation.
-        self._airplanes: tuple[tuple[geometry.airplane.Airplane, ...], ...] = tuple(
-            tuple(airplane_list) for airplane_list in airplanes_temp
+        # The Airplanes at every time step, built the first time the airplanes property
+        # is read.
+        self._airplanes: tuple[tuple[geometry.airplane.Airplane, ...], ...] | None = (
+            None
         )
         # --- Batch generate OperatingPoints ---
         # OperatingPoints are prescribed in aeroelastic simulations, so generate them
@@ -386,6 +460,25 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
 
     @property
     def airplanes(self) -> tuple[tuple[geometry.airplane.Airplane, ...], ...]:
+        """The Airplanes at every time step, with the prescribed geometry (without
+        deformation, and with each flap driven Wing at its base Wing's flap angle).
+
+        They are built the first time this property is read, and the same Airplanes are
+        returned after that. The solver doesn't use them: the problem rebuilds each time
+        step's Airplane during the run.
+
+        :return: A tuple with one tuple per Airplane movement, each holding the Airplane
+            at every time step.
+        """
+        if self._airplanes is None:
+            self._airplanes = tuple(
+                tuple(
+                    airplane_movement.generate_airplanes(
+                        num_steps=self._num_steps, delta_time=self._delta_time
+                    )
+                )
+                for airplane_movement in self.airplane_movements
+            )
         return self._airplanes
 
     @property
