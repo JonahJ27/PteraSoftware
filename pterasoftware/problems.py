@@ -2937,10 +2937,10 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 "Multi-airplane free flight is not supported in this release."
             )
 
-        # Derive the initial Airplane and OperatingPoint from the FreeFlightAeroelasticMovement's
-        # first time step. SteadyProblem mutates each Panel's GP1_CgP1 attributes once,
-        # so the initial Airplane must be a fresh object, which
-        # generate_airplane_at_time_step returns.
+        # Derive the initial Airplane and OperatingPoint from the
+        # FreeFlightAeroelasticMovement's first time step. SteadyProblem mutates each
+        # Panel's GP1_CgP1 attributes once, so the initial Airplane must be a fresh
+        # object, which generate_airplane_at_time_step returns.
         initial_airplane_movement = movement.airplane_movements[0]
         initial_airplane = initial_airplane_movement.generate_airplane_at_time_step(
             step=0, delta_time=movement.delta_time
@@ -3531,7 +3531,12 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         :return: A (12,) ndarray of floats representing the diagonal of the weighting
             matrix D.
         """
-        airplane = self._free_flight_movement.airplanes[0][0]
+        # Changed for the arrays rewrite: the reference chord is read from the base
+        # Airplane, since the movement no longer builds every time step's Airplane up
+        # front. Every time step's Airplane inherits the base Airplane's reference
+        # dimensions, so the value is the same. The old line was:
+        # airplane = self._free_flight_movement.airplanes[0][0]
+        airplane = self._free_flight_movement.airplane_movements[0].base_airplane
         L_ref = airplane.c_ref
         assert L_ref is not None
 

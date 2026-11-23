@@ -286,3 +286,49 @@ def make_two_aeroelastic_wings_airplane_movement_fixture() -> (
 
     # Return the AeroelasticAirplaneMovement fixture.
     return two_aeroelastic_wings_airplane_movement_fixture
+
+
+def make_symmetry_changing_aeroelastic_airplane_movement_fixture(
+    ampLer_y: float = 0.1,
+) -> ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement:
+    """This method makes a fixture that is an AeroelasticAirplaneMovement whose only
+    Wing (with a standard movement) has type 4 symmetry at its base position, and whose
+    leading edge root point oscillates in the y direction, which moves it off its
+    symmetry plane (type 5).
+
+    :param ampLer_y: The amplitude of the leading edge root point's y oscillation (m).
+        With 0.0, the Wing doesn't move and keeps type 4 symmetry. The default is 0.1.
+    :return symmetry_changing_aeroelastic_airplane_movement_fixture:
+        AeroelasticAirplaneMovement This is the AeroelasticAirplaneMovement, for testing
+        that a movement whose Wing changes symmetry type is rejected.
+    """
+    base_airplane = ps.geometry.airplane.Airplane(
+        wings=[geometry_fixtures.make_type_4_wing_fixture()],
+        name="Type 4 Airplane",
+        Cg_GP1_CgP1=(0.0, 0.0, 0.0),
+        weight=0.0,
+    )
+    wing = base_airplane.wings[0]
+    # An aeroelastic Wing's movement can't have a type 4 base Wing (its mirrored half
+    # has no WingCrossSections to deform), so this Wing has a standard movement, which
+    # an aeroelastic Airplane's movement accepts.
+    wing_movement = ps.movements.wing_movement.WingMovement(
+        base_wing=wing,
+        wing_cross_section_movements=[
+            ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                base_wing_cross_section=wing_cross_section,
+            )
+            for wing_cross_section in wing.wing_cross_sections
+        ],
+        ampLer_Gs_Cgs=(0.0, ampLer_y, 0.0),
+        periodLer_Gs_Cgs=(0.0, 1.0 if ampLer_y else 0.0, 0.0),
+        spacingLer_Gs_Cgs=("sine", "sine", "sine"),
+        phaseLer_Gs_Cgs=(0.0, 0.0, 0.0),
+    )
+    symmetry_changing_aeroelastic_airplane_movement_fixture = (
+        ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement(
+            base_airplane=base_airplane,
+            wing_movements=[wing_movement],
+        )
+    )
+    return symmetry_changing_aeroelastic_airplane_movement_fixture

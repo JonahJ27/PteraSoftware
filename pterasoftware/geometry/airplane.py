@@ -12,6 +12,7 @@ import pyvista as pv
 import webp
 
 from .. import _parameter_validation, _transformations
+from . import _symmetry
 from . import wing as wing_mod
 from . import wing_cross_section as wing_cross_section_mod
 
@@ -985,103 +986,117 @@ class Airplane:
             followed by the new reflected Wing. Before returning them, it also calls
             each Wing's generate_mesh method, preparing them for use simulation.
         """
-        # Determine if the symmetry plane is coincident with the wing axes' xz plane. If
-        # symmetryNormal_G or symmetryPoint_G_Cg is None, then there is no symmetry and
-        # the symmetry plane doesn't exist. Otherwise, the symmetry plane is coincident
-        # to the wing axes' xz plane if Ler_Gs_Cgs lies on the symmetry plane, and if
-        # symmetryNormal_G is parallel with WnY_G. We don't need to check types, values,
-        # or normalize because this is done in Wing's init method.
-        coincident_symmetry_plane = True
-        if wing.symmetryPoint_G_Cg is None or wing.symmetryNormal_G is None:
-            coincident_symmetry_plane = False
-        else:
-            # If the symmetry plane exists, we first need to check if its normal vector
-            # is parallel with the wing axes' y axis vector.
-
-            # Actively transform geometry axes' second basis vector (in geometry axes)
-            # to this Wing's axes' second basis vector (in geometry axes). We can skip
-            # the translation step (step 2) as we are only transforming a direction
-            # vector, not a position vector.
-            GY_G = np.array([0.0, 1.0, 0.0], dtype=float)
-            GsY_G = _transformations.apply_T_to_vectors(
-                _transformations.generate_reflect_T(
-                    plane_point_A_a=wing.symmetryPoint_G_Cg,
-                    plane_normal_A=wing.symmetryNormal_G,
-                    passive=False,
-                ),
-                GY_G,
-                is_position=False,
-            )
-            WnY_G = _transformations.apply_T_to_vectors(
-                _transformations.generate_rot_T(
-                    wing.angles_Gs_to_Wn_ixyz,
-                    passive=False,
-                    intrinsic=True,
-                    order="xyz",
-                ),
-                GsY_G,
-                is_position=False,
-            )
-
-            # If symmetryNormal_G is parallel with WnY_G, their cross product will be
-            # the zero vector.
-            is_parallel = np.allclose(
-                np.cross(wing.symmetryNormal_G, WnY_G),
-                np.array([0.0, 0.0, 0.0], dtype=float),
-            )
-
-            if not is_parallel:
-                coincident_symmetry_plane = False
-            else:
-                # If the symmetry plane's normal vector and the wing axes' y axis vector
-                # are parallel, then the last check for a coincident symmetry plane is
-                # to check if the Ler is on the symmetry plane.
-
-                # To do this, we first find the symmetry plane's normal vector (in
-                # geometry axes after accounting for symmetry) and the symmetry plane's
-                # point (in geometry axes after accounting for symmetry, relative to the
-                # CG after accounting for symmetry). As the symmetry plane is defined
-                # using these quantities, they don't change after reflection.
-                symmetryPoint_Gs_Cgs = wing.symmetryPoint_G_Cg
-                symmetryNormal_Gs_Cgs = wing.symmetryNormal_G
-
-                # The leading edge root point is on the symmetry plane if the distance
-                # between it and the symmetry plane is zero.
-                Ler_on_plane = np.allclose(
-                    np.dot(
-                        symmetryNormal_Gs_Cgs, (wing.Ler_Gs_Cgs - symmetryPoint_Gs_Cgs)
-                    ),
-                    0.0,
-                )
-
-                if not Ler_on_plane:
-                    coincident_symmetry_plane = False
-
-        # See the Wing class docstring for the interpretation of the different symmetry
-        # types.
-        if not wing.symmetric:
-            if not wing.mirror_only:
-                # Type 1 Symmetry:
-                # symmetric = False, mirror_only = False
-                symmetry_type = 1
-            else:
-                if coincident_symmetry_plane:
-                    # Type 2 Symmetry:
-                    # symmetric = False, mirror_only = True, coincident_symmetry_plane = True
-                    symmetry_type = 2
-                else:
-                    # Type 3 Symmetry:
-                    # symmetric = False, mirror_only = True, coincident_symmetry_plane = False
-                    symmetry_type = 3
-        else:
-            if coincident_symmetry_plane:
-                # Type 4 Symmetry:
-                # symmetric = True, coincident_symmetry_plane = True
-                symmetry_type = 4
-            else:
-                # Type 5 Symmetry:
-                # symmetric = True, coincident_symmetry_plane = False
-                symmetry_type = 5
+        # Changed for the arrays rewrite: the symmetry type is now determined by
+        # _symmetry.wing_symmetry_type, which makes the same decision from the same
+        # values, so the movement classes can also check a Wing's symmetry type at every
+        # time step from its parameters, without building the Wing. The old code was:
+        # octowrap: off
+        # # Determine if the symmetry plane is coincident with the wing axes' xz plane. If
+        # # symmetryNormal_G or symmetryPoint_G_Cg is None, then there is no symmetry and
+        # # the symmetry plane doesn't exist. Otherwise, the symmetry plane is coincident
+        # # to the wing axes' xz plane if Ler_Gs_Cgs lies on the symmetry plane, and if
+        # # symmetryNormal_G is parallel with WnY_G. We don't need to check types, values,
+        # # or normalize because this is done in Wing's init method.
+        # coincident_symmetry_plane = True
+        # if wing.symmetryPoint_G_Cg is None or wing.symmetryNormal_G is None:
+        #     coincident_symmetry_plane = False
+        # else:
+        #     # If the symmetry plane exists, we first need to check if its normal vector
+        #     # is parallel with the wing axes' y axis vector.
+        #
+        #     # Actively transform geometry axes' second basis vector (in geometry axes)
+        #     # to this Wing's axes' second basis vector (in geometry axes). We can skip
+        #     # the translation step (step 2) as we are only transforming a direction
+        #     # vector, not a position vector.
+        #     GY_G = np.array([0.0, 1.0, 0.0], dtype=float)
+        #     GsY_G = _transformations.apply_T_to_vectors(
+        #         _transformations.generate_reflect_T(
+        #             plane_point_A_a=wing.symmetryPoint_G_Cg,
+        #             plane_normal_A=wing.symmetryNormal_G,
+        #             passive=False,
+        #         ),
+        #         GY_G,
+        #         is_position=False,
+        #     )
+        #     WnY_G = _transformations.apply_T_to_vectors(
+        #         _transformations.generate_rot_T(
+        #             wing.angles_Gs_to_Wn_ixyz,
+        #             passive=False,
+        #             intrinsic=True,
+        #             order="xyz",
+        #         ),
+        #         GsY_G,
+        #         is_position=False,
+        #     )
+        #
+        #     # If symmetryNormal_G is parallel with WnY_G, their cross product will be
+        #     # the zero vector.
+        #     is_parallel = np.allclose(
+        #         np.cross(wing.symmetryNormal_G, WnY_G),
+        #         np.array([0.0, 0.0, 0.0], dtype=float),
+        #     )
+        #
+        #     if not is_parallel:
+        #         coincident_symmetry_plane = False
+        #     else:
+        #         # If the symmetry plane's normal vector and the wing axes' y axis vector
+        #         # are parallel, then the last check for a coincident symmetry plane is
+        #         # to check if the Ler is on the symmetry plane.
+        #
+        #         # To do this, we first find the symmetry plane's normal vector (in
+        #         # geometry axes after accounting for symmetry) and the symmetry plane's
+        #         # point (in geometry axes after accounting for symmetry, relative to the
+        #         # CG after accounting for symmetry). As the symmetry plane is defined
+        #         # using these quantities, they don't change after reflection.
+        #         symmetryPoint_Gs_Cgs = wing.symmetryPoint_G_Cg
+        #         symmetryNormal_Gs_Cgs = wing.symmetryNormal_G
+        #
+        #         # The leading edge root point is on the symmetry plane if the distance
+        #         # between it and the symmetry plane is zero.
+        #         Ler_on_plane = np.allclose(
+        #             np.dot(
+        #                 symmetryNormal_Gs_Cgs, (wing.Ler_Gs_Cgs - symmetryPoint_Gs_Cgs)
+        #             ),
+        #             0.0,
+        #         )
+        #
+        #         if not Ler_on_plane:
+        #             coincident_symmetry_plane = False
+        #
+        # # See the Wing class docstring for the interpretation of the different symmetry
+        # # types.
+        # if not wing.symmetric:
+        #     if not wing.mirror_only:
+        #         # Type 1 Symmetry:
+        #         # symmetric = False, mirror_only = False
+        #         symmetry_type = 1
+        #     else:
+        #         if coincident_symmetry_plane:
+        #             # Type 2 Symmetry:
+        #             # symmetric = False, mirror_only = True, coincident_symmetry_plane = True
+        #             symmetry_type = 2
+        #         else:
+        #             # Type 3 Symmetry:
+        #             # symmetric = False, mirror_only = True, coincident_symmetry_plane = False
+        #             symmetry_type = 3
+        # else:
+        #     if coincident_symmetry_plane:
+        #         # Type 4 Symmetry:
+        #         # symmetric = True, coincident_symmetry_plane = True
+        #         symmetry_type = 4
+        #     else:
+        #         # Type 5 Symmetry:
+        #         # symmetric = True, coincident_symmetry_plane = False
+        #         symmetry_type = 5
+        # octowrap: on
+        symmetry_type = _symmetry.wing_symmetry_type(
+            symmetric=wing.symmetric,
+            mirror_only=wing.mirror_only,
+            symmetryNormal_G=wing.symmetryNormal_G,
+            symmetryPoint_G_Cg=wing.symmetryPoint_G_Cg,
+            angles_Gs_to_Wn_ixyz=wing.angles_Gs_to_Wn_ixyz,
+            Ler_Gs_Cgs=wing.Ler_Gs_Cgs,
+        )
 
         # Based on the determined symmetry type, validate the Wing's WingCrossSections'
         # control_surface_symmetry types. From the validation done during each

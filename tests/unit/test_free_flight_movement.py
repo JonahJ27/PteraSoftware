@@ -7,6 +7,7 @@ import numpy as np
 
 import pterasoftware as ps
 from tests.unit.fixtures import (
+    aeroelastic_airplane_movement_fixtures,
     airplane_movement_fixtures,
     flap_drive_fixtures,
     free_flight_movement_fixtures,
@@ -532,3 +533,78 @@ class TestFreeFlightAeroelasticMovementStepParameters(unittest.TestCase):
                         elsewhere.wings[0].angles_Gs_to_Wn_ixyz,
                     )
                 )
+
+
+class TestFreeFlightAeroelasticMovementPrescribedAirplanes(unittest.TestCase):
+    """This is a class with functions to test that FreeFlightAeroelasticMovements build
+    their prescribed Airplanes only when they are read, and still check every time
+    step's symmetry types when they are created."""
+
+    def test_no_airplanes_are_built_at_construction(self) -> None:
+        """Test that creating the movement builds no Airplanes."""
+        movement = (
+            free_flight_movement_fixtures.make_moving_free_flight_aeroelastic_movement_fixture()
+        )
+        self.assertIsNone(movement._airplanes)
+
+    def test_airplanes_match_the_movements_prescribed_geometry(self) -> None:
+        """Test that the airplanes property holds, for every time step, the Airplane the
+        Airplane's movement builds at that time step, that it is built once, and that
+        the base Airplane's reference chord (which the problem reads) equals the first
+        Airplane's."""
+        movement = (
+            free_flight_movement_fixtures.make_moving_free_flight_aeroelastic_movement_fixture()
+        )
+        airplanes = movement.airplanes
+        self.assertIs(movement.airplanes, airplanes)
+        airplane_movement = movement.airplane_movements[0]
+        num_steps = movement.prescribed_num_steps + movement.free_num_steps
+        self.assertEqual(len(airplanes), 1)
+        self.assertEqual(len(airplanes[0]), num_steps)
+        for step in range(num_steps):
+            with self.subTest(step=step):
+                expected = airplane_movement.generate_airplane_at_time_step(
+                    step, movement.delta_time
+                )
+                airplane = airplanes[0][step]
+                self.assertTrue(
+                    np.array_equal(airplane.Cg_GP1_CgP1, expected.Cg_GP1_CgP1)
+                )
+                self.assertEqual(len(airplane.wings), len(expected.wings))
+                for wing, expected_wing in zip(airplane.wings, expected.wings):
+                    self.assertTrue(
+                        np.array_equal(wing.Ler_Gs_Cgs, expected_wing.Ler_Gs_Cgs)
+                    )
+                    self.assertTrue(
+                        np.array_equal(
+                            wing.angles_Gs_to_Wn_ixyz,
+                            expected_wing.angles_Gs_to_Wn_ixyz,
+                        )
+                    )
+        self.assertEqual(airplane_movement.base_airplane.c_ref, airplanes[0][0].c_ref)
+
+    def test_a_symmetry_type_change_is_rejected_at_construction(self) -> None:
+        """Test that a movement whose Wing changes symmetry type at a later time step is
+        rejected when it is created, and that the same movement without the motion is
+        accepted."""
+        for ampLer_y, should_raise in ((0.1, True), (0.0, False)):
+            with self.subTest(ampLer_y=ampLer_y):
+
+                def make() -> None:
+                    ps.movements.free_flight_movement.FreeFlightAeroelasticMovement(
+                        airplane_movements=[
+                            aeroelastic_airplane_movement_fixtures.make_symmetry_changing_aeroelastic_airplane_movement_fixture(
+                                ampLer_y
+                            )
+                        ],
+                        operating_point_movement=free_flight_operating_point_movement_fixtures.make_basic_free_flight_operating_point_movement_fixture(),
+                        delta_time=0.1,
+                        prescribed_num_steps=3,
+                        free_num_steps=2,
+                    )
+
+                if should_raise:
+                    with self.assertRaisesRegex(ValueError, "changed from type 4"):
+                        make()
+                else:
+                    make()
