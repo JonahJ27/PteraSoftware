@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import cast
 
-from .. import _core, _parameter_validation, geometry
-from . import airplane_movement as airplane_movement_mod
-from . import aeroelastic_airplane_movement as aeroelastic_airplane_movement_mod
-from .. import operating_point as operating_point_mod
+import numpy as np
 
+from .. import _core, _parameter_validation, _step_parameters, geometry
+from .. import operating_point as operating_point_mod
+from . import aeroelastic_airplane_movement as aeroelastic_airplane_movement_mod
+from . import airplane_movement as airplane_movement_mod
 from . import (
     free_flight_operating_point_movement as free_flight_operating_point_movement_mod,
 )
@@ -195,9 +196,6 @@ class FreeFlightMovement(_core.CoreMovement):
         return self._airplanes
 
 
-
-
-
 class FreeFlightAeroelasticMovement(_core.CoreMovement):
     """A class used to contain a FreeFlightAeroelasticUnsteadyProblem's movement.
 
@@ -222,7 +220,9 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
 
     def __init__(
         self,
-        airplane_movements: list[aeroelastic_airplane_movement_mod.AeroelasticAirplaneMovement],
+        airplane_movements: list[
+            aeroelastic_airplane_movement_mod.AeroelasticAirplaneMovement
+        ],
         operating_point_movement: free_flight_operating_point_movement_mod.FreeFlightOperatingPointMovement,
         delta_time: float | int,
         prescribed_num_steps: int,
@@ -387,41 +387,80 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
     @property
     def airplanes(self) -> tuple[tuple[geometry.airplane.Airplane, ...], ...]:
         return self._airplanes
+
     @property
     def operating_points(self) -> tuple[operating_point_mod.OperatingPoint, ...]:
         return self._operating_points
+
     def generate_airplane_at_time_step(
-            self,
-            airplane_movement_index: int,
-            step: int,
-            deformationAngles_Wcsp_to_Wcs_ixyz: list[np.ndarray | None] | None = None,
-        ) -> geometry.airplane.Airplane:
-            """Creates the Airplane at a single time step for a given
-            AeroelasticAirplaneMovement, applying deformation from the solver's structural
-            response.
-    
-            This is the method the aeroelastic solver calls at each time step to get the
-            deformed Airplane geometry.
-    
-            :param airplane_movement_index: The index of the AeroelasticAirplaneMovement in
-                this AeroelasticMovement's airplane_movements tuple.
-            :param step: The time step index. Must be a non negative int.
-            :param deformationAngles_Wcsp_to_Wcs_ixyz: A list of ndarrays of floats, one per
-                Wing, each with one row per WingCrossSection in that Wing. Each row is a
-                (3,) deformation angle vector that perturbs the corresponding
-                WingCrossSection's angles_Wcsp_to_Wcs_ixyz, using an intrinsic xy'z"
-                sequence. The units are in degrees. When None, no deformation is applied.
-                The default is None.
-            :return: The Airplane at this time step, with structural deformation applied if
-                provided.
-            """
-            return self.airplane_movements[
-                airplane_movement_index
-            ].generate_airplane_at_time_step(
-                step,
-                self._delta_time,
-                deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
-            )
-    
+        self,
+        airplane_movement_index: int,
+        step: int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: list[np.ndarray | None] | None = None,
+    ) -> geometry.airplane.Airplane:
+        """Creates the Airplane at a single time step for a given
+        AeroelasticAirplaneMovement, applying deformation from the solver's structural
+        response.
 
+        This is the method the aeroelastic solver calls at each time step to get the
+        deformed Airplane geometry.
 
+        :param airplane_movement_index: The index of the AeroelasticAirplaneMovement in
+            this AeroelasticMovement's airplane_movements tuple.
+        :param step: The time step index. Must be a non negative int.
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: A list of ndarrays of floats, one per
+            Wing, each with one row per WingCrossSection in that Wing. Each row is a
+            (3,) deformation angle vector that perturbs the corresponding
+            WingCrossSection's angles_Wcsp_to_Wcs_ixyz, using an intrinsic xy'z"
+            sequence. The units are in degrees. When None, no deformation is applied.
+            The default is None.
+        :return: The Airplane at this time step, with structural deformation applied if
+            provided.
+        """
+        return self.airplane_movements[
+            airplane_movement_index
+        ].generate_airplane_at_time_step(
+            step,
+            self._delta_time,
+            deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        )
+
+    def _generate_airplane_parameters_at_time_step(
+        self,
+        airplane_movement_index: int,
+        step: int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: list[np.ndarray | None] | None = None,
+    ) -> _step_parameters.AirplaneStepParameters:
+        """Evaluates the motion of one Airplane, and of each of its Wings, at a single
+        time step, applying deformation from the solver's structural response.
+
+        It is the counterpart of generate_airplane_at_time_step that the array path
+        calls each time step: it passes this movement's delta_time and the deformation
+        to the Airplane's movement class's _generate_airplane_parameters_at_time_step,
+        which evaluates the motion without building any objects.
+
+        It evaluates the same motion as generate_airplane_at_time_step, without building
+        the Airplane.
+
+        :param airplane_movement_index: The index of the Airplane's movement in this
+            movement's airplane_movements tuple.
+        :param step: The time step index. Must be a non negative int.
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: A list of ndarrays of floats, one per
+            Wing, each with one row per WingCrossSection in that Wing. Each row is a
+            (3,) deformation angle vector that perturbs the corresponding
+            WingCrossSection's angles_Wcsp_to_Wcs_ixyz, using an intrinsic xy'z"
+            sequence. The units are in degrees. When None, no deformation is applied.
+            The default is None.
+        :return: The AirplaneStepParameters at this time step, with structural
+            deformation applied if provided.
+        """
+        airplane_movement = self.airplane_movements[airplane_movement_index]
+        assert isinstance(
+            airplane_movement,
+            aeroelastic_airplane_movement_mod.AeroelasticAirplaneMovement,
+        )
+        return airplane_movement._generate_airplane_parameters_at_time_step(
+            step,
+            self._delta_time,
+            deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        )

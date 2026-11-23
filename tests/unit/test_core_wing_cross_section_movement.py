@@ -1840,3 +1840,52 @@ class TestCoreWingCrossSectionMovementDeepcopy(unittest.TestCase):
         # Second deepcopy with same memo should return same object.
         copied2 = copy.deepcopy(original, memo)
         self.assertIs(copied1, copied2)
+
+
+class TestCoreWingCrossSectionMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    CoreWingCrossSectionMovements."""
+
+    def test_parameters_match_the_built_wing_cross_section(self) -> None:
+        """Test that the parameters equal the values of the WingCrossSection built at
+        the same time step, bit for bit, that their arrays are read only, and that the
+        WingCrossSection doesn't share memory with them."""
+        fixtures = core_wing_cross_section_movement_fixtures
+        movements = (
+            fixtures.make_static_core_wing_cross_section_movement_fixture(),
+            fixtures.make_sine_spacing_Lp_core_wing_cross_section_movement_fixture(),
+            fixtures.make_mixed_spacing_angles_core_wing_cross_section_movement_fixture(),
+            fixtures.make_multiple_periods_core_wing_cross_section_movement_fixture(),
+            fixtures.make_custom_spacing_Lp_core_wing_cross_section_movement_fixture(),
+            fixtures.make_custom_spacing_angles_core_wing_cross_section_movement_fixture(),
+            fixtures.make_mixed_custom_and_standard_spacing_core_wing_cross_section_movement_fixture(),
+        )
+        for movement_index, movement in enumerate(movements):
+            for step in (0, 1, 7, 23, 61):
+                with self.subTest(movement_index=movement_index, step=step):
+                    parameters = (
+                        movement._generate_wing_cross_section_parameters_at_time_step(
+                            step, 0.01
+                        )
+                    )
+                    wing_cross_section = (
+                        movement.generate_wing_cross_section_at_time_step(step, 0.01)
+                    )
+                    self.assertTrue(
+                        np.array_equal(
+                            parameters.Lp_Wcsp_Lpp, wing_cross_section.Lp_Wcsp_Lpp
+                        )
+                    )
+                    self.assertTrue(
+                        np.array_equal(
+                            parameters.angles_Wcsp_to_Wcs_ixyz,
+                            wing_cross_section.angles_Wcsp_to_Wcs_ixyz,
+                        )
+                    )
+                    self.assertFalse(parameters.Lp_Wcsp_Lpp.flags.writeable)
+                    self.assertFalse(parameters.angles_Wcsp_to_Wcs_ixyz.flags.writeable)
+                    self.assertFalse(
+                        np.shares_memory(
+                            parameters.Lp_Wcsp_Lpp, wing_cross_section.Lp_Wcsp_Lpp
+                        )
+                    )

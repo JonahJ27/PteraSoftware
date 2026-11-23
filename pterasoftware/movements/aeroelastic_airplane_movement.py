@@ -7,7 +7,7 @@ from typing import cast
 
 import numpy as np
 
-from .. import _core, _oscillation, geometry
+from .. import _core, _step_parameters, geometry
 from . import aeroelastic_wing_movement as aeroelastic_wing_movement_mod
 from . import wing_movement as wing_movement_mod
 
@@ -162,6 +162,71 @@ class AeroelasticAirplaneMovement(_core.CoreAirplaneMovement):
             self._wing_movements,
         )
 
+    def _generate_airplane_parameters_at_time_step(
+        self,
+        step: int,
+        delta_time: float | int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: list[np.ndarray | None] | None = None,
+    ) -> _step_parameters.AirplaneStepParameters:
+        """Evaluates the motion of the Airplane and of each of its Wings at a single
+        time step, optionally applying structural deformation to each Wing.
+
+        This is the first of the two halves of generate_airplane_at_time_step. It only
+        evaluates the motion and returns the resulting values, without building an
+        Airplane or any Wings: it evaluates the CG and calls each Wing's movement
+        class's _generate_wing_parameters_at_time_step, passing each aeroelastic Wing's
+        movement class its own deformation. The second half, the inherited
+        _airplane_from_parameters, builds the Airplane from these values.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: A list of ndarrays of floats, one per
+            Wing, each with one row per WingCrossSection in that Wing. Each row is a
+            (3,) deformation angle vector that perturbs the corresponding
+            WingCrossSection's angles_Wcsp_to_Wcs_ixyz, using an intrinsic xy'z"
+            sequence. The units are in degrees. When None, no deformation is applied.
+            The default is None.
+        :return: The AirplaneStepParameters at this time step, with the deformation
+            applied to each Wing if provided.
+        """
+        # Evaluate each Wing's motion for this time step, threading deformation to each
+        # AeroelasticWingMovement child. WingMovement children are advanced without
+        # deformation.
+        wing_parameters = []
+        for i, wing_movement in enumerate(self.wing_movements):
+            # Extract this Wing's deformation, or None.
+            theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
+            if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
+                theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
+                    deformationAngles_Wcsp_to_Wcs_ixyz[i]
+                )
+
+            if isinstance(
+                wing_movement,
+                aeroelastic_wing_movement_mod.AeroelasticWingMovement,
+            ):
+                wing_parameters.append(
+                    wing_movement._generate_wing_parameters_at_time_step(
+                        step,
+                        delta_time,
+                        deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
+                    )
+                )
+            else:
+                wing_parameters.append(
+                    wing_movement._generate_wing_parameters_at_time_step(
+                        step, delta_time
+                    )
+                )
+
+        return _step_parameters.AirplaneStepParameters(
+            Cg_GP1_CgP1=_step_parameters.make_read_only(
+                self._evaluate_Cg_GP1_CgP1_at_time_step(step, delta_time)
+            ),
+            wings=tuple(wing_parameters),
+        )
+
     def generate_airplane_at_time_step(
         self,
         step: int,
@@ -186,82 +251,97 @@ class AeroelasticAirplaneMovement(_core.CoreAirplaneMovement):
         :return: The Airplane at this time step, with structural deformation applied to
             each Wing if provided.
         """
-        time = step * delta_time
+        # Changed for the arrays rewrite: the motion of the Airplane and of each Wing,
+        # with the deformation threaded to each aeroelastic Wing's movement, is now
+        # evaluated by _generate_airplane_parameters_at_time_step, which the array path
+        # also calls, and the Airplane is built from its result, so both paths read the
+        # motion from one place. The results are identical. The old body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Cg_GP1_CgP1.
+        # thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingCg_GP1_CgP1[dim]
+        #     this_amp = self._ampCg_GP1_CgP1[dim]
+        #     this_period = self._periodCg_GP1_CgP1[dim]
+        #     this_phase = self._phaseCg_GP1_CgP1[dim]
+        #     this_base = self._base_airplane.Cg_GP1_CgP1[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Generate the Wings for this time step, threading deformation to each
+        # # AeroelasticWingMovement child. WingMovement children are advanced without
+        # # deformation.
+        # these_wings = []
+        # for i, wing_movement in enumerate(self.wing_movements):
+        #     # Extract this Wing's deformation, or None.
+        #     theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
+        #     if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
+        #         theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
+        #             deformationAngles_Wcsp_to_Wcs_ixyz[i]
+        #         )
+        #
+        #     if isinstance(
+        #         wing_movement,
+        #         aeroelastic_wing_movement_mod.AeroelasticWingMovement,
+        #     ):
+        #         these_wings.append(
+        #             wing_movement.generate_wing_at_time_step(
+        #                 step,
+        #                 delta_time,
+        #                 deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
+        #             )
+        #         )
+        #     else:
+        #         these_wings.append(
+        #             wing_movement.generate_wing_at_time_step(step, delta_time)
+        #         )
+        #
+        # # The reference dimensions are inherited from the base Airplane rather than
+        # # recomputed from this time step's deformed Wings, so every time step's load
+        # # coefficients share one normalization.
+        # return geometry.airplane.Airplane(
+        #     wings=these_wings,
+        #     name=self._base_airplane.name,
+        #     Cg_GP1_CgP1=thisCg_GP1_CgP1,
+        #     weight=self._base_airplane.weight,
+        #     s_ref=self._base_airplane.s_ref,
+        #     c_ref=self._base_airplane.c_ref,
+        #     b_ref=self._base_airplane.b_ref,
+        # )
+        # octowrap: on
 
-        # Evaluate the oscillating value for each dimension of Cg_GP1_CgP1.
-        thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingCg_GP1_CgP1[dim]
-            this_amp = self._ampCg_GP1_CgP1[dim]
-            this_period = self._periodCg_GP1_CgP1[dim]
-            this_phase = self._phaseCg_GP1_CgP1[dim]
-            this_base = self._base_airplane.Cg_GP1_CgP1[dim]
-
-            if this_spacing == "sine":
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Generate the Wings for this time step, threading deformation to each
-        # AeroelasticWingMovement child. WingMovement children are advanced without
-        # deformation.
-        these_wings = []
-        for i, wing_movement in enumerate(self.wing_movements):
-            # Extract this Wing's deformation, or None.
-            theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
-            if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
-                theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
-                    deformationAngles_Wcsp_to_Wcs_ixyz[i]
-                )
-
-            if isinstance(
-                wing_movement,
-                aeroelastic_wing_movement_mod.AeroelasticWingMovement,
-            ):
-                these_wings.append(
-                    wing_movement.generate_wing_at_time_step(
-                        step,
-                        delta_time,
-                        deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
-                    )
-                )
-            else:
-                these_wings.append(
-                    wing_movement.generate_wing_at_time_step(step, delta_time)
-                )
-
-        # The reference dimensions are inherited from the base Airplane rather than
-        # recomputed from this time step's deformed Wings, so every time step's load
-        # coefficients share one normalization.
-        return geometry.airplane.Airplane(
-            wings=these_wings,
-            name=self._base_airplane.name,
-            Cg_GP1_CgP1=thisCg_GP1_CgP1,
-            weight=self._base_airplane.weight,
-            s_ref=self._base_airplane.s_ref,
-            c_ref=self._base_airplane.c_ref,
-            b_ref=self._base_airplane.b_ref,
+        return self._airplane_from_parameters(
+            self._generate_airplane_parameters_at_time_step(
+                step,
+                delta_time,
+                deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+            )
         )

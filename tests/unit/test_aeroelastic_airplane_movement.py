@@ -485,3 +485,133 @@ class TestAeroelasticAirplaneMovementMixedWings(unittest.TestCase):
                 rtol=1e-10,
                 atol=1e-14,
             )
+
+
+class TestAeroelasticAirplaneMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    AeroelasticAirplaneMovements."""
+
+    def _assert_wing_parameters_equal(
+        self,
+        parameters: ps._step_parameters.WingStepParameters,
+        expected: ps._step_parameters.WingStepParameters,
+    ) -> None:
+        """Asserts that two WingStepParameters are equal, bit for bit.
+
+        :param parameters: The WingStepParameters to check.
+        :param expected: The expected WingStepParameters.
+        :return: None
+        """
+        for name in (
+            "Ler_Gs_Cgs",
+            "angles_Gs_to_Wn_ixyz",
+            "stackLp_Wcsp_Lpp",
+            "stackAngles_Wcsp_to_Wcs_ixyz",
+        ):
+            self.assertTrue(
+                np.array_equal(getattr(parameters, name), getattr(expected, name)),
+                name,
+            )
+
+    def test_parameters_thread_deformation_to_aeroelastic_wings(self) -> None:
+        """Test that the parameters' CG equals the built Airplane's, and that each
+        Wing's parameters equal those its movement returns with that Wing's deformation
+        (or none, for a standard Wing's movement), bit for bit."""
+        for movement in (
+            aeroelastic_airplane_movement_fixtures.make_basic_aeroelastic_airplane_movement_fixture(),
+            aeroelastic_airplane_movement_fixtures.make_mixed_wing_aeroelastic_airplane_movement_fixture(),
+            aeroelastic_airplane_movement_fixtures.make_two_aeroelastic_wings_airplane_movement_fixture(),
+        ):
+            deformations: list[np.ndarray | None] = []
+            for wing_index, wing_movement in enumerate(movement.wing_movements):
+                deformation = np.full(
+                    (len(wing_movement.wing_cross_section_movements), 3),
+                    0.1 * (wing_index + 1),
+                    dtype=float,
+                )
+                # A Wing's root WingCrossSection must keep zero angles, so it never
+                # deforms.
+                deformation[0] = 0.0
+                deformations.append(deformation)
+            for deformation_list in (None, deformations):
+                for step in (0, 1, 7, 23, 61):
+                    with self.subTest(deformation_list=deformation_list, step=step):
+                        parameters = (
+                            movement._generate_airplane_parameters_at_time_step(
+                                step,
+                                0.01,
+                                deformationAngles_Wcsp_to_Wcs_ixyz=deformation_list,
+                            )
+                        )
+                        airplane = movement.generate_airplane_at_time_step(
+                            step,
+                            0.01,
+                            deformationAngles_Wcsp_to_Wcs_ixyz=deformation_list,
+                        )
+                        self.assertTrue(
+                            np.array_equal(parameters.Cg_GP1_CgP1, airplane.Cg_GP1_CgP1)
+                        )
+                        for wing_index, (wing_parameters, wing_movement) in enumerate(
+                            zip(parameters.wings, movement.wing_movements)
+                        ):
+                            if isinstance(
+                                wing_movement,
+                                ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement,
+                            ):
+                                expected = wing_movement._generate_wing_parameters_at_time_step(
+                                    step,
+                                    0.01,
+                                    deformationAngles_Wcsp_to_Wcs_ixyz=(
+                                        None
+                                        if deformation_list is None
+                                        else deformation_list[wing_index]
+                                    ),
+                                )
+                            else:
+                                expected = wing_movement._generate_wing_parameters_at_time_step(
+                                    step, 0.01
+                                )
+                            self._assert_wing_parameters_equal(
+                                wing_parameters, expected
+                            )
+
+
+class TestAeroelasticAirplaneMovementStepParametersPerWingDeformation(
+    unittest.TestCase
+):
+    """This is a class with functions to test that each Wing receives its own
+    deformation in the per time step parameters of AeroelasticAirplaneMovements."""
+
+    def test_each_wing_receives_its_own_deformation(self) -> None:
+        """Test that each of two aeroelastic Wings' cross section angles move by exactly
+        its own deformation, against the parameters without deformation."""
+        movement = (
+            aeroelastic_airplane_movement_fixtures.make_two_aeroelastic_wings_airplane_movement_fixture()
+        )
+        deformations: list[np.ndarray | None] = []
+        for wing_index, wing_movement in enumerate(movement.wing_movements):
+            deformation = np.full(
+                (len(wing_movement.wing_cross_section_movements), 3),
+                0.3 * (wing_index + 1),
+                dtype=float,
+            )
+            # A Wing's root WingCrossSection must keep zero angles, so it never deforms.
+            deformation[0] = 0.0
+            deformations.append(deformation)
+        for step in (0, 7, 23):
+            with self.subTest(step=step):
+                prescribed = movement._generate_airplane_parameters_at_time_step(
+                    step, 0.01
+                )
+                deformed = movement._generate_airplane_parameters_at_time_step(
+                    step, 0.01, deformationAngles_Wcsp_to_Wcs_ixyz=deformations
+                )
+                for wing_index, wing_deformation in enumerate(deformations):
+                    assert wing_deformation is not None
+                    npt.assert_allclose(
+                        deformed.wings[wing_index].stackAngles_Wcsp_to_Wcs_ixyz
+                        - prescribed.wings[wing_index].stackAngles_Wcsp_to_Wcs_ixyz,
+                        wing_deformation,
+                        rtol=0.0,
+                        atol=1e-12,
+                    )

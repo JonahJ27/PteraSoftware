@@ -882,5 +882,44 @@ class TestFlapDrivenAeroelasticUnsteadyProblem(unittest.TestCase):
         )
 
 
+class TestFlapDrivenAeroelasticWingMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    FlapDrivenAeroelasticWingMovements."""
+
+    def test_parameters_use_the_recorded_flap_angle(self) -> None:
+        """Test that the parameters use the flap angle recorded for a time step, that an
+        override wins over it, that a time step with no record uses the base Wing's flap
+        angle, and that the parameters match the Wing built at the same time step."""
+        wing_movement = _make_wing_movement()
+        recorded = (10.0, 20.0, 30.0)
+        for step, angle in enumerate(recorded):
+            wing_movement.record_flap_step(step, angle, None)
+
+        for step, angle in enumerate(recorded):
+            with self.subTest(step=step):
+                parameters = wing_movement._generate_wing_parameters_at_time_step(
+                    step, 0.01
+                )
+                self.assertEqual(parameters.angles_Gs_to_Wn_ixyz[0], angle)
+                wing = wing_movement.generate_wing_at_time_step(step, 0.01)
+                self.assertTrue(
+                    np.array_equal(
+                        parameters.angles_Gs_to_Wn_ixyz, wing.angles_Gs_to_Wn_ixyz
+                    )
+                )
+                self.assertTrue(np.array_equal(parameters.Ler_Gs_Cgs, wing.Ler_Gs_Cgs))
+
+        overridden = wing_movement._generate_wing_parameters_at_time_step(
+            1, 0.01, overrideAngleX_Gs_to_Wn_ixyz=-5.0
+        )
+        self.assertEqual(overridden.angles_Gs_to_Wn_ixyz[0], -5.0)
+
+        unrecorded = wing_movement._generate_wing_parameters_at_time_step(5, 0.01)
+        self.assertEqual(
+            unrecorded.angles_Gs_to_Wn_ixyz[0],
+            wing_movement.base_wing.angles_Gs_to_Wn_ixyz[0],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

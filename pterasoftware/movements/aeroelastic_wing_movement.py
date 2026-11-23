@@ -7,7 +7,7 @@ from typing import cast
 
 import numpy as np
 
-from .. import _core, _oscillation, _transformations, geometry
+from .. import _core, _oscillation, _step_parameters, _transformations, geometry
 from . import (
     aeroelastic_wing_cross_section_movement as aeroelastic_wing_cross_section_movement_mod,
 )
@@ -297,6 +297,118 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
     ) -> tuple[Callable[[float], float] | None, ...]:
         return self._spacingAnglesSecondDerivative_Gs_to_Wn_ixyz
 
+    def _generate_wing_parameters_at_time_step(
+        self,
+        step: int,
+        delta_time: float | int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: np.ndarray | None = None,
+        overrideAngleX_Gs_to_Wn_ixyz: float | int | None = None,
+    ) -> _step_parameters.WingStepParameters:
+        """Evaluates the motion of the Wing and of each of its WingCrossSections at a
+        single time step, optionally applying structural deformation to each
+        WingCrossSection and overriding the prescribed flap angle.
+
+        This is the first of the two halves of generate_wing_at_time_step. It only
+        evaluates the motion and returns the resulting values, without building a Wing
+        or any WingCrossSections: it evaluates the Wing's own position and angles,
+        applies the flap angle override before the rotation point offset adjustment, and
+        calls each WingCrossSection's movement class's
+        _generate_wing_cross_section_parameters_at_time_step with that
+        WingCrossSection's deformation. The second half, the inherited
+        _wing_from_parameters, builds the Wing from these values.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: An ndarray of floats with one row per
+            WingCrossSection in this Wing. Each row is a (3,) deformation angle vector
+            using an intrinsic xy'z" sequence that is added to the corresponding
+            WingCrossSection's prescribed angles_Wcsp_to_Wcs_ixyz. The units are in
+            degrees. When None, no deformation is applied. The default is None.
+        :param overrideAngleX_Gs_to_Wn_ixyz: A number (int or float) that replaces the x
+            component of the Wing's prescribed angles_Gs_to_Wn_ixyz (the flap angle,
+            using an intrinsic xy'z" sequence) at this time step. The y and z components
+            are unaffected, and the rotation point offset adjustment uses the overridden
+            value. The units are in degrees. When None, the prescribed flap angle is
+            used. The default is None.
+        :return: The WingStepParameters at this time step, with the override and the
+            deformation applied if provided.
+        """
+        time = step * delta_time
+
+        # Evaluate the oscillating value for each dimension of Ler_Gs_Cgs.
+        thisLer_Gs_Cgs = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingLer_Gs_Cgs,
+            amps=self._ampLer_Gs_Cgs,
+            periods=self._periodLer_Gs_Cgs,
+            phases=self._phaseLer_Gs_Cgs,
+            bases=self._base_wing.Ler_Gs_Cgs,
+            time=time,
+        )
+
+        # Evaluate the oscillating value for each dimension of angles_Gs_to_Wn_ixyz.
+        theseAngles_Gs_to_Wn_ixyz = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingAngles_Gs_to_Wn_ixyz,
+            amps=self._ampAngles_Gs_to_Wn_ixyz,
+            periods=self._periodAngles_Gs_to_Wn_ixyz,
+            phases=self._phaseAngles_Gs_to_Wn_ixyz,
+            bases=self._base_wing.angles_Gs_to_Wn_ixyz,
+            time=time,
+        )
+
+        # Replace the prescribed flap angle if the caller supplies one. This happens
+        # before the rotation point offset adjustment below, which consumes these
+        # angles.
+        if overrideAngleX_Gs_to_Wn_ixyz is not None:
+            theseAngles_Gs_to_Wn_ixyz[0] = overrideAngleX_Gs_to_Wn_ixyz
+
+        # Evaluate each WingCrossSection's motion for this time step, threading
+        # deformation to each AeroelasticWingCrossSectionMovement child.
+        wing_cross_section_parameters = []
+        for i, wing_cross_section_movement in enumerate(
+            self._wing_cross_section_movements
+        ):
+            assert isinstance(
+                wing_cross_section_movement,
+                aeroelastic_wing_cross_section_movement_mod.AeroelasticWingCrossSectionMovement,
+            )
+
+            # Extract this WingCrossSection's deformation row, or None.
+            theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
+            if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
+                theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
+                    deformationAngles_Wcsp_to_Wcs_ixyz[i]
+                )
+
+            wing_cross_section_parameters.append(
+                wing_cross_section_movement._generate_wing_cross_section_parameters_at_time_step(
+                    step,
+                    delta_time,
+                    deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
+                )
+            )
+
+        # If there is a non zero rotation point offset, adjust the position to account
+        # for rotation about the offset point instead of the leading edge root.
+        if not np.allclose(self._rotationPointOffset_Gs_Ler, np.zeros(3, dtype=float)):
+            rot_T_act = _transformations.generate_rot_T(
+                theseAngles_Gs_to_Wn_ixyz,
+                passive=False,
+                intrinsic=True,
+                order="xyz",
+            )
+            rot_R_act = rot_T_act[:3, :3]
+
+            offsetRotationPointAdjustment_Gs = (
+                np.eye(3, dtype=float) - rot_R_act
+            ) @ self._rotationPointOffset_Gs_Ler
+
+            thisLer_Gs_Cgs = thisLer_Gs_Cgs + offsetRotationPointAdjustment_Gs
+
+        return _step_parameters.stack_wing_step_parameters(
+            thisLer_Gs_Cgs, theseAngles_Gs_to_Wn_ixyz, wing_cross_section_parameters
+        )
+
     def generate_wing_at_time_step(
         self,
         step: int,
@@ -328,142 +440,158 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
         :return: The Wing at this time step, with structural deformation applied to each
             WingCrossSection if provided.
         """
-        time = step * delta_time
+        # Changed for the arrays rewrite: the motion of the Wing and of each
+        # WingCrossSection, with the flap angle override and the deformation applied, is
+        # now evaluated by _generate_wing_parameters_at_time_step, which the array path
+        # also calls, and the Wing is built from its result, so both paths read the
+        # motion from one place. The results are identical. The old body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Ler_Gs_Cgs.
+        # thisLer_Gs_Cgs = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingLer_Gs_Cgs[dim]
+        #     this_amp = self._ampLer_Gs_Cgs[dim]
+        #     this_period = self._periodLer_Gs_Cgs[dim]
+        #     this_phase = self._phaseLer_Gs_Cgs[dim]
+        #     this_base = self._base_wing.Ler_Gs_Cgs[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Evaluate the oscillating value for each dimension of angles_Gs_to_Wn_ixyz.
+        # theseAngles_Gs_to_Wn_ixyz = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingAngles_Gs_to_Wn_ixyz[dim]
+        #     this_amp = self._ampAngles_Gs_to_Wn_ixyz[dim]
+        #     this_period = self._periodAngles_Gs_to_Wn_ixyz[dim]
+        #     this_phase = self._phaseAngles_Gs_to_Wn_ixyz[dim]
+        #     this_base = self._base_wing.angles_Gs_to_Wn_ixyz[dim]
+        #
+        #     if this_spacing == "sine":
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = (
+        #             _oscillation.oscillating_custom_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #                 custom_function=this_spacing,
+        #             )
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Replace the prescribed flap angle if the caller supplies one. This happens
+        # # before the rotation point offset adjustment below, which consumes these
+        # # angles.
+        # if overrideAngleX_Gs_to_Wn_ixyz is not None:
+        #     theseAngles_Gs_to_Wn_ixyz[0] = overrideAngleX_Gs_to_Wn_ixyz
+        #
+        # # Generate the WingCrossSections for this time step, threading deformation to
+        # # each AeroelasticWingCrossSectionMovement child.
+        # these_wing_cross_sections = []
+        # for i, wing_cross_section_movement in enumerate(
+        #     self._wing_cross_section_movements
+        # ):
+        #     assert isinstance(
+        #         wing_cross_section_movement,
+        #         aeroelastic_wing_cross_section_movement_mod.AeroelasticWingCrossSectionMovement,
+        #     )
+        #
+        #     # Extract this WingCrossSection's deformation row, or None.
+        #     theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
+        #     if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
+        #         theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
+        #             deformationAngles_Wcsp_to_Wcs_ixyz[i]
+        #         )
+        #
+        #     these_wing_cross_sections.append(
+        #         wing_cross_section_movement.generate_wing_cross_section_at_time_step(
+        #             step,
+        #             delta_time,
+        #             deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
+        #         )
+        #     )
+        #
+        # # If there is a non zero rotation point offset, adjust the position to account
+        # # for rotation about the offset point instead of the leading edge root.
+        # if not np.allclose(self._rotationPointOffset_Gs_Ler, np.zeros(3, dtype=float)):
+        #     rot_T_act = _transformations.generate_rot_T(
+        #         theseAngles_Gs_to_Wn_ixyz,
+        #         passive=False,
+        #         intrinsic=True,
+        #         order="xyz",
+        #     )
+        #     rot_R_act = rot_T_act[:3, :3]
+        #
+        #     offsetRotationPointAdjustment_Gs = (
+        #         np.eye(3, dtype=float) - rot_R_act
+        #     ) @ self._rotationPointOffset_Gs_Ler
+        #
+        #     thisLer_Gs_Cgs = thisLer_Gs_Cgs + offsetRotationPointAdjustment_Gs
+        #
+        # return geometry.wing.Wing(
+        #     wing_cross_sections=these_wing_cross_sections,
+        #     name=self._base_wing.name,
+        #     Ler_Gs_Cgs=thisLer_Gs_Cgs,
+        #     angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
+        #     symmetric=self._base_wing.symmetric,
+        #     mirror_only=self._base_wing.mirror_only,
+        #     symmetryNormal_G=self._base_wing.symmetryNormal_G,
+        #     symmetryPoint_G_Cg=self._base_wing.symmetryPoint_G_Cg,
+        #     num_chordwise_panels=self._base_wing.num_chordwise_panels,
+        #     chordwise_spacing=self._base_wing.chordwise_spacing,
+        # )
+        # octowrap: on
 
-        # Evaluate the oscillating value for each dimension of Ler_Gs_Cgs.
-        thisLer_Gs_Cgs = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingLer_Gs_Cgs[dim]
-            this_amp = self._ampLer_Gs_Cgs[dim]
-            this_period = self._periodLer_Gs_Cgs[dim]
-            this_phase = self._phaseLer_Gs_Cgs[dim]
-            this_base = self._base_wing.Ler_Gs_Cgs[dim]
-
-            if this_spacing == "sine":
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Evaluate the oscillating value for each dimension of angles_Gs_to_Wn_ixyz.
-        theseAngles_Gs_to_Wn_ixyz = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingAngles_Gs_to_Wn_ixyz[dim]
-            this_amp = self._ampAngles_Gs_to_Wn_ixyz[dim]
-            this_period = self._periodAngles_Gs_to_Wn_ixyz[dim]
-            this_phase = self._phaseAngles_Gs_to_Wn_ixyz[dim]
-            this_base = self._base_wing.angles_Gs_to_Wn_ixyz[dim]
-
-            if this_spacing == "sine":
-                theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                theseAngles_Gs_to_Wn_ixyz[dim] = (
-                    _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Replace the prescribed flap angle if the caller supplies one. This happens
-        # before the rotation point offset adjustment below, which consumes these
-        # angles.
-        if overrideAngleX_Gs_to_Wn_ixyz is not None:
-            theseAngles_Gs_to_Wn_ixyz[0] = overrideAngleX_Gs_to_Wn_ixyz
-
-        # Generate the WingCrossSections for this time step, threading deformation to
-        # each AeroelasticWingCrossSectionMovement child.
-        these_wing_cross_sections = []
-        for i, wing_cross_section_movement in enumerate(
-            self._wing_cross_section_movements
-        ):
-            assert isinstance(
-                wing_cross_section_movement,
-                aeroelastic_wing_cross_section_movement_mod.AeroelasticWingCrossSectionMovement,
+        return self._wing_from_parameters(
+            self._generate_wing_parameters_at_time_step(
+                step,
+                delta_time,
+                deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+                overrideAngleX_Gs_to_Wn_ixyz=overrideAngleX_Gs_to_Wn_ixyz,
             )
-
-            # Extract this WingCrossSection's deformation row, or None.
-            theseDeformationAngles_Wcsp_to_Wcs_ixyz = None
-            if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
-                theseDeformationAngles_Wcsp_to_Wcs_ixyz = (
-                    deformationAngles_Wcsp_to_Wcs_ixyz[i]
-                )
-
-            these_wing_cross_sections.append(
-                wing_cross_section_movement.generate_wing_cross_section_at_time_step(
-                    step,
-                    delta_time,
-                    deformationAngles_Wcsp_to_Wcs_ixyz=theseDeformationAngles_Wcsp_to_Wcs_ixyz,
-                )
-            )
-
-        # If there is a non zero rotation point offset, adjust the position to account
-        # for rotation about the offset point instead of the leading edge root.
-        if not np.allclose(self._rotationPointOffset_Gs_Ler, np.zeros(3, dtype=float)):
-            rot_T_act = _transformations.generate_rot_T(
-                theseAngles_Gs_to_Wn_ixyz,
-                passive=False,
-                intrinsic=True,
-                order="xyz",
-            )
-            rot_R_act = rot_T_act[:3, :3]
-
-            offsetRotationPointAdjustment_Gs = (
-                np.eye(3, dtype=float) - rot_R_act
-            ) @ self._rotationPointOffset_Gs_Ler
-
-            thisLer_Gs_Cgs = thisLer_Gs_Cgs + offsetRotationPointAdjustment_Gs
-
-        return geometry.wing.Wing(
-            wing_cross_sections=these_wing_cross_sections,
-            name=self._base_wing.name,
-            Ler_Gs_Cgs=thisLer_Gs_Cgs,
-            angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
-            symmetric=self._base_wing.symmetric,
-            mirror_only=self._base_wing.mirror_only,
-            symmetryNormal_G=self._base_wing.symmetryNormal_G,
-            symmetryPoint_G_Cg=self._base_wing.symmetryPoint_G_Cg,
-            num_chordwise_panels=self._base_wing.num_chordwise_panels,
-            chordwise_spacing=self._base_wing.chordwise_spacing,
         )

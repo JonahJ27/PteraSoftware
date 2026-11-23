@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import scipy.signal as sp_sig
@@ -171,6 +171,76 @@ def oscillating_custom_at_time(
             f"Calling your custom_function on the inputs resulted in the following "
             f"exception:\n{e}"
         )
+
+
+def oscillating_vector_at_time(
+    spacings: Sequence[str | Callable[[float], float]],
+    amps: np.ndarray,
+    periods: np.ndarray,
+    phases: np.ndarray,
+    bases: np.ndarray,
+    time: float,
+) -> np.ndarray:
+    """Returns the result of evaluating an oscillating function for each component of a
+    vector at a time.
+
+    Each component uses the function its spacing names: oscillating_sin_at_time for
+    "sine", oscillating_lin_at_time for "uniform", or oscillating_custom_at_time for a
+    callable. The components are evaluated one at a time, in order, exactly as the
+    movement classes did before this function existed, so the results are identical.
+
+    This function doesn't perform any input validation on its parameters, apart from the
+    spacings, and the validation oscillating_custom_at_time performs on a custom
+    function. The requirements for the other parameters must be validated before passing
+    them in.
+
+    :param spacings: A sequence of the spacings, one per component. Each must be "sine",
+        "uniform", or a callable custom function that meets the requirements described
+        in oscillating_custom_at_time.
+    :param amps: A (N,) ndarray of floats representing the amplitudes, one per
+        component. See oscillating_sin_at_time for their requirements.
+    :param periods: A (N,) ndarray of floats representing the periods, one per
+        component. Their units are in seconds.
+    :param phases: A (N,) ndarray of floats representing the phase offsets, one per
+        component. Their units are in degrees.
+    :param bases: A (N,) ndarray of floats representing the mean values, one per
+        component.
+    :param time: The time at which to evaluate the functions. It must be non negative.
+        Its units are in seconds.
+    :return: A (N,) ndarray of floats representing each component's value at the given
+        time. Its units match those of amps and bases.
+    """
+    values = np.zeros(len(spacings), dtype=float)
+    for dim, this_spacing in enumerate(spacings):
+        if this_spacing == "sine":
+            values[dim] = oscillating_sin_at_time(
+                amp=amps[dim],
+                period=periods[dim],
+                phase=phases[dim],
+                base=bases[dim],
+                time=time,
+            )
+        elif this_spacing == "uniform":
+            values[dim] = oscillating_lin_at_time(
+                amp=amps[dim],
+                period=periods[dim],
+                phase=phases[dim],
+                base=bases[dim],
+                time=time,
+            )
+        elif callable(this_spacing):
+            values[dim] = oscillating_custom_at_time(
+                amp=amps[dim],
+                period=periods[dim],
+                phase=phases[dim],
+                base=bases[dim],
+                time=time,
+                custom_function=this_spacing,
+            )
+        else:
+            raise ValueError(f"Invalid spacing value: {this_spacing}")
+
+    return values
 
 
 def _validate_custom_spacing_function(

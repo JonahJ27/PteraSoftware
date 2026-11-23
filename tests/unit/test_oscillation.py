@@ -3,6 +3,7 @@
 import unittest
 from collections.abc import Callable
 
+import numpy as np
 import numpy.testing as npt
 
 # noinspection PyProtectedMember
@@ -142,3 +143,76 @@ class TestOscillation(unittest.TestCase):
 
         # Verify output is equal to base.
         npt.assert_allclose(result, self.static_base, rtol=1e-10, atol=1e-14)
+
+    def test_oscillating_vector_at_time_matches_per_component_calls(self) -> None:
+        """Test that oscillating_vector_at_time returns exactly the per component
+        functions' values, for every kind of spacing and for mixed spacings."""
+        amps = np.array([1.5, 2.0, 0.0], dtype=float)
+        periods = np.array([0.1, 0.25, 0.0], dtype=float)
+        phases = np.array([30.0, -90.0, 0.0], dtype=float)
+        bases = np.array([0.2, -1.0, 3.0], dtype=float)
+        time = 0.0375
+
+        for spacings in (
+            ("sine", "sine", "sine"),
+            ("uniform", "uniform", "uniform"),
+            (self.valid_custom_sine, self.valid_custom_sine, self.valid_custom_sine),
+            ("sine", "uniform", self.valid_custom_sine),
+        ):
+            with self.subTest(spacings=spacings):
+                expected = np.zeros(3, dtype=float)
+                for dim, spacing in enumerate(spacings):
+                    if spacing == "sine":
+                        expected[dim] = _oscillation.oscillating_sin_at_time(
+                            amp=amps[dim],
+                            period=periods[dim],
+                            phase=phases[dim],
+                            base=bases[dim],
+                            time=time,
+                        )
+                    elif spacing == "uniform":
+                        expected[dim] = _oscillation.oscillating_lin_at_time(
+                            amp=amps[dim],
+                            period=periods[dim],
+                            phase=phases[dim],
+                            base=bases[dim],
+                            time=time,
+                        )
+                    else:
+                        assert callable(spacing)
+                        expected[dim] = _oscillation.oscillating_custom_at_time(
+                            amp=amps[dim],
+                            period=periods[dim],
+                            phase=phases[dim],
+                            base=bases[dim],
+                            time=time,
+                            custom_function=spacing,
+                        )
+
+                result = _oscillation.oscillating_vector_at_time(
+                    spacings=spacings,
+                    amps=amps,
+                    periods=periods,
+                    phases=phases,
+                    bases=bases,
+                    time=time,
+                )
+
+                # The results must be bit for bit identical, not merely close.
+                self.assertEqual(result.dtype, np.dtype(float))
+                self.assertEqual(result.shape, (3,))
+                self.assertTrue(np.array_equal(result, expected))
+
+    def test_oscillating_vector_at_time_invalid_spacing(self) -> None:
+        """Test that oscillating_vector_at_time raises a ValueError for an invalid
+        spacing."""
+        zeros = np.zeros(3, dtype=float)
+        with self.assertRaises(ValueError):
+            _oscillation.oscillating_vector_at_time(
+                spacings=("sine", "invalid", "sine"),
+                amps=zeros,
+                periods=zeros,
+                phases=zeros,
+                bases=zeros,
+                time=0.0,
+            )

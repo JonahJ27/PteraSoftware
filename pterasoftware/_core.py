@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from . import _oscillation, _parameter_validation, _transformations, geometry
+from . import (
+    _oscillation,
+    _parameter_validation,
+    _step_parameters,
+    _transformations,
+    geometry,
+)
 from . import operating_point as operating_point_mod
 
 if TYPE_CHECKING:
@@ -610,104 +616,78 @@ class CoreWingCrossSectionMovement:
         return self._max_period
 
     # --- Other methods ---
-    def generate_wing_cross_section_at_time_step(
+    def _generate_wing_cross_section_parameters_at_time_step(
         self, step: int, delta_time: float | int
-    ) -> geometry.wing_cross_section.WingCrossSection:
-        """Creates the WingCrossSection at a single time step.
+    ) -> _step_parameters.WingCrossSectionStepParameters:
+        """Evaluates the WingCrossSection's motion at a single time step.
+
+        This is the first of the two halves of generate_wing_cross_section_at_time_step.
+        It only evaluates the motion and returns the resulting values, without building
+        a WingCrossSection. The second half, _wing_cross_section_from_parameters, builds
+        the WingCrossSection from these values. The array path calls only this half, so
+        it never builds the object.
 
         :param step: The time step index. Must be a non negative int.
         :param delta_time: The time between each time step in seconds. Must be a
             positive number (int or float).
-        :return: The WingCrossSection at this time step.
+        :return: The WingCrossSectionStepParameters at this time step, holding the
+            values that can change between time steps.
         """
         time = step * delta_time
 
         # Evaluate the oscillating value for each dimension of Lp_Wcsp_Lpp.
-        thisLp_Wcsp_Lpp = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingLp_Wcsp_Lpp[dim]
-            this_amp = self._ampLp_Wcsp_Lpp[dim]
-            this_period = self._periodLp_Wcsp_Lpp[dim]
-            this_phase = self._phaseLp_Wcsp_Lpp[dim]
-            this_base = self._base_wing_cross_section.Lp_Wcsp_Lpp[dim]
-
-            if this_spacing == "sine":
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
+        thisLp_Wcsp_Lpp = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingLp_Wcsp_Lpp,
+            amps=self._ampLp_Wcsp_Lpp,
+            periods=self._periodLp_Wcsp_Lpp,
+            phases=self._phaseLp_Wcsp_Lpp,
+            bases=self._base_wing_cross_section.Lp_Wcsp_Lpp,
+            time=time,
+        )
 
         # Evaluate the oscillating value for each dimension of angles_Wcsp_to_Wcs_ixyz.
-        theseAngles_Wcsp_to_Wcs_ixyz = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_amp = self._ampAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_period = self._periodAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_phase = self._phaseAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_base = self._base_wing_cross_section.angles_Wcsp_to_Wcs_ixyz[dim]
+        theseAngles_Wcsp_to_Wcs_ixyz = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingAngles_Wcsp_to_Wcs_ixyz,
+            amps=self._ampAngles_Wcsp_to_Wcs_ixyz,
+            periods=self._periodAngles_Wcsp_to_Wcs_ixyz,
+            phases=self._phaseAngles_Wcsp_to_Wcs_ixyz,
+            bases=self._base_wing_cross_section.angles_Wcsp_to_Wcs_ixyz,
+            time=time,
+        )
 
-            if this_spacing == "sine":
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_sin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                )
-            elif this_spacing == "uniform":
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_lin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                )
-            elif callable(this_spacing):
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
+        return _step_parameters.WingCrossSectionStepParameters(
+            Lp_Wcsp_Lpp=_step_parameters.make_read_only(thisLp_Wcsp_Lpp),
+            angles_Wcsp_to_Wcs_ixyz=_step_parameters.make_read_only(
+                theseAngles_Wcsp_to_Wcs_ixyz
+            ),
+        )
 
+    def _wing_cross_section_from_parameters(
+        self, parameters: _step_parameters.WingCrossSectionStepParameters
+    ) -> geometry.wing_cross_section.WingCrossSection:
+        """Builds the WingCrossSection from its values at a time step.
+
+        This is the second of the two halves of
+        generate_wing_cross_section_at_time_step. It evaluates no motion: it only builds
+        the WingCrossSection from values that
+        _generate_wing_cross_section_parameters_at_time_step already computed. The Wing
+        movement classes also call it, with one row of their WingStepParameters, when
+        they build a Wing.
+
+        The values that can't change between time steps come from the base
+        WingCrossSection.
+
+        :param parameters: The WingCrossSectionStepParameters at the time step.
+        :return: The WingCrossSection at the time step.
+        """
+        # The WingCrossSection gets its own copies of the arrays, as it did when the
+        # motion was evaluated here.
         return geometry.wing_cross_section.WingCrossSection(
             airfoil=self._base_wing_cross_section.airfoil,
             num_spanwise_panels=self._base_wing_cross_section.num_spanwise_panels,
             chord=self._base_wing_cross_section.chord,
-            Lp_Wcsp_Lpp=thisLp_Wcsp_Lpp,
-            angles_Wcsp_to_Wcs_ixyz=theseAngles_Wcsp_to_Wcs_ixyz,
+            Lp_Wcsp_Lpp=parameters.Lp_Wcsp_Lpp.copy(),
+            angles_Wcsp_to_Wcs_ixyz=parameters.angles_Wcsp_to_Wcs_ixyz.copy(),
             control_surface_symmetry_type=(
                 self._base_wing_cross_section.control_surface_symmetry_type
             ),
@@ -718,6 +698,127 @@ class CoreWingCrossSectionMovement:
                 self._base_wing_cross_section.control_surface_deflection
             ),
             spanwise_spacing=self._base_wing_cross_section.spanwise_spacing,
+        )
+
+    def generate_wing_cross_section_at_time_step(
+        self, step: int, delta_time: float | int
+    ) -> geometry.wing_cross_section.WingCrossSection:
+        """Creates the WingCrossSection at a single time step.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :return: The WingCrossSection at this time step.
+        """
+        # Changed for the arrays rewrite: the motion is now evaluated by
+        # _generate_wing_cross_section_parameters_at_time_step, which the array path
+        # also calls, and the WingCrossSection is built from its result by
+        # _wing_cross_section_from_parameters, so both paths read the motion from one
+        # place. The results are identical. The old body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Lp_Wcsp_Lpp.
+        # thisLp_Wcsp_Lpp = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingLp_Wcsp_Lpp[dim]
+        #     this_amp = self._ampLp_Wcsp_Lpp[dim]
+        #     this_period = self._periodLp_Wcsp_Lpp[dim]
+        #     this_phase = self._phaseLp_Wcsp_Lpp[dim]
+        #     this_base = self._base_wing_cross_section.Lp_Wcsp_Lpp[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Evaluate the oscillating value for each dimension of angles_Wcsp_to_Wcs_ixyz.
+        # theseAngles_Wcsp_to_Wcs_ixyz = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_amp = self._ampAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_period = self._periodAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_phase = self._phaseAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_base = self._base_wing_cross_section.angles_Wcsp_to_Wcs_ixyz[dim]
+        #
+        #     if this_spacing == "sine":
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_sin_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #             )
+        #         )
+        #     elif this_spacing == "uniform":
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_lin_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #             )
+        #         )
+        #     elif callable(this_spacing):
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_custom_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #                 custom_function=this_spacing,
+        #             )
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # return geometry.wing_cross_section.WingCrossSection(
+        #     airfoil=self._base_wing_cross_section.airfoil,
+        #     num_spanwise_panels=self._base_wing_cross_section.num_spanwise_panels,
+        #     chord=self._base_wing_cross_section.chord,
+        #     Lp_Wcsp_Lpp=thisLp_Wcsp_Lpp,
+        #     angles_Wcsp_to_Wcs_ixyz=theseAngles_Wcsp_to_Wcs_ixyz,
+        #     control_surface_symmetry_type=(
+        #         self._base_wing_cross_section.control_surface_symmetry_type
+        #     ),
+        #     control_surface_hinge_point=(
+        #         self._base_wing_cross_section.control_surface_hinge_point
+        #     ),
+        #     control_surface_deflection=(
+        #         self._base_wing_cross_section.control_surface_deflection
+        #     ),
+        #     spanwise_spacing=self._base_wing_cross_section.spanwise_spacing,
+        # )
+        # octowrap: on
+
+        return self._wing_cross_section_from_parameters(
+            self._generate_wing_cross_section_parameters_at_time_step(step, delta_time)
         )
 
     def generate_wing_cross_sections(
@@ -1191,102 +1292,55 @@ class CoreWingMovement:
         return self._max_period
 
     # --- Other methods ---
-    def generate_wing_at_time_step(
+    def _generate_wing_parameters_at_time_step(
         self, step: int, delta_time: float | int
-    ) -> geometry.wing.Wing:
-        """Creates the Wing at a single time step.
+    ) -> _step_parameters.WingStepParameters:
+        """Evaluates the motion of the Wing and of each of its WingCrossSections at a
+        single time step.
+
+        This is the first of the two halves of generate_wing_at_time_step. It only
+        evaluates the motion and returns the resulting values, without building a Wing
+        or any WingCrossSections: it evaluates the Wing's own position and angles, calls
+        each WingCrossSection's movement class's
+        _generate_wing_cross_section_parameters_at_time_step, and stacks their values.
+        The second half, _wing_from_parameters, builds the Wing from these values. The
+        array path calls only this half, so it never builds the objects.
 
         :param step: The time step index. Must be a non negative int.
         :param delta_time: The time between each time step in seconds. Must be a
             positive number (int or float).
-        :return: The Wing at this time step.
+        :return: The WingStepParameters at this time step, holding the values that can
+            change between time steps.
         """
         time = step * delta_time
 
         # Evaluate the oscillating value for each dimension of Ler_Gs_Cgs.
-        thisLer_Gs_Cgs = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingLer_Gs_Cgs[dim]
-            this_amp = self._ampLer_Gs_Cgs[dim]
-            this_period = self._periodLer_Gs_Cgs[dim]
-            this_phase = self._phaseLer_Gs_Cgs[dim]
-            this_base = self._base_wing.Ler_Gs_Cgs[dim]
-
-            if this_spacing == "sine":
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisLer_Gs_Cgs[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
+        thisLer_Gs_Cgs = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingLer_Gs_Cgs,
+            amps=self._ampLer_Gs_Cgs,
+            periods=self._periodLer_Gs_Cgs,
+            phases=self._phaseLer_Gs_Cgs,
+            bases=self._base_wing.Ler_Gs_Cgs,
+            time=time,
+        )
 
         # Evaluate the oscillating value for each dimension of angles_Gs_to_Wn_ixyz.
-        theseAngles_Gs_to_Wn_ixyz = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingAngles_Gs_to_Wn_ixyz[dim]
-            this_amp = self._ampAngles_Gs_to_Wn_ixyz[dim]
-            this_period = self._periodAngles_Gs_to_Wn_ixyz[dim]
-            this_phase = self._phaseAngles_Gs_to_Wn_ixyz[dim]
-            this_base = self._base_wing.angles_Gs_to_Wn_ixyz[dim]
+        theseAngles_Gs_to_Wn_ixyz = _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingAngles_Gs_to_Wn_ixyz,
+            amps=self._ampAngles_Gs_to_Wn_ixyz,
+            periods=self._periodAngles_Gs_to_Wn_ixyz,
+            phases=self._phaseAngles_Gs_to_Wn_ixyz,
+            bases=self._base_wing.angles_Gs_to_Wn_ixyz,
+            time=time,
+        )
 
-            if this_spacing == "sine":
-                theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                theseAngles_Gs_to_Wn_ixyz[dim] = (
-                    _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Generate the WingCrossSections for this time step.
-        these_wing_cross_sections = []
-        for wing_cross_section_movement in self._wing_cross_section_movements:
-            these_wing_cross_sections.append(
-                wing_cross_section_movement.generate_wing_cross_section_at_time_step(
-                    step, delta_time
-                )
+        # Evaluate each WingCrossSection's motion for this time step.
+        wing_cross_section_parameters = [
+            wing_cross_section_movement._generate_wing_cross_section_parameters_at_time_step(
+                step, delta_time
             )
+            for wing_cross_section_movement in self._wing_cross_section_movements
+        ]
 
         # If there is a non zero rotation point offset, adjust the position to account
         # for rotation about the offset point instead of the leading edge root.
@@ -1311,17 +1365,200 @@ class CoreWingMovement:
             # Apply the position adjustment to the leading edge root.
             thisLer_Gs_Cgs = thisLer_Gs_Cgs + offsetRotationPointAdjustment_Gs
 
+        return _step_parameters.stack_wing_step_parameters(
+            thisLer_Gs_Cgs, theseAngles_Gs_to_Wn_ixyz, wing_cross_section_parameters
+        )
+
+    def _wing_from_parameters(
+        self, parameters: _step_parameters.WingStepParameters
+    ) -> geometry.wing.Wing:
+        """Builds the Wing, and each of its WingCrossSections, from their values at a
+        time step.
+
+        This is the second of the two halves of generate_wing_at_time_step. It evaluates
+        no motion: it has each WingCrossSection's movement class build its
+        WingCrossSection from its row of the stacked values (with
+        _wing_cross_section_from_parameters), then builds the Wing around them, all from
+        values that _generate_wing_parameters_at_time_step already computed. The
+        Airplane movement classes also call it when they build an Airplane.
+
+        The values that can't change between time steps come from the base Wing and each
+        base WingCrossSection.
+
+        :param parameters: The WingStepParameters at the time step.
+        :return: The Wing at the time step.
+        """
+        these_wing_cross_sections = [
+            wing_cross_section_movement._wing_cross_section_from_parameters(
+                _step_parameters.WingCrossSectionStepParameters(
+                    Lp_Wcsp_Lpp=parameters.stackLp_Wcsp_Lpp[index],
+                    angles_Wcsp_to_Wcs_ixyz=parameters.stackAngles_Wcsp_to_Wcs_ixyz[
+                        index
+                    ],
+                )
+            )
+            for index, wing_cross_section_movement in enumerate(
+                self._wing_cross_section_movements
+            )
+        ]
+
+        # The Wing gets its own copies of the arrays, as it did when the motion was
+        # evaluated where the Wing was built.
         return geometry.wing.Wing(
             wing_cross_sections=these_wing_cross_sections,
             name=self._base_wing.name,
-            Ler_Gs_Cgs=thisLer_Gs_Cgs,
-            angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
+            Ler_Gs_Cgs=parameters.Ler_Gs_Cgs.copy(),
+            angles_Gs_to_Wn_ixyz=parameters.angles_Gs_to_Wn_ixyz.copy(),
             symmetric=self._base_wing.symmetric,
             mirror_only=self._base_wing.mirror_only,
             symmetryNormal_G=self._base_wing.symmetryNormal_G,
             symmetryPoint_G_Cg=self._base_wing.symmetryPoint_G_Cg,
             num_chordwise_panels=self._base_wing.num_chordwise_panels,
             chordwise_spacing=self._base_wing.chordwise_spacing,
+        )
+
+    def generate_wing_at_time_step(
+        self, step: int, delta_time: float | int
+    ) -> geometry.wing.Wing:
+        """Creates the Wing at a single time step.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :return: The Wing at this time step.
+        """
+        # Changed for the arrays rewrite: the motion of the Wing and of each
+        # WingCrossSection is now evaluated by _generate_wing_parameters_at_time_step,
+        # which the array path also calls, and the Wing is built from its result by
+        # _wing_from_parameters, so both paths read the motion from one place. The
+        # results are identical. The old body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Ler_Gs_Cgs.
+        # thisLer_Gs_Cgs = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingLer_Gs_Cgs[dim]
+        #     this_amp = self._ampLer_Gs_Cgs[dim]
+        #     this_period = self._periodLer_Gs_Cgs[dim]
+        #     this_phase = self._phaseLer_Gs_Cgs[dim]
+        #     this_base = self._base_wing.Ler_Gs_Cgs[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisLer_Gs_Cgs[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Evaluate the oscillating value for each dimension of angles_Gs_to_Wn_ixyz.
+        # theseAngles_Gs_to_Wn_ixyz = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingAngles_Gs_to_Wn_ixyz[dim]
+        #     this_amp = self._ampAngles_Gs_to_Wn_ixyz[dim]
+        #     this_period = self._periodAngles_Gs_to_Wn_ixyz[dim]
+        #     this_phase = self._phaseAngles_Gs_to_Wn_ixyz[dim]
+        #     this_base = self._base_wing.angles_Gs_to_Wn_ixyz[dim]
+        #
+        #     if this_spacing == "sine":
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         theseAngles_Gs_to_Wn_ixyz[dim] = (
+        #             _oscillation.oscillating_custom_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #                 custom_function=this_spacing,
+        #             )
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Generate the WingCrossSections for this time step.
+        # these_wing_cross_sections = []
+        # for wing_cross_section_movement in self._wing_cross_section_movements:
+        #     these_wing_cross_sections.append(
+        #         wing_cross_section_movement.generate_wing_cross_section_at_time_step(
+        #             step, delta_time
+        #         )
+        #     )
+        #
+        # # If there is a non zero rotation point offset, adjust the position to account
+        # # for rotation about the offset point instead of the leading edge root.
+        # if not np.allclose(self._rotationPointOffset_Gs_Ler, np.zeros(3, dtype=float)):
+        #     # Get the active rotation matrix for this step's angles.
+        #     rot_T_act = _transformations.generate_rot_T(
+        #         theseAngles_Gs_to_Wn_ixyz,
+        #         passive=False,
+        #         intrinsic=True,
+        #         order="xyz",
+        #     )
+        #     rot_R_act = rot_T_act[:3, :3]
+        #
+        #     # Compute the position adjustment due to the offset rotation point.
+        #     offsetRotationPointAdjustment_Gs = (
+        #         _transformations.compute_offset_rotation_adjustment(
+        #             rotation_matrix=rot_R_act,
+        #             offset=self._rotationPointOffset_Gs_Ler,
+        #         )
+        #     )
+        #
+        #     # Apply the position adjustment to the leading edge root.
+        #     thisLer_Gs_Cgs = thisLer_Gs_Cgs + offsetRotationPointAdjustment_Gs
+        #
+        # return geometry.wing.Wing(
+        #     wing_cross_sections=these_wing_cross_sections,
+        #     name=self._base_wing.name,
+        #     Ler_Gs_Cgs=thisLer_Gs_Cgs,
+        #     angles_Gs_to_Wn_ixyz=theseAngles_Gs_to_Wn_ixyz,
+        #     symmetric=self._base_wing.symmetric,
+        #     mirror_only=self._base_wing.mirror_only,
+        #     symmetryNormal_G=self._base_wing.symmetryNormal_G,
+        #     symmetryPoint_G_Cg=self._base_wing.symmetryPoint_G_Cg,
+        #     num_chordwise_panels=self._base_wing.num_chordwise_panels,
+        #     chordwise_spacing=self._base_wing.chordwise_spacing,
+        # )
+        # octowrap: on
+
+        return self._wing_from_parameters(
+            self._generate_wing_parameters_at_time_step(step, delta_time)
         )
 
     def generate_wings(
@@ -1618,6 +1855,99 @@ class CoreAirplaneMovement:
         return self._max_period
 
     # --- Other methods ---
+    def _generate_airplane_parameters_at_time_step(
+        self, step: int, delta_time: float | int
+    ) -> _step_parameters.AirplaneStepParameters:
+        """Evaluates the motion of the Airplane and of each of its Wings at a single
+        time step.
+
+        This is the first of the two halves of generate_airplane_at_time_step. It only
+        evaluates the motion and returns the resulting values, without building an
+        Airplane or any Wings or WingCrossSections: it evaluates the CG with
+        _evaluate_Cg_GP1_CgP1_at_time_step and calls each Wing's movement class's
+        _generate_wing_parameters_at_time_step. The second half,
+        _airplane_from_parameters, builds the Airplane from these values. The array path
+        calls only this half, so it never builds the objects.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :return: The AirplaneStepParameters at this time step, holding the values that
+            can change between time steps.
+        """
+        return _step_parameters.AirplaneStepParameters(
+            Cg_GP1_CgP1=_step_parameters.make_read_only(
+                self._evaluate_Cg_GP1_CgP1_at_time_step(step, delta_time)
+            ),
+            wings=tuple(
+                wing_movement._generate_wing_parameters_at_time_step(step, delta_time)
+                for wing_movement in self._wing_movements
+            ),
+        )
+
+    def _evaluate_Cg_GP1_CgP1_at_time_step(
+        self, step: int, delta_time: float | int
+    ) -> np.ndarray:
+        """Evaluates the oscillating value of each dimension of Cg_GP1_CgP1 at a single
+        time step.
+
+        _generate_airplane_parameters_at_time_step uses it for the CG, and so do the
+        static and periodic geometry shortcuts in generate_airplanes, which need only
+        the CG for their deep copies.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :return: A (3,) ndarray of floats representing the position of the Airplane's CG
+            (in the first Airplane's geometry axes, relative to the first Airplane's CG)
+            at this time step. Its units are in meters.
+        """
+        return _oscillation.oscillating_vector_at_time(
+            spacings=self._spacingCg_GP1_CgP1,
+            amps=self._ampCg_GP1_CgP1,
+            periods=self._periodCg_GP1_CgP1,
+            phases=self._phaseCg_GP1_CgP1,
+            bases=self._base_airplane.Cg_GP1_CgP1,
+            time=step * delta_time,
+        )
+
+    def _airplane_from_parameters(
+        self, parameters: _step_parameters.AirplaneStepParameters
+    ) -> geometry.airplane.Airplane:
+        """Builds the Airplane, and each of its Wings, from their values at a time step.
+
+        This is the second of the two halves of generate_airplane_at_time_step. It
+        evaluates no motion: it has each Wing's movement class build its Wing from its
+        values (with _wing_from_parameters), then builds the Airplane around them, all
+        from values that _generate_airplane_parameters_at_time_step already computed.
+
+        The values that can't change between time steps come from the base Airplane and
+        each base Wing.
+
+        :param parameters: The AirplaneStepParameters at the time step.
+        :return: The Airplane at the time step.
+        """
+        these_wings = [
+            wing_movement._wing_from_parameters(wing_parameters)
+            for wing_movement, wing_parameters in zip(
+                self._wing_movements, parameters.wings
+            )
+        ]
+
+        # The reference dimensions are inherited from the base Airplane rather than
+        # recomputed from this time step's Wings, so every time step's load coefficients
+        # share one normalization. The Airplane gets its own copy of the array, as it
+        # did when the motion was evaluated where the Airplane was built.
+        return geometry.airplane.Airplane(
+            wings=these_wings,
+            name=self._base_airplane.name,
+            Cg_GP1_CgP1=parameters.Cg_GP1_CgP1.copy(),
+            weight=self._base_airplane.weight,
+            s_ref=self._base_airplane.s_ref,
+            c_ref=self._base_airplane.c_ref,
+            b_ref=self._base_airplane.b_ref,
+        )
+
     def generate_airplane_at_time_step(
         self, step: int, delta_time: float | int
     ) -> geometry.airplane.Airplane:
@@ -1628,63 +1958,74 @@ class CoreAirplaneMovement:
             positive number (int or float).
         :return: The Airplane at this time step.
         """
-        time = step * delta_time
+        # Changed for the arrays rewrite: the motion of the Airplane and of each Wing is
+        # now evaluated by _generate_airplane_parameters_at_time_step, which the array
+        # path also calls, and the Airplane is built from its result by
+        # _airplane_from_parameters, so both paths read the motion from one place. The
+        # results are identical. The old body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Cg_GP1_CgP1.
+        # thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingCg_GP1_CgP1[dim]
+        #     this_amp = self._ampCg_GP1_CgP1[dim]
+        #     this_period = self._periodCg_GP1_CgP1[dim]
+        #     this_phase = self._phaseCg_GP1_CgP1[dim]
+        #     this_base = self._base_airplane.Cg_GP1_CgP1[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Generate the Wings for this time step.
+        # these_wings = []
+        # for wing_movement in self._wing_movements:
+        #     these_wings.append(
+        #         wing_movement.generate_wing_at_time_step(step, delta_time)
+        #     )
+        #
+        # # The reference dimensions are inherited from the base Airplane rather than
+        # # recomputed from this time step's Wings, so every time step's load coefficients
+        # # share one normalization.
+        # return geometry.airplane.Airplane(
+        #     wings=these_wings,
+        #     name=self._base_airplane.name,
+        #     Cg_GP1_CgP1=thisCg_GP1_CgP1,
+        #     weight=self._base_airplane.weight,
+        #     s_ref=self._base_airplane.s_ref,
+        #     c_ref=self._base_airplane.c_ref,
+        #     b_ref=self._base_airplane.b_ref,
+        # )
+        # octowrap: on
 
-        # Evaluate the oscillating value for each dimension of Cg_GP1_CgP1.
-        thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingCg_GP1_CgP1[dim]
-            this_amp = self._ampCg_GP1_CgP1[dim]
-            this_period = self._periodCg_GP1_CgP1[dim]
-            this_phase = self._phaseCg_GP1_CgP1[dim]
-            this_base = self._base_airplane.Cg_GP1_CgP1[dim]
-
-            if this_spacing == "sine":
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Generate the Wings for this time step.
-        these_wings = []
-        for wing_movement in self._wing_movements:
-            these_wings.append(
-                wing_movement.generate_wing_at_time_step(step, delta_time)
-            )
-
-        # The reference dimensions are inherited from the base Airplane rather than
-        # recomputed from this time step's Wings, so every time step's load coefficients
-        # share one normalization.
-        return geometry.airplane.Airplane(
-            wings=these_wings,
-            name=self._base_airplane.name,
-            Cg_GP1_CgP1=thisCg_GP1_CgP1,
-            weight=self._base_airplane.weight,
-            s_ref=self._base_airplane.s_ref,
-            c_ref=self._base_airplane.c_ref,
-            b_ref=self._base_airplane.b_ref,
+        return self._airplane_from_parameters(
+            self._generate_airplane_parameters_at_time_step(step, delta_time)
         )
 
     def generate_airplanes(
@@ -1747,42 +2088,49 @@ class CoreAirplaneMovement:
         for step in range(1, num_steps):
             time = step * delta_time
 
-            # Evaluate Cg_GP1_CgP1 at this step.
-            thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
-            for dim in range(3):
-                this_spacing = self._spacingCg_GP1_CgP1[dim]
-                this_amp = self._ampCg_GP1_CgP1[dim]
-                this_period = self._periodCg_GP1_CgP1[dim]
-                this_phase = self._phaseCg_GP1_CgP1[dim]
-                this_base = self._base_airplane.Cg_GP1_CgP1[dim]
+            # Changed for the arrays rewrite: Cg_GP1_CgP1 is evaluated by
+            # _evaluate_Cg_GP1_CgP1_at_time_step, which makes the same calls, so the
+            # results are identical. The old code was:
+            # octowrap: off
+            # thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
+            # for dim in range(3):
+            #     this_spacing = self._spacingCg_GP1_CgP1[dim]
+            #     this_amp = self._ampCg_GP1_CgP1[dim]
+            #     this_period = self._periodCg_GP1_CgP1[dim]
+            #     this_phase = self._phaseCg_GP1_CgP1[dim]
+            #     this_base = self._base_airplane.Cg_GP1_CgP1[dim]
+            #
+            #     if this_spacing == "sine":
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #         )
+            #     elif this_spacing == "uniform":
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #         )
+            #     elif callable(this_spacing):
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #             custom_function=this_spacing,
+            #         )
+            #     else:
+            #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+            # octowrap: on
 
-                if this_spacing == "sine":
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                elif this_spacing == "uniform":
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                elif callable(this_spacing):
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                else:
-                    raise ValueError(f"Invalid spacing value: {this_spacing}")
+            # Evaluate Cg_GP1_CgP1 at this step.
+            thisCg_GP1_CgP1 = self._evaluate_Cg_GP1_CgP1_at_time_step(step, delta_time)
 
             copied_airplane = first_airplane.deep_copy_with_Cg_GP1_CgP1(thisCg_GP1_CgP1)
             airplanes.append(copied_airplane)
@@ -1859,41 +2207,47 @@ class CoreAirplaneMovement:
 
             # Evaluate Cg_GP1_CgP1 at this step.
             time = step * delta_time
-            thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
-            for dim in range(3):
-                this_spacing = self._spacingCg_GP1_CgP1[dim]
-                this_amp = self._ampCg_GP1_CgP1[dim]
-                this_period = self._periodCg_GP1_CgP1[dim]
-                this_phase = self._phaseCg_GP1_CgP1[dim]
-                this_base = self._base_airplane.Cg_GP1_CgP1[dim]
-
-                if this_spacing == "sine":
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                elif this_spacing == "uniform":
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                elif callable(this_spacing):
-                    thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                else:
-                    raise ValueError(f"Invalid spacing value: {this_spacing}")
+            # Changed for the arrays rewrite: Cg_GP1_CgP1 is evaluated by
+            # _evaluate_Cg_GP1_CgP1_at_time_step, which makes the same calls. The old
+            # block was:
+            # octowrap: off
+            # thisCg_GP1_CgP1 = np.zeros(3, dtype=float)
+            # for dim in range(3):
+            #     this_spacing = self._spacingCg_GP1_CgP1[dim]
+            #     this_amp = self._ampCg_GP1_CgP1[dim]
+            #     this_period = self._periodCg_GP1_CgP1[dim]
+            #     this_phase = self._phaseCg_GP1_CgP1[dim]
+            #     this_base = self._base_airplane.Cg_GP1_CgP1[dim]
+            #
+            #     if this_spacing == "sine":
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_sin_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #         )
+            #     elif this_spacing == "uniform":
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_lin_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #         )
+            #     elif callable(this_spacing):
+            #         thisCg_GP1_CgP1[dim] = _oscillation.oscillating_custom_at_time(
+            #             amp=this_amp,
+            #             period=this_period,
+            #             phase=this_phase,
+            #             base=this_base,
+            #             time=time,
+            #             custom_function=this_spacing,
+            #         )
+            #     else:
+            #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+            # octowrap: on
+            thisCg_GP1_CgP1 = self._evaluate_Cg_GP1_CgP1_at_time_step(step, delta_time)
 
             copied_airplane = first_period_airplanes[
                 source_step

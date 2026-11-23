@@ -529,3 +529,133 @@ class TestAeroelasticWingMovementDeepCopy(unittest.TestCase):
             ],
             deriv_func,
         )
+
+
+class TestAeroelasticWingMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    AeroelasticWingMovements."""
+
+    def _assert_wing_parameters_match_wing(
+        self,
+        parameters: ps._step_parameters.WingStepParameters,
+        wing: ps.geometry.wing.Wing,
+    ) -> None:
+        """Asserts that WingStepParameters equal the values of a Wing and of each of its
+        WingCrossSections, bit for bit, that their arrays are read only, and that the
+        Wing doesn't share memory with them.
+
+        :param parameters: The WingStepParameters to check.
+        :param wing: The Wing built at the same time step.
+        :return: None
+        """
+        self.assertTrue(np.array_equal(parameters.Ler_Gs_Cgs, wing.Ler_Gs_Cgs))
+        self.assertTrue(
+            np.array_equal(parameters.angles_Gs_to_Wn_ixyz, wing.angles_Gs_to_Wn_ixyz)
+        )
+        self.assertTrue(
+            np.array_equal(
+                parameters.stackLp_Wcsp_Lpp,
+                np.array(
+                    [
+                        wing_cross_section.Lp_Wcsp_Lpp
+                        for wing_cross_section in wing.wing_cross_sections
+                    ]
+                ),
+            )
+        )
+        self.assertTrue(
+            np.array_equal(
+                parameters.stackAngles_Wcsp_to_Wcs_ixyz,
+                np.array(
+                    [
+                        wing_cross_section.angles_Wcsp_to_Wcs_ixyz
+                        for wing_cross_section in wing.wing_cross_sections
+                    ]
+                ),
+            )
+        )
+        for array in parameters:
+            self.assertFalse(array.flags.writeable)
+        self.assertFalse(np.shares_memory(parameters.Ler_Gs_Cgs, wing.Ler_Gs_Cgs))
+
+    def test_parameters_match_the_built_wing(self) -> None:
+        """Test that the parameters equal the values of the Wing built at the same time
+        step, with and without deformation and a flap angle override."""
+        for movement in (
+            aeroelastic_wing_movement_fixtures.make_basic_aeroelastic_wing_movement_fixture(),
+            aeroelastic_wing_movement_fixtures.make_rotation_offset_aeroelastic_wing_movement_fixture(),
+        ):
+            num_wing_cross_sections = len(movement.wing_cross_section_movements)
+            deformation = np.linspace(
+                -0.5, 0.5, 3 * num_wing_cross_sections, dtype=float
+            ).reshape(num_wing_cross_sections, 3)
+            # A Wing's root WingCrossSection must keep zero angles, so it never deforms.
+            deformation[0] = 0.0
+            arguments_list: list[dict[str, Any]] = [
+                {},
+                {"deformationAngles_Wcsp_to_Wcs_ixyz": deformation},
+                {"overrideAngleX_Gs_to_Wn_ixyz": 12.5},
+                {
+                    "deformationAngles_Wcsp_to_Wcs_ixyz": deformation,
+                    "overrideAngleX_Gs_to_Wn_ixyz": -7.0,
+                },
+            ]
+            for arguments in arguments_list:
+                for step in (0, 1, 7, 23, 61):
+                    with self.subTest(arguments=arguments, step=step):
+                        parameters = movement._generate_wing_parameters_at_time_step(
+                            step, 0.01, **arguments
+                        )
+                        self._assert_wing_parameters_match_wing(
+                            parameters,
+                            movement.generate_wing_at_time_step(
+                                step, 0.01, **arguments
+                            ),
+                        )
+                        if "overrideAngleX_Gs_to_Wn_ixyz" in arguments:
+                            self.assertEqual(
+                                parameters.angles_Gs_to_Wn_ixyz[0],
+                                arguments["overrideAngleX_Gs_to_Wn_ixyz"],
+                            )
+
+
+class TestAeroelasticWingMovementStepParametersRotationPointOffset(unittest.TestCase):
+    """This is a class with functions to test the rotation point offset in the per time
+    step parameters of AeroelasticWingMovements."""
+
+    def test_offset_moves_Ler_by_the_rotation_of_the_offset(self) -> None:
+        """Test that, with a rotation point offset, the parameters' Ler_Gs_Cgs equals
+        the Ler_Gs_Cgs without it plus (I - R) @ offset, where R is the active rotation
+        matrix of this time step's angles, with and without a flap angle override."""
+        movement_without_offset = (
+            aeroelastic_wing_movement_fixtures.make_basic_aeroelastic_wing_movement_fixture()
+        )
+        movement_with_offset = (
+            aeroelastic_wing_movement_fixtures.make_rotation_offset_aeroelastic_wing_movement_fixture()
+        )
+        offset = np.array(movement_with_offset.rotationPointOffset_Gs_Ler, dtype=float)
+        for override in (None, 21.0):
+            for step in (0, 1, 7, 23, 61):
+                with self.subTest(override=override, step=step):
+                    without = (
+                        movement_without_offset._generate_wing_parameters_at_time_step(
+                            step, 0.01, overrideAngleX_Gs_to_Wn_ixyz=override
+                        )
+                    )
+                    with_offset = (
+                        movement_with_offset._generate_wing_parameters_at_time_step(
+                            step, 0.01, overrideAngleX_Gs_to_Wn_ixyz=override
+                        )
+                    )
+                    rot_R_act = ps._transformations.generate_rot_T(
+                        with_offset.angles_Gs_to_Wn_ixyz,
+                        passive=False,
+                        intrinsic=True,
+                        order="xyz",
+                    )[:3, :3]
+                    npt.assert_allclose(
+                        with_offset.Ler_Gs_Cgs,
+                        without.Ler_Gs_Cgs + (np.eye(3) - rot_R_act) @ offset,
+                        rtol=0.0,
+                        atol=1e-14,
+                    )

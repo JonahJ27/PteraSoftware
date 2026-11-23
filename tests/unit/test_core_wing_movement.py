@@ -1273,3 +1273,73 @@ class TestCoreWingMovementDeepcopy(unittest.TestCase):
         # Second deepcopy with same memo should return same object.
         copied2 = copy.deepcopy(original, memo)
         self.assertIs(copied1, copied2)
+
+
+class TestCoreWingMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    CoreWingMovements."""
+
+    def _assert_wing_parameters_match_wing(
+        self,
+        parameters: ps._step_parameters.WingStepParameters,
+        wing: ps.geometry.wing.Wing,
+    ) -> None:
+        """Asserts that WingStepParameters equal the values of a Wing and of each of its
+        WingCrossSections, bit for bit, that their arrays are read only, and that the
+        Wing doesn't share memory with them.
+
+        :param parameters: The WingStepParameters to check.
+        :param wing: The Wing built at the same time step.
+        :return: None
+        """
+        self.assertTrue(np.array_equal(parameters.Ler_Gs_Cgs, wing.Ler_Gs_Cgs))
+        self.assertTrue(
+            np.array_equal(parameters.angles_Gs_to_Wn_ixyz, wing.angles_Gs_to_Wn_ixyz)
+        )
+        self.assertTrue(
+            np.array_equal(
+                parameters.stackLp_Wcsp_Lpp,
+                np.array(
+                    [
+                        wing_cross_section.Lp_Wcsp_Lpp
+                        for wing_cross_section in wing.wing_cross_sections
+                    ]
+                ),
+            )
+        )
+        self.assertTrue(
+            np.array_equal(
+                parameters.stackAngles_Wcsp_to_Wcs_ixyz,
+                np.array(
+                    [
+                        wing_cross_section.angles_Wcsp_to_Wcs_ixyz
+                        for wing_cross_section in wing.wing_cross_sections
+                    ]
+                ),
+            )
+        )
+        for array in parameters:
+            self.assertFalse(array.flags.writeable)
+        self.assertFalse(np.shares_memory(parameters.Ler_Gs_Cgs, wing.Ler_Gs_Cgs))
+
+    def test_parameters_match_the_built_wing(self) -> None:
+        """Test that the parameters equal the values of the Wing, and of each of its
+        WingCrossSections, built at the same time step."""
+        fixtures = core_wing_movement_fixtures
+        movements = (
+            fixtures.make_static_core_wing_movement_fixture(),
+            fixtures.make_basic_core_wing_movement_fixture(),
+            fixtures.make_sine_spacing_Ler_core_wing_movement_fixture(),
+            fixtures.make_mixed_spacing_angles_core_wing_movement_fixture(),
+            fixtures.make_multiple_periods_core_wing_movement_fixture(),
+            fixtures.make_custom_spacing_Ler_core_wing_movement_fixture(),
+            fixtures.make_custom_spacing_angles_core_wing_movement_fixture(),
+            fixtures.make_rotation_point_offset_core_wing_movement_fixture(),
+        )
+        for movement_index, movement in enumerate(movements):
+            for step in (0, 1, 7, 23, 61):
+                with self.subTest(movement_index=movement_index, step=step):
+                    self._assert_wing_parameters_match_wing(
+                        movement._generate_wing_parameters_at_time_step(step, 0.01),
+                        movement.generate_wing_at_time_step(step, 0.01),
+                    )

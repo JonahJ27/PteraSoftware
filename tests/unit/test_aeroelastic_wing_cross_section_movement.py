@@ -225,3 +225,65 @@ class TestAeroelasticWingCrossSectionMovement(unittest.TestCase):
             rtol=1e-10,
             atol=1e-14,
         )
+
+
+class TestAeroelasticWingCrossSectionMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    AeroelasticWingCrossSectionMovements."""
+
+    def test_parameters_match_the_built_wing_cross_section(self) -> None:
+        """Test that the parameters, with and without deformation, equal the values of
+        the WingCrossSection built at the same time step with the same deformation, bit
+        for bit, with read only arrays."""
+        movement = (
+            aeroelastic_wing_cross_section_movement_fixtures.make_basic_aeroelastic_wing_cross_section_movement_fixture()
+        )
+        for deformation in (None, np.array([0.1, -0.25, 0.3], dtype=float)):
+            for step in (0, 1, 7, 23, 61):
+                with self.subTest(deformation=deformation, step=step):
+                    parameters = (
+                        movement._generate_wing_cross_section_parameters_at_time_step(
+                            step,
+                            0.01,
+                            deformationAngles_Wcsp_to_Wcs_ixyz=deformation,
+                        )
+                    )
+                    wing_cross_section = (
+                        movement.generate_wing_cross_section_at_time_step(
+                            step,
+                            0.01,
+                            deformationAngles_Wcsp_to_Wcs_ixyz=deformation,
+                        )
+                    )
+                    self.assertTrue(
+                        np.array_equal(
+                            parameters.Lp_Wcsp_Lpp, wing_cross_section.Lp_Wcsp_Lpp
+                        )
+                    )
+                    self.assertTrue(
+                        np.array_equal(
+                            parameters.angles_Wcsp_to_Wcs_ixyz,
+                            wing_cross_section.angles_Wcsp_to_Wcs_ixyz,
+                        )
+                    )
+                    self.assertFalse(parameters.angles_Wcsp_to_Wcs_ixyz.flags.writeable)
+
+    def test_deformation_is_added_to_the_prescribed_angles(self) -> None:
+        """Test that the deformation is added to the prescribed angles."""
+        movement = (
+            aeroelastic_wing_cross_section_movement_fixtures.make_basic_aeroelastic_wing_cross_section_movement_fixture()
+        )
+        deformation = np.array([0.1, -0.25, 0.3], dtype=float)
+        prescribed = movement._generate_wing_cross_section_parameters_at_time_step(
+            7, 0.01
+        )
+        deformed = movement._generate_wing_cross_section_parameters_at_time_step(
+            7, 0.01, deformationAngles_Wcsp_to_Wcs_ixyz=deformation
+        )
+        self.assertTrue(
+            np.array_equal(
+                deformed.angles_Wcsp_to_Wcs_ixyz,
+                prescribed.angles_Wcsp_to_Wcs_ixyz + deformation,
+            )
+        )
+        self.assertTrue(np.array_equal(deformed.Lp_Wcsp_Lpp, prescribed.Lp_Wcsp_Lpp))

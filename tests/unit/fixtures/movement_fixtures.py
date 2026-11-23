@@ -2,7 +2,11 @@
 
 import pterasoftware as ps
 
-from . import airplane_movement_fixtures, operating_point_fixtures
+from . import (
+    aeroelastic_airplane_movement_fixtures,
+    airplane_movement_fixtures,
+    operating_point_fixtures,
+)
 
 
 def make_basic_aeroelastic_movement_fixture() -> (
@@ -366,3 +370,28 @@ def make_movement_with_multiple_airplanes_fixture() -> ps.movements.movement.Mov
 
     # Return the Movement fixture.
     return movement_with_multiple_airplanes_fixture
+
+
+def make_moving_aeroelastic_movement_fixture() -> (
+    ps.movements.aeroelastic_movement.AeroelasticMovement
+):
+    """This method makes a fixture that is an AeroelasticMovement whose geometry moves,
+    with a delta_time that is not a round number.
+
+    :return moving_aeroelastic_movement_fixture: AeroelasticMovement This is the
+        AeroelasticMovement around the basic AeroelasticAirplaneMovement fixture (whose
+        Wing's position and angles oscillate), with a delta_time of 0.037 s, for testing
+        that the movement passes its own delta_time down to its Airplanes' movements.
+    """
+    moving_aeroelastic_movement_fixture = ps.movements.aeroelastic_movement.AeroelasticMovement(
+        airplane_movements=[
+            aeroelastic_airplane_movement_fixtures.make_basic_aeroelastic_airplane_movement_fixture()
+        ],
+        operating_point_movement=ps.movements.operating_point_movement.OperatingPointMovement(
+            base_operating_point=operating_point_fixtures.make_basic_operating_point_fixture(),
+        ),
+        delta_time=0.037,
+        num_steps=4,
+    )
+
+    return moving_aeroelastic_movement_fixture

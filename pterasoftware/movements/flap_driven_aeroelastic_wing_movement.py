@@ -7,7 +7,7 @@ from typing import cast
 
 import numpy as np
 
-from .. import geometry
+from .. import _step_parameters, geometry
 from . import (
     aeroelastic_wing_cross_section_movement as aeroelastic_wing_cross_section_movement_mod,
 )
@@ -420,6 +420,46 @@ class FlapDrivenAeroelasticWingMovement(
 
         self._listOverrideAnglesX_Gs_to_Wn_ixyz.append(float(angleX_Gs_to_Wn_ixyz))
         self._angleSecondDerivativeXRad_function = angleSecondDerivativeXRad_function
+
+    def _generate_wing_parameters_at_time_step(
+        self,
+        step: int,
+        delta_time: float | int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: np.ndarray | None = None,
+        overrideAngleX_Gs_to_Wn_ixyz: float | int | None = None,
+    ) -> _step_parameters.WingStepParameters:
+        """Evaluates the motion of the Wing and of each of its WingCrossSections at a
+        single time step, using the recorded flap angle if there is one.
+
+        This is the first of the two halves of generate_wing_at_time_step. It only picks
+        the flap angle, then has the parent class's version of this method evaluate the
+        motion with it as the override, without building a Wing. The second half, the
+        inherited _wing_from_parameters, builds the Wing from the returned values.
+
+        The flap angle is resolved exactly as generate_wing_at_time_step resolves it: an
+        explicit override wins, then the flap angle recorded for this time step, and the
+        base Wing's flap angle is used only if neither exists.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: An ndarray of floats with one row per
+            WingCrossSection in this Wing, in degrees, or None. The default is None.
+        :param overrideAngleX_Gs_to_Wn_ixyz: A number (int or float) in degrees that
+            replaces the flap angle, or None. The default is None.
+        :return: The WingStepParameters at this time step.
+        """
+        if overrideAngleX_Gs_to_Wn_ixyz is None and step < len(
+            self._listOverrideAnglesX_Gs_to_Wn_ixyz
+        ):
+            overrideAngleX_Gs_to_Wn_ixyz = self._listOverrideAnglesX_Gs_to_Wn_ixyz[step]
+
+        return super()._generate_wing_parameters_at_time_step(
+            step,
+            delta_time,
+            deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+            overrideAngleX_Gs_to_Wn_ixyz=overrideAngleX_Gs_to_Wn_ixyz,
+        )
 
     def generate_wing_at_time_step(
         self,

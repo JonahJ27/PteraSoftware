@@ -1369,3 +1369,89 @@ class TestCoreAirplaneMovementDeepcopy(unittest.TestCase):
         # Second deepcopy with same memo should return same object.
         copied2 = copy.deepcopy(original, memo)
         self.assertIs(copied1, copied2)
+
+
+class TestCoreAirplaneMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    CoreAirplaneMovements."""
+
+    def _assert_wing_parameters_equal(
+        self,
+        parameters: ps._step_parameters.WingStepParameters,
+        expected: ps._step_parameters.WingStepParameters,
+    ) -> None:
+        """Asserts that two WingStepParameters are equal, bit for bit.
+
+        :param parameters: The WingStepParameters to check.
+        :param expected: The expected WingStepParameters.
+        :return: None
+        """
+        for name in (
+            "Ler_Gs_Cgs",
+            "angles_Gs_to_Wn_ixyz",
+            "stackLp_Wcsp_Lpp",
+            "stackAngles_Wcsp_to_Wcs_ixyz",
+        ):
+            self.assertTrue(
+                np.array_equal(getattr(parameters, name), getattr(expected, name)),
+                name,
+            )
+
+    def test_parameters_match_the_built_airplane_and_wing_movements(self) -> None:
+        """Test that the parameters' CG equals the CG of the Airplane built at the same
+        time step, and that each Wing's parameters equal those its movement returns, bit
+        for bit, with read only arrays."""
+        fixtures = core_airplane_movement_fixtures
+        movements = (
+            fixtures.make_static_core_airplane_movement_fixture(),
+            fixtures.make_basic_core_airplane_movement_fixture(),
+            fixtures.make_sine_spacing_Cg_core_airplane_movement_fixture(),
+            fixtures.make_custom_spacing_Cg_core_airplane_movement_fixture(),
+            fixtures.make_mixed_custom_and_standard_spacing_core_airplane_movement_fixture(),
+            fixtures.make_periodic_geometry_core_airplane_movement_fixture(),
+        )
+        for movement_index, movement in enumerate(movements):
+            for step in (0, 1, 7, 23, 61):
+                with self.subTest(movement_index=movement_index, step=step):
+                    parameters = movement._generate_airplane_parameters_at_time_step(
+                        step, 0.01
+                    )
+                    airplane = movement.generate_airplane_at_time_step(step, 0.01)
+                    self.assertTrue(
+                        np.array_equal(parameters.Cg_GP1_CgP1, airplane.Cg_GP1_CgP1)
+                    )
+                    self.assertFalse(parameters.Cg_GP1_CgP1.flags.writeable)
+                    self.assertEqual(
+                        len(parameters.wings), len(movement.wing_movements)
+                    )
+                    for wing_parameters, wing_movement in zip(
+                        parameters.wings, movement.wing_movements
+                    ):
+                        self._assert_wing_parameters_equal(
+                            wing_parameters,
+                            wing_movement._generate_wing_parameters_at_time_step(
+                                step, 0.01
+                            ),
+                        )
+
+    def test_shortcut_cg_matches_the_parameters(self) -> None:
+        """Test that the CG each step's Airplane gets from generate_airplanes (which
+        deep copies Airplanes for static and periodic geometry) equals the CG the
+        parameters give, bit for bit."""
+        fixtures = core_airplane_movement_fixtures
+        for movement in (
+            fixtures.make_sine_spacing_Cg_core_airplane_movement_fixture(),
+            fixtures.make_periodic_geometry_core_airplane_movement_fixture(),
+            fixtures.make_periodic_geometry_moving_Cg_core_airplane_movement_fixture(),
+        ):
+            airplanes = movement.generate_airplanes(num_steps=70, delta_time=0.01)
+            for step in range(70):
+                with self.subTest(step=step):
+                    self.assertTrue(
+                        np.array_equal(
+                            airplanes[step].Cg_GP1_CgP1,
+                            movement._generate_airplane_parameters_at_time_step(
+                                step, 0.01
+                            ).Cg_GP1_CgP1,
+                        )
+                    )

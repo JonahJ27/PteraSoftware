@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from .. import _core, _oscillation, geometry
+from .. import _core, _step_parameters, geometry
 
 
 class AeroelasticWingCrossSectionMovement(_core.CoreWingCrossSectionMovement):
@@ -146,6 +146,47 @@ class AeroelasticWingCrossSectionMovement(_core.CoreWingCrossSectionMovement):
             phaseAngles_Wcsp_to_Wcs_ixyz=phaseAngles_Wcsp_to_Wcs_ixyz,
         )
 
+    def _generate_wing_cross_section_parameters_at_time_step(
+        self,
+        step: int,
+        delta_time: float | int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: np.ndarray | None = None,
+    ) -> _step_parameters.WingCrossSectionStepParameters:
+        """Evaluates the WingCrossSection's motion at a single time step, optionally
+        adding structural deformation.
+
+        This is the first of the two halves of generate_wing_cross_section_at_time_step.
+        It evaluates the prescribed motion with the parent class's version of this
+        method, adds the deformation, and returns the resulting values, without building
+        a WingCrossSection. The second half, the inherited
+        _wing_cross_section_from_parameters, builds the WingCrossSection from these
+        values.
+
+        :param step: The time step index. Must be a non negative int.
+        :param delta_time: The time between each time step in seconds. Must be a
+            positive number (int or float).
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: A (3,) ndarray of floats representing
+            the structural deformation angles to add to the prescribed
+            angles_Wcsp_to_Wcs_ixyz, using an intrinsic xy'z" sequence. The units are in
+            degrees. When None, no deformation is applied. The default is None.
+        :return: The WingCrossSectionStepParameters at this time step, with the
+            deformation added to the prescribed angles if provided.
+        """
+        parameters = super()._generate_wing_cross_section_parameters_at_time_step(
+            step, delta_time
+        )
+
+        # Apply structural deformation if provided. The deformation angles are added to
+        # the prescribed angles, representing the structural response computed by the
+        # aeroelastic solver.
+        if deformationAngles_Wcsp_to_Wcs_ixyz is None:
+            return parameters
+        return parameters._replace(
+            angles_Wcsp_to_Wcs_ixyz=_step_parameters.make_read_only(
+                parameters.angles_Wcsp_to_Wcs_ixyz + deformationAngles_Wcsp_to_Wcs_ixyz
+            )
+        )
+
     def generate_wing_cross_section_at_time_step(
         self,
         step: int,
@@ -171,110 +212,125 @@ class AeroelasticWingCrossSectionMovement(_core.CoreWingCrossSectionMovement):
         :return: The WingCrossSection at this time step, with structural deformation
             applied if provided.
         """
-        time = step * delta_time
+        # Changed for the arrays rewrite: the motion, with any deformation added, is now
+        # evaluated by _generate_wing_cross_section_parameters_at_time_step, which the
+        # array path also calls, and the WingCrossSection is built from its result, so
+        # both paths read the motion from one place. The results are identical. The old
+        # body was:
+        # octowrap: off
+        # time = step * delta_time
+        #
+        # # Evaluate the oscillating value for each dimension of Lp_Wcsp_Lpp.
+        # thisLp_Wcsp_Lpp = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingLp_Wcsp_Lpp[dim]
+        #     this_amp = self._ampLp_Wcsp_Lpp[dim]
+        #     this_period = self._periodLp_Wcsp_Lpp[dim]
+        #     this_phase = self._phaseLp_Wcsp_Lpp[dim]
+        #     this_base = self._base_wing_cross_section.Lp_Wcsp_Lpp[dim]
+        #
+        #     if this_spacing == "sine":
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_sin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif this_spacing == "uniform":
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_lin_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #         )
+        #     elif callable(this_spacing):
+        #         thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_custom_at_time(
+        #             amp=this_amp,
+        #             period=this_period,
+        #             phase=this_phase,
+        #             base=this_base,
+        #             time=time,
+        #             custom_function=this_spacing,
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Evaluate the oscillating value for each dimension of angles_Wcsp_to_Wcs_ixyz.
+        # theseAngles_Wcsp_to_Wcs_ixyz = np.zeros(3, dtype=float)
+        # for dim in range(3):
+        #     this_spacing = self._spacingAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_amp = self._ampAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_period = self._periodAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_phase = self._phaseAngles_Wcsp_to_Wcs_ixyz[dim]
+        #     this_base = self._base_wing_cross_section.angles_Wcsp_to_Wcs_ixyz[dim]
+        #
+        #     if this_spacing == "sine":
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_sin_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #             )
+        #         )
+        #     elif this_spacing == "uniform":
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_lin_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #             )
+        #         )
+        #     elif callable(this_spacing):
+        #         theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
+        #             _oscillation.oscillating_custom_at_time(
+        #                 amp=this_amp,
+        #                 period=this_period,
+        #                 phase=this_phase,
+        #                 base=this_base,
+        #                 time=time,
+        #                 custom_function=this_spacing,
+        #             )
+        #         )
+        #     else:
+        #         raise ValueError(f"Invalid spacing value: {this_spacing}")
+        #
+        # # Apply structural deformation if provided. The deformation angles are added to
+        # # the prescribed angles, representing the structural response computed by the
+        # # aeroelastic solver.
+        # if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
+        #     theseAngles_Wcsp_to_Wcs_ixyz = (
+        #         theseAngles_Wcsp_to_Wcs_ixyz + deformationAngles_Wcsp_to_Wcs_ixyz
+        #     )
+        #
+        # return geometry.wing_cross_section.WingCrossSection(
+        #     airfoil=self._base_wing_cross_section.airfoil,
+        #     num_spanwise_panels=self._base_wing_cross_section.num_spanwise_panels,
+        #     chord=self._base_wing_cross_section.chord,
+        #     Lp_Wcsp_Lpp=thisLp_Wcsp_Lpp,
+        #     angles_Wcsp_to_Wcs_ixyz=theseAngles_Wcsp_to_Wcs_ixyz,
+        #     control_surface_symmetry_type=(
+        #         self._base_wing_cross_section.control_surface_symmetry_type
+        #     ),
+        #     control_surface_hinge_point=(
+        #         self._base_wing_cross_section.control_surface_hinge_point
+        #     ),
+        #     control_surface_deflection=(
+        #         self._base_wing_cross_section.control_surface_deflection
+        #     ),
+        #     spanwise_spacing=self._base_wing_cross_section.spanwise_spacing,
+        # )
+        # octowrap: on
 
-        # Evaluate the oscillating value for each dimension of Lp_Wcsp_Lpp.
-        thisLp_Wcsp_Lpp = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingLp_Wcsp_Lpp[dim]
-            this_amp = self._ampLp_Wcsp_Lpp[dim]
-            this_period = self._periodLp_Wcsp_Lpp[dim]
-            this_phase = self._phaseLp_Wcsp_Lpp[dim]
-            this_base = self._base_wing_cross_section.Lp_Wcsp_Lpp[dim]
-
-            if this_spacing == "sine":
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_sin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif this_spacing == "uniform":
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_lin_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                )
-            elif callable(this_spacing):
-                thisLp_Wcsp_Lpp[dim] = _oscillation.oscillating_custom_at_time(
-                    amp=this_amp,
-                    period=this_period,
-                    phase=this_phase,
-                    base=this_base,
-                    time=time,
-                    custom_function=this_spacing,
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Evaluate the oscillating value for each dimension of angles_Wcsp_to_Wcs_ixyz.
-        theseAngles_Wcsp_to_Wcs_ixyz = np.zeros(3, dtype=float)
-        for dim in range(3):
-            this_spacing = self._spacingAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_amp = self._ampAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_period = self._periodAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_phase = self._phaseAngles_Wcsp_to_Wcs_ixyz[dim]
-            this_base = self._base_wing_cross_section.angles_Wcsp_to_Wcs_ixyz[dim]
-
-            if this_spacing == "sine":
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_sin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                )
-            elif this_spacing == "uniform":
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_lin_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                    )
-                )
-            elif callable(this_spacing):
-                theseAngles_Wcsp_to_Wcs_ixyz[dim] = (
-                    _oscillation.oscillating_custom_at_time(
-                        amp=this_amp,
-                        period=this_period,
-                        phase=this_phase,
-                        base=this_base,
-                        time=time,
-                        custom_function=this_spacing,
-                    )
-                )
-            else:
-                raise ValueError(f"Invalid spacing value: {this_spacing}")
-
-        # Apply structural deformation if provided. The deformation angles are added to
-        # the prescribed angles, representing the structural response computed by the
-        # aeroelastic solver.
-        if deformationAngles_Wcsp_to_Wcs_ixyz is not None:
-            theseAngles_Wcsp_to_Wcs_ixyz = (
-                theseAngles_Wcsp_to_Wcs_ixyz + deformationAngles_Wcsp_to_Wcs_ixyz
+        return self._wing_cross_section_from_parameters(
+            self._generate_wing_cross_section_parameters_at_time_step(
+                step,
+                delta_time,
+                deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
             )
-
-        return geometry.wing_cross_section.WingCrossSection(
-            airfoil=self._base_wing_cross_section.airfoil,
-            num_spanwise_panels=self._base_wing_cross_section.num_spanwise_panels,
-            chord=self._base_wing_cross_section.chord,
-            Lp_Wcsp_Lpp=thisLp_Wcsp_Lpp,
-            angles_Wcsp_to_Wcs_ixyz=theseAngles_Wcsp_to_Wcs_ixyz,
-            control_surface_symmetry_type=(
-                self._base_wing_cross_section.control_surface_symmetry_type
-            ),
-            control_surface_hinge_point=(
-                self._base_wing_cross_section.control_surface_hinge_point
-            ),
-            control_surface_deflection=(
-                self._base_wing_cross_section.control_surface_deflection
-            ),
-            spanwise_spacing=self._base_wing_cross_section.spanwise_spacing,
         )

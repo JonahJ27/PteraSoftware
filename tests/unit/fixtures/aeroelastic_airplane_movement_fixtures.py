@@ -211,3 +211,78 @@ def make_mixed_wing_aeroelastic_airplane_movement_fixture() -> (
 
     # Return the AeroelasticAirplaneMovement fixture.
     return mixed_wing_aeroelastic_airplane_movement_fixture
+
+
+def make_two_aeroelastic_wings_airplane_movement_fixture() -> (
+    ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement
+):
+    """This method makes a fixture that is an AeroelasticAirplaneMovement with two
+    AeroelasticWingMovement children.
+
+    :return two_aeroelastic_wings_airplane_movement_fixture: AeroelasticAirplaneMovement
+        This is the AeroelasticAirplaneMovement with two Wings, each moved by its own
+        AeroelasticWingMovement, for testing that each Wing receives its own
+        deformation. The second Wing sits behind the first. Each Wing's root
+        WingCrossSection's movement stays static, and its tip WingCrossSection's
+        movement oscillates its angles.
+    """
+    # Initialize the constructing fixtures. Build the base Airplane first, then build
+    # the movements from the Airplane's own Wings and WingCrossSections so that they
+    # match after the Airplane's symmetry processing.
+    front_wing = geometry_fixtures.make_origin_wing_fixture()
+    back_wing = ps.geometry.wing.Wing(
+        wing_cross_sections=[
+            geometry_fixtures.make_root_wing_cross_section_fixture(),
+            geometry_fixtures.make_tip_wing_cross_section_fixture(),
+        ],
+        name="Back Wing",
+        Ler_Gs_Cgs=(2.0, 0.0, 0.0),
+        angles_Gs_to_Wn_ixyz=(0.0, 0.0, 0.0),
+        symmetric=False,
+        mirror_only=False,
+        symmetryNormal_G=None,
+        symmetryPoint_G_Cg=None,
+        num_chordwise_panels=8,
+        chordwise_spacing="cosine",
+    )
+    base_airplane = ps.geometry.airplane.Airplane(
+        wings=[front_wing, back_wing],
+        name="Two Wing Airplane",
+        Cg_GP1_CgP1=(0.0, 0.0, 0.0),
+        weight=0.0,
+    )
+
+    wing_movements: list[
+        ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement
+        | ps.movements.wing_movement.WingMovement
+    ] = []
+    for wing in base_airplane.wings:
+        root_wing_cross_section, tip_wing_cross_section = wing.wing_cross_sections
+        wing_movements.append(
+            ps.movements.aeroelastic_wing_movement.AeroelasticWingMovement(
+                base_wing=wing,
+                wing_cross_section_movements=[
+                    ps.movements.aeroelastic_wing_cross_section_movement.AeroelasticWingCrossSectionMovement(
+                        base_wing_cross_section=root_wing_cross_section,
+                    ),
+                    ps.movements.aeroelastic_wing_cross_section_movement.AeroelasticWingCrossSectionMovement(
+                        base_wing_cross_section=tip_wing_cross_section,
+                        ampAngles_Wcsp_to_Wcs_ixyz=(15.0, 10.0, 5.0),
+                        periodAngles_Wcsp_to_Wcs_ixyz=(2.0, 2.0, 2.0),
+                        spacingAngles_Wcsp_to_Wcs_ixyz=("sine", "sine", "sine"),
+                        phaseAngles_Wcsp_to_Wcs_ixyz=(0.0, 0.0, 0.0),
+                    ),
+                ],
+            )
+        )
+
+    # Create the AeroelasticAirplaneMovement.
+    two_aeroelastic_wings_airplane_movement_fixture = (
+        ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement(
+            base_airplane=base_airplane,
+            wing_movements=wing_movements,
+        )
+    )
+
+    # Return the AeroelasticAirplaneMovement fixture.
+    return two_aeroelastic_wings_airplane_movement_fixture

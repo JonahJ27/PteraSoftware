@@ -3,9 +3,12 @@
 import unittest
 from typing import Any
 
+import numpy as np
+
 import pterasoftware as ps
 from tests.unit.fixtures import (
     airplane_movement_fixtures,
+    flap_drive_fixtures,
     free_flight_movement_fixtures,
     free_flight_operating_point_movement_fixtures,
     geometry_fixtures,
@@ -442,3 +445,90 @@ class TestFreeFlightMovementImmutability(unittest.TestCase):
         """Test that airplane_movements property is read only."""
         with self.assertRaises(AttributeError):
             setattr(self.basic_free_flight_movement, "airplane_movements", ())
+
+
+class TestFreeFlightAeroelasticMovementStepParameters(unittest.TestCase):
+    """This is a class with functions to test the per time step parameters of
+    FreeFlightAeroelasticMovements."""
+
+    def test_parameters_delegate_with_internal_delta_time(self) -> None:
+        """Test that the parameters equal those of the Airplane's movement at the
+        movement's own delta_time, with the deformation passed through."""
+        movement = (
+            flap_drive_fixtures.make_free_flight_flap_driven_aeroelastic_movement_fixture()
+        )
+        airplane_movement = movement.airplane_movements[0]
+        assert isinstance(
+            airplane_movement,
+            ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement,
+        )
+        deformations: list[np.ndarray | None] = []
+        for wing_movement in airplane_movement.wing_movements:
+            deformation = np.full(
+                (len(wing_movement.wing_cross_section_movements), 3), 0.2, dtype=float
+            )
+            # A Wing's root WingCrossSection must keep zero angles, so it never deforms.
+            deformation[0] = 0.0
+            deformations.append(deformation)
+        for deformation_list in (None, deformations):
+            for step in (0, 1, 3):
+                with self.subTest(deformation_list=deformation_list, step=step):
+                    parameters = movement._generate_airplane_parameters_at_time_step(
+                        0, step, deformationAngles_Wcsp_to_Wcs_ixyz=deformation_list
+                    )
+                    expected = (
+                        airplane_movement._generate_airplane_parameters_at_time_step(
+                            step,
+                            movement.delta_time,
+                            deformationAngles_Wcsp_to_Wcs_ixyz=deformation_list,
+                        )
+                    )
+                    self.assertTrue(
+                        np.array_equal(parameters.Cg_GP1_CgP1, expected.Cg_GP1_CgP1)
+                    )
+                    for wing_parameters, expected_wing in zip(
+                        parameters.wings, expected.wings
+                    ):
+                        for array, expected_array in zip(
+                            wing_parameters, expected_wing
+                        ):
+                            self.assertTrue(np.array_equal(array, expected_array))
+
+    def test_parameters_use_the_movements_own_delta_time(self) -> None:
+        """Test that, for moving geometry and a delta_time of 0.037 s, the parameters
+        equal those of the Airplane's movement at the movement's own delta_time and
+        differ from those at another delta_time."""
+        movement = (
+            free_flight_movement_fixtures.make_moving_free_flight_aeroelastic_movement_fixture()
+        )
+        airplane_movement = movement.airplane_movements[0]
+        assert isinstance(
+            airplane_movement,
+            ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement,
+        )
+        self.assertEqual(movement.delta_time, 0.037)
+        for step in (1, 2, 3):
+            with self.subTest(step=step):
+                parameters = movement._generate_airplane_parameters_at_time_step(
+                    0, step
+                )
+                expected = airplane_movement._generate_airplane_parameters_at_time_step(
+                    step, 0.037
+                )
+                elsewhere = (
+                    airplane_movement._generate_airplane_parameters_at_time_step(
+                        step, 0.1
+                    )
+                )
+                self.assertTrue(
+                    np.array_equal(
+                        parameters.wings[0].angles_Gs_to_Wn_ixyz,
+                        expected.wings[0].angles_Gs_to_Wn_ixyz,
+                    )
+                )
+                self.assertFalse(
+                    np.array_equal(
+                        parameters.wings[0].angles_Gs_to_Wn_ixyz,
+                        elsewhere.wings[0].angles_Gs_to_Wn_ixyz,
+                    )
+                )

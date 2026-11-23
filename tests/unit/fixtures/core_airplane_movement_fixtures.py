@@ -462,3 +462,41 @@ def make_3_chordwise_panels_core_airplane_movement_fixture() -> CoreAirplaneMove
     )
 
     return fixture
+
+
+def make_periodic_geometry_moving_Cg_core_airplane_movement_fixture() -> (
+    CoreAirplaneMovement
+):
+    """This method makes a fixture that is a CoreAirplaneMovement with periodic geometry
+    motion and a moving CG, for testing that the periodic geometry shortcut in
+    generate_airplanes still evaluates the CG at every time step.
+
+    The Wing's motion has a 0.1 s period and the CG's a 0.2 s period, so the geometry
+    repeats every 0.2 s (20 steps at a delta_time of 0.01 s), and every later time step
+    is a deep copy whose CG is evaluated separately.
+
+    :return periodic_geometry_moving_Cg_core_airplane_movement_fixture:
+        CoreAirplaneMovement This is the CoreAirplaneMovement with periodic geometry and
+        a moving CG.
+    """
+    # Initialize the constructing fixtures. Build the base Airplane first, then build
+    # the CoreWingMovement around its own Wing.
+    base_airplane = geometry_fixtures.make_origin_airplane_fixture()
+    wing_movements = [
+        core_wing_movement_fixtures.make_periodic_geometry_core_wing_movement_fixture(
+            base_airplane.wings[0]
+        )
+    ]
+
+    # Create the CoreAirplaneMovement.
+    periodic_geometry_moving_Cg_core_airplane_movement_fixture = CoreAirplaneMovement(
+        base_airplane=base_airplane,
+        wing_movements=wing_movements,
+        ampCg_GP1_CgP1=(0.05, 0.0, 0.02),
+        periodCg_GP1_CgP1=(0.2, 0.0, 0.2),
+        spacingCg_GP1_CgP1=("sine", "sine", "uniform"),
+        phaseCg_GP1_CgP1=(0.0, 0.0, 45.0),
+    )
+
+    # Return the CoreAirplaneMovement fixture.
+    return periodic_geometry_moving_Cg_core_airplane_movement_fixture
