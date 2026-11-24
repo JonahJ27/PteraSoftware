@@ -11,7 +11,7 @@ import unittest
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import solver_fixtures
+from tests.integration.fixtures import array_path_fixtures, solver_fixtures
 
 
 class TestForceMethodsComparison(unittest.TestCase):
@@ -216,3 +216,29 @@ class TestForceMethodsVariableGeometry(unittest.TestCase):
             force_method="katz",
         )
         self.assertTrue(solver.ran)
+
+
+class TestForceMethodsArrayPath(unittest.TestCase):
+    """This is a class for testing that both force methods give the same loads on the
+    array path as on the object path."""
+
+    def test_both_methods_match_the_object_path(self) -> None:
+        """Test that, for both force methods, on static and variable geometry, running
+        the solver with use_arrays=True gives the object path's loads at every time
+        step, to round off."""
+        for make_solver in (
+            solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_static_geometry,
+            solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_variable_geometry,
+        ):
+            for force_method in ("joukowski", "katz"):
+                with self.subTest(
+                    make_solver=make_solver.__name__, force_method=force_method
+                ):
+                    object_solver, array_solver = (
+                        array_path_fixtures.make_solvers_run_on_both_paths(
+                            make_solver, force_method=force_method
+                        )
+                    )
+                    array_path_fixtures.assert_loads_match(
+                        self, object_solver, array_solver
+                    )

@@ -14,6 +14,7 @@ from . import (
     _aerodynamics_functions,
     _core,
     _functions,
+    _loads_arrays,
     _logging,
     _mesh_arrays,
     _panel,
@@ -51,6 +52,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_mesh_plans",
         "_layout_plan",
         "_step_geometries",
+        "_current_step_loads",
         "current_airplanes",
         "current_operating_point",
         "num_airplanes",
@@ -178,6 +180,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # reads the next one's ring vortex corners. Like the plans, they are run scoped:
         # an empty dict during a run with use_arrays=True, and None otherwise.
         self._step_geometries: dict[int, _step_geometry.StepGeometry] | None = None
+
+        # The array path's loads at the current aerodynamic evaluation, from
+        # _loads_arrays.step_loads. Like the plans, they are run scoped: None outside a
+        # run with use_arrays=True, and before the first loads of one.
+        self._current_step_loads: _loads_arrays.StepLoads | None = None
 
         first_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(0)
 
@@ -475,9 +482,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
             faster and gives the same results to round off. The objects a user reads
             after the run are still available. The array path is being built in stages,
             and the stages not converted yet still run on the objects. It doesn't yet
-            support ground effect, multiple Airplanes, or the "katz" force method, and
-            raises a ValueError for them. It can be a bool or a numpy bool and will be
-            converted internally to a bool. The default is False.
+            support ground effect or multiple Airplanes, and raises a ValueError for
+            them. It can be a bool or a numpy bool and will be converted internally to a
+            bool. The default is False.
         :return: None
         """
         self._prescribed_wake = _parameter_validation.boolLike_return_bool(
@@ -647,6 +654,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         self._mesh_plans = None
         self._layout_plan = None
         self._step_geometries = None
+        self._current_step_loads = None
 
         # Mark that the solver has run.
         self._ran = True
@@ -658,8 +666,12 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :return: None
         """
         unsupported = []
-        if self._force_method == "katz":
-            unsupported.append('the "katz" force method')
+        # Changed for the arrays rewrite: the array path now supports the "katz" force
+        # method (step 4), so it is no longer rejected. The old check was:
+        # octowrap: off
+        # if self._force_method == "katz":
+        #     unsupported.append('the "katz" force method')
+        # octowrap: on
         if self.num_airplanes > 1:
             unsupported.append("multiple Airplanes")
         if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
@@ -1762,120 +1774,30 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         :return: None
         """
-        # Initialize a variable to hold the global Panel position as we iterate through
-        # them.
-        global_panel_position = 0
-
-        # Initialize three 1D ndarrays to hold the effective strength of the Panels'
-        # ring vortices' line vortices.
-        effective_right_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
-        effective_front_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
-        effective_left_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
-        effective_back_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
-
-        # Iterate through the Airplanes' Wings. Within a Wing, Panels are laid out in
-        # row major (chordwise outer, spanwise inner) order, so neighboring Panel
-        # strengths can be found at fixed offsets from the current global Panel
-        # position: +1 right, -1 left, +num_spanwise_panels back, -num_spanwise_panels
-        # front.
-        for airplane in self.current_airplanes:
-            for wing in airplane.wings:
-                _panels = wing.panels
-                assert _panels is not None
-
-                num_spanwise = wing.num_spanwise_panels
-                assert num_spanwise is not None
-
-                # Convert this Wing's 2D ndarray of Panels into a 1D ndarray.
-                panels = np.ravel(_panels)
-
-                # Iterate through this Wing's 1D ndarray of Panels.
-                panel: _panel.Panel
-                for panel in panels:
-                    this_strength = self._current_bound_vortex_strengths[
-                        global_panel_position
-                    ]
-
-                    if panel.is_right_edge:
-                        effective_right_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                        )
-                    else:
-                        # Set the effective right line vortex strength to 1 / 2 the
-                        # difference between this Panel's bound ring vortex strength and
-                        # that of the Panel to the right.
-                        effective_right_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                            - self._current_bound_vortex_strengths[
-                                global_panel_position + 1
-                            ]
-                        ) / 2
-
-                    if panel.is_leading_edge:
-                        effective_front_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                        )
-                    else:
-                        # Set the effective front line vortex strength to 1 / 2 the
-                        # difference between this Panel's bound ring vortex strength and
-                        # that of the Panel in front of it.
-                        effective_front_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                            - self._current_bound_vortex_strengths[
-                                global_panel_position - num_spanwise
-                            ]
-                        ) / 2
-
-                    if panel.is_left_edge:
-                        effective_left_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                        )
-                    else:
-                        # Set the effective left line vortex strength to 1 / 2 the
-                        # difference between this Panel's bound ring vortex strength and
-                        # that of the Panel to the left.
-                        effective_left_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                            - self._current_bound_vortex_strengths[
-                                global_panel_position - 1
-                            ]
-                        ) / 2
-
-                    if panel.is_trailing_edge:
-                        if self._current_step == 0:
-                            # No wake ring vortex exists yet to cancel out this Panel's
-                            # back line vortex contribution, so the effective back
-                            # strength is the full ring vortex strength.
-                            effective_back_line_vortex_strengths[
-                                global_panel_position
-                            ] = this_strength
-                        else:
-                            # The Panel's back line vortex is partially canceled by the
-                            # front line vortex of the wake ring vortex immediately to
-                            # its rear. That wake ring vortex carries the strength this
-                            # Panel's bound ring vortex had last time step, so the
-                            # effective back strength is the difference between this
-                            # step and the last.
-                            effective_back_line_vortex_strengths[
-                                global_panel_position
-                            ] = (
-                                this_strength
-                                - self._last_bound_vortex_strengths[
-                                    global_panel_position
-                                ]
-                            )
-                    else:
-                        # Set the effective back line vortex strength to 1 / 2 the
-                        # difference between this Panel's bound ring vortex strength and
-                        # that of the Panel to the back.
-                        effective_back_line_vortex_strengths[global_panel_position] = (
-                            this_strength
-                            - self._current_bound_vortex_strengths[
-                                global_panel_position + num_spanwise
-                            ]
-                        ) / 2
-
-                    global_panel_position += 1
+        # Changed for the arrays rewrite: the effective line vortex strengths used to be
+        # found here by walking every Panel for its edge flags. The object path still
+        # does that, in _effective_line_vortex_strengths_from_panels, unchanged. The
+        # array path finds them from the LayoutPlan's neighbors and edge flags.
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            (
+                effective_right_line_vortex_strengths,
+                effective_front_line_vortex_strengths,
+                effective_left_line_vortex_strengths,
+                effective_back_line_vortex_strengths,
+            ) = _loads_arrays.effective_line_vortex_strengths(
+                self._layout_plan,
+                self._current_bound_vortex_strengths,
+                self._last_bound_vortex_strengths,
+                self._current_step,
+            )
+        else:
+            (
+                effective_right_line_vortex_strengths,
+                effective_front_line_vortex_strengths,
+                effective_left_line_vortex_strengths,
+                effective_back_line_vortex_strengths,
+            ) = self._effective_line_vortex_strengths_from_panels()
 
         # Calculate the velocity (in the first Airplane's geometry axes, observed from
         # the Earth frame) at the center of every Panels' ring vortex's right line
@@ -2102,6 +2024,141 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         self._process_panel_loads_hook(forces_GP1, moments_GP1_CgP1)
 
+    def _effective_line_vortex_strengths_from_panels(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Finds the effective strengths of every Panel's ring vortex's right, front,
+        left, and back line vortices by walking the Panels, on the object path.
+
+        This is _calculate_loads_joukowski's Panel loop, moved here unchanged for the
+        arrays rewrite.
+
+        :return: Four (num_panels,) ndarrays of floats representing the right, front,
+            left, and back line vortices' effective strengths. The units are in meters
+            squared per second.
+        """
+        # Initialize a variable to hold the global Panel position as we iterate through
+        # them.
+        global_panel_position = 0
+
+        # Initialize three 1D ndarrays to hold the effective strength of the Panels'
+        # ring vortices' line vortices.
+        effective_right_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
+        effective_front_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
+        effective_left_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
+        effective_back_line_vortex_strengths = np.zeros(self.num_panels, dtype=float)
+
+        # Iterate through the Airplanes' Wings. Within a Wing, Panels are laid out in
+        # row major (chordwise outer, spanwise inner) order, so neighboring Panel
+        # strengths can be found at fixed offsets from the current global Panel
+        # position: +1 right, -1 left, +num_spanwise_panels back, -num_spanwise_panels
+        # front.
+        for airplane in self.current_airplanes:
+            for wing in airplane.wings:
+                _panels = wing.panels
+                assert _panels is not None
+
+                num_spanwise = wing.num_spanwise_panels
+                assert num_spanwise is not None
+
+                # Convert this Wing's 2D ndarray of Panels into a 1D ndarray.
+                panels = np.ravel(_panels)
+
+                # Iterate through this Wing's 1D ndarray of Panels.
+                panel: _panel.Panel
+                for panel in panels:
+                    this_strength = self._current_bound_vortex_strengths[
+                        global_panel_position
+                    ]
+
+                    if panel.is_right_edge:
+                        effective_right_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                        )
+                    else:
+                        # Set the effective right line vortex strength to 1 / 2 the
+                        # difference between this Panel's bound ring vortex strength and
+                        # that of the Panel to the right.
+                        effective_right_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                            - self._current_bound_vortex_strengths[
+                                global_panel_position + 1
+                            ]
+                        ) / 2
+
+                    if panel.is_leading_edge:
+                        effective_front_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                        )
+                    else:
+                        # Set the effective front line vortex strength to 1 / 2 the
+                        # difference between this Panel's bound ring vortex strength and
+                        # that of the Panel in front of it.
+                        effective_front_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                            - self._current_bound_vortex_strengths[
+                                global_panel_position - num_spanwise
+                            ]
+                        ) / 2
+
+                    if panel.is_left_edge:
+                        effective_left_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                        )
+                    else:
+                        # Set the effective left line vortex strength to 1 / 2 the
+                        # difference between this Panel's bound ring vortex strength and
+                        # that of the Panel to the left.
+                        effective_left_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                            - self._current_bound_vortex_strengths[
+                                global_panel_position - 1
+                            ]
+                        ) / 2
+
+                    if panel.is_trailing_edge:
+                        if self._current_step == 0:
+                            # No wake ring vortex exists yet to cancel out this Panel's
+                            # back line vortex contribution, so the effective back
+                            # strength is the full ring vortex strength.
+                            effective_back_line_vortex_strengths[
+                                global_panel_position
+                            ] = this_strength
+                        else:
+                            # The Panel's back line vortex is partially canceled by the
+                            # front line vortex of the wake ring vortex immediately to
+                            # its rear. That wake ring vortex carries the strength this
+                            # Panel's bound ring vortex had last time step, so the
+                            # effective back strength is the difference between this
+                            # step and the last.
+                            effective_back_line_vortex_strengths[
+                                global_panel_position
+                            ] = (
+                                this_strength
+                                - self._last_bound_vortex_strengths[
+                                    global_panel_position
+                                ]
+                            )
+                    else:
+                        # Set the effective back line vortex strength to 1 / 2 the
+                        # difference between this Panel's bound ring vortex strength and
+                        # that of the Panel to the back.
+                        effective_back_line_vortex_strengths[global_panel_position] = (
+                            this_strength
+                            - self._current_bound_vortex_strengths[
+                                global_panel_position + num_spanwise
+                            ]
+                        ) / 2
+
+                    global_panel_position += 1
+
+        return (
+            effective_right_line_vortex_strengths,
+            effective_front_line_vortex_strengths,
+            effective_left_line_vortex_strengths,
+            effective_back_line_vortex_strengths,
+        )
+
     def _process_panel_loads_hook(
         self,
         forces_GP1: np.ndarray,
@@ -2125,6 +2182,28 @@ class UnsteadyRingVortexLatticeMethodSolver:
             every Panel at the current time step. The units are in Newton-meters.
         :return: None
         """
+        # Changed for the arrays rewrite: the array path finds every load as arrays and
+        # keeps them, then writes them onto the Panels and Airplanes, which output and
+        # the coupled problems still read (until step 7 of the arrays rewrite).
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            self._current_step_loads = _loads_arrays.step_loads(
+                self._layout_plan,
+                forces_GP1,
+                moments_GP1_CgP1,
+                self.current_operating_point.T_pas_GP1_CgP1_to_W_CgP1,
+                self.current_operating_point.qInf__E,
+                [airplane.Cg_GP1_CgP1 for airplane in self.current_airplanes],
+                [
+                    (airplane.s_ref, airplane.c_ref, airplane.b_ref)
+                    for airplane in self.current_airplanes
+                ],
+            )
+            _loads_arrays.apply_step_loads_to_objects(
+                self._current_step_loads, self.panels, self.current_airplanes
+            )
+            return
+
         _functions.process_solver_loads(self, forces_GP1, moments_GP1_CgP1)
 
     def _calculate_wake_grid_induced_velocities(
@@ -2409,6 +2488,16 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :return: A (num_panels,) ndarray of floats representing the average chordwise
             vorticity density for each Panel. The units are in meters per second.
         """
+        # Changed for the arrays rewrite: the array path finds these from the
+        # LayoutPlan's neighbors and edge flags rather than by walking the Panels.
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            return _loads_arrays.chordwise_vorticity_densities(
+                self._layout_plan,
+                self._current_bound_vortex_strengths,
+                self._panel_chord_lengths,
+            )
+
         chordwise_densities = np.zeros(self.num_panels, dtype=float)
         global_panel_position = 0
 
@@ -2482,6 +2571,16 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :return: A (num_panels,) ndarray of floats representing the average spanwise
             vorticity density for each Panel. The units are in meters per second.
         """
+        # Changed for the arrays rewrite: the array path finds these from the
+        # LayoutPlan's neighbors and edge flags rather than by walking the Panels.
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            return _loads_arrays.spanwise_vorticity_densities(
+                self._layout_plan,
+                self._current_bound_vortex_strengths,
+                self._panel_span_lengths,
+            )
+
         spanwise_densities = np.zeros(self.num_panels, dtype=float)
         global_panel_position = 0
 
@@ -2778,6 +2877,14 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :return: A (num_panels,) ndarray of floats for the vorticity differences. The
             units are in meters squared per second.
         """
+        # Changed for the arrays rewrite: the array path finds these from the
+        # LayoutPlan's neighbors and edge flags rather than by walking the Panels.
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            return _loads_arrays.chordwise_vorticity_differences(
+                self._layout_plan, self._current_bound_vortex_strengths
+            )
+
         differences = np.zeros(self.num_panels, dtype=float)
         global_panel_position = 0
 

@@ -6,7 +6,7 @@ from typing import cast
 
 import numpy as np
 
-from . import _functions, problems
+from . import _functions, _loads_arrays, problems
 from ._coupled_unsteady_ring_vortex_lattice_method import (
     CoupledUnsteadyRingVortexLatticeMethodSolver,
 )
@@ -160,6 +160,22 @@ class AeroelasticUnsteadyRingVortexLatticeMethodSolver(
             every Panel at the current time step. The units are in Newton-meters.
         :return: None
         """
+        # Changed for the arrays rewrite: the array path reads the strip leading edge
+        # points from the time step's geometry rather than from the Panels, and finds
+        # the moments with the same formula.
+        if self._use_arrays:
+            assert self._step_geometries is not None
+            self._stackSlep_GP1_CgP1 = _loads_arrays.strip_leading_edge_points(
+                self._step_geometries[self._current_step],
+                self._slep_outboard_is_left,
+                self._slep_point_indices,
+            )
+            self.moments_GP1_Slep = _loads_arrays.strip_leading_edge_moments(
+                forces_GP1, moments_GP1_CgP1, self._stackSlep_GP1_CgP1
+            )
+            super()._process_panel_loads_hook(forces_GP1, moments_GP1_CgP1)
+            return
+
         self._populate_slep_positions()
 
         self.moments_GP1_Slep = moments_GP1_CgP1 - _functions.numba_1d_explicit_cross(

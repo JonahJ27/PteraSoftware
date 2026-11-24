@@ -72,6 +72,58 @@ class TestBuildLayoutPlan(unittest.TestCase):
                     offset += shape[0] * shape[1]
                 self.assertEqual(offset, plan.num_panels)
 
+                # Each Panel's neighbors are the fixed offsets the Kutta-Joukowski
+                # method's Panel loop uses (one column to the right or left, one row of
+                # num_spanwise_panels in front or behind), and its own index on the
+                # matching edge.
+                for (num_chordwise_panels, num_spanwise_panels), wing_offset in zip(
+                    plan.wing_shapes, plan.wing_offsets
+                ):
+                    for row in range(num_chordwise_panels):
+                        for column in range(num_spanwise_panels):
+                            index = wing_offset + row * num_spanwise_panels + column
+                            self.assertEqual(
+                                plan.right_neighbors[index],
+                                (
+                                    index
+                                    if column == num_spanwise_panels - 1
+                                    else index + 1
+                                ),
+                            )
+                            self.assertEqual(
+                                plan.left_neighbors[index],
+                                index if column == 0 else index - 1,
+                            )
+                            self.assertEqual(
+                                plan.front_neighbors[index],
+                                index if row == 0 else index - num_spanwise_panels,
+                            )
+                            self.assertEqual(
+                                plan.back_neighbors[index],
+                                (
+                                    index
+                                    if row == num_chordwise_panels - 1
+                                    else index + num_spanwise_panels
+                                ),
+                            )
+                for name in (
+                    "right_neighbors",
+                    "front_neighbors",
+                    "left_neighbors",
+                    "back_neighbors",
+                ):
+                    self.assertFalse(getattr(plan, name).flags.writeable)
+
+                # Each Airplane's Panel range covers its Wings' Panels, in order.
+                start = 0
+                self.assertEqual(len(plan.airplane_panel_ranges), len(airplanes))
+                for airplane, (range_start, range_stop) in zip(
+                    airplanes, plan.airplane_panel_ranges
+                ):
+                    self.assertEqual(range_start, start)
+                    start += airplane.num_panels
+                    self.assertEqual(range_stop, start)
+
 
 # The largest differences allowed between the array path's step geometry and the object
 # path's, in meters for positions and lengths, and unitless for unit vectors. Positions

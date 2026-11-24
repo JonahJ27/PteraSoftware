@@ -166,12 +166,12 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                     solver.run(use_arrays=invalid, show_progress=False)
 
     def test_array_path_rejects_unsupported_features(self) -> None:
-        """Test that use_arrays=True raises a ValueError naming the feature for the
-        "katz" force method, multiple Airplanes, and ground effect, before solving."""
-        with self.assertRaisesRegex(ValueError, "katz"):
-            solver_fixtures.make_unsteady_ring_solver_fixture().run(
-                use_arrays=True, force_method="katz", show_progress=False
-            )
+        """Test that use_arrays=True raises a ValueError naming the feature for multiple
+        Airplanes and ground effect, before solving, and accepts the "katz" force
+        method."""
+        solver_fixtures.make_unsteady_ring_solver_fixture().run(
+            use_arrays=True, force_method="katz", show_progress=False
+        )
 
         multi_airplane_solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
             problem_fixtures.make_multi_airplane_unsteady_problem_fixture()
@@ -226,6 +226,87 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                         else:
                             np.testing.assert_allclose(
                                 array_value, object_value, rtol=1.0e-12, atol=1.0e-12
+                            )
+
+    def test_array_path_loads_match_the_object_path(self) -> None:
+        """Test that, at every time step and for both force methods, the array path's
+        loads on the Airplanes and Panels match the object path's to round off, that
+        they are the loads the array path keeps, and that the kept loads are cleared
+        when the run ends."""
+        makers = (
+            solver_fixtures.make_unsteady_ring_solver_fixture,
+            lambda: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+                problem_fixtures.make_pitching_tip_unsteady_problem_fixture()
+            ),
+            solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture,
+        )
+        calculate_loads = (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver._calculate_loads
+        )
+        for maker_index, make in enumerate(makers):
+            for force_method in ("joukowski", "katz"):
+                records: dict[bool, list[dict[str, Any]]] = {}
+                for use_arrays in (False, True):
+                    solver = make()
+                    steps: list[dict[str, Any]] = []
+
+                    def recording_calculate_loads(self: Any) -> None:
+                        calculate_loads(self)
+                        airplane = self.current_airplanes[0]
+                        record: dict[str, Any] = {
+                            "forces_W": np.copy(airplane.forces_W),
+                            "moments_W_CgP1": np.copy(airplane.moments_W_CgP1),
+                            "momentCoefficients_W_Cg": np.copy(
+                                airplane.momentCoefficients_W_Cg
+                            ),
+                            "panel_forces_GP1": np.array(
+                                [panel.forces_GP1 for panel in self.panels]
+                            ),
+                            "panel_moments_W_CgP1": np.array(
+                                [panel.moments_W_CgP1 for panel in self.panels]
+                            ),
+                        }
+                        loads = self._current_step_loads
+                        if loads is not None:
+                            record["kept_match"] = bool(
+                                np.array_equal(
+                                    loads.stackAirplaneForces_W[0], airplane.forces_W
+                                )
+                                and np.array_equal(
+                                    loads.stackPanelForces_GP1,
+                                    record["panel_forces_GP1"],
+                                )
+                            )
+                        steps.append(record)
+
+                    with patch.object(
+                        type(solver), "_calculate_loads", recording_calculate_loads
+                    ):
+                        solver.run(
+                            show_progress=False,
+                            use_arrays=use_arrays,
+                            force_method=force_method,
+                        )
+                    records[use_arrays] = steps
+                    self.assertIsNone(solver._current_step_loads)
+
+                self.assertEqual(len(records[True]), len(records[False]))
+                for step, (array_record, object_record) in enumerate(
+                    zip(records[True], records[False])
+                ):
+                    self.assertTrue(array_record["kept_match"])
+                    for name, object_value in object_record.items():
+                        with self.subTest(
+                            maker=maker_index,
+                            force_method=force_method,
+                            step=step,
+                            name=name,
+                        ):
+                            np.testing.assert_allclose(
+                                array_record[name],
+                                object_value,
+                                rtol=1.0e-10,
+                                atol=1.0e-10 * float(np.max(np.abs(object_value))),
                             )
 
     def test_array_path_collapse_matches_the_object_path(self) -> None:

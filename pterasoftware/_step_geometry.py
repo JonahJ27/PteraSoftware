@@ -41,6 +41,20 @@ class LayoutPlan(NamedTuple):
     is_left_edge: np.ndarray
     is_right_edge: np.ndarray
 
+    # Four (num_panels,) ndarrays of ints, one entry per Panel in global order: the
+    # global index of the Panel to its right (the next spanwise column), in front of it
+    # (the previous chordwise row), to its left (the previous spanwise column), and
+    # behind it (the next chordwise row), in its Wing. A Panel on that edge of its Wing
+    # has no such neighbor, and its entry is its own index, which the edge flags mark.
+    right_neighbors: np.ndarray
+    front_neighbors: np.ndarray
+    left_neighbors: np.ndarray
+    back_neighbors: np.ndarray
+
+    # Each Airplane's Panels' (start, stop) range in the solvers' per Panel arrays, in
+    # order.
+    airplane_panel_ranges: tuple[tuple[int, int], ...]
+
 
 def build_layout_plan(
     airplanes: Sequence[geometry.airplane.Airplane],
@@ -56,21 +70,28 @@ def build_layout_plan(
     """
     wing_shapes: list[tuple[int, int]] = []
     wing_offsets: list[int] = []
+    airplane_panel_ranges: list[tuple[int, int]] = []
     flags: dict[str, list[np.ndarray]] = {
         "leading": [],
         "trailing": [],
         "left": [],
         "right": [],
     }
+    neighbors: dict[str, list[np.ndarray]] = {
+        "right": [],
+        "front": [],
+        "left": [],
+        "back": [],
+    }
     offset = 0
     for airplane in airplanes:
+        airplane_start = offset
         for wing in airplane.wings:
             num_chordwise_panels = wing.num_chordwise_panels
             num_spanwise_panels = wing.num_spanwise_panels
             assert num_spanwise_panels is not None
             wing_shapes.append((num_chordwise_panels, num_spanwise_panels))
             wing_offsets.append(offset)
-            offset += num_chordwise_panels * num_spanwise_panels
 
             rows, columns = np.meshgrid(
                 np.arange(num_chordwise_panels),
@@ -82,8 +103,37 @@ def build_layout_plan(
             flags["left"].append((columns == 0).ravel())
             flags["right"].append((columns == num_spanwise_panels - 1).ravel())
 
+            # Each neighbor is a fixed offset away in row major order: one column to the
+            # right or left, and one row (num_spanwise_panels) in front or behind.
+            indices = offset + rows * num_spanwise_panels + columns
+            neighbors["right"].append(
+                np.where(
+                    columns < num_spanwise_panels - 1, indices + 1, indices
+                ).ravel()
+            )
+            neighbors["front"].append(
+                np.where(rows > 0, indices - num_spanwise_panels, indices).ravel()
+            )
+            neighbors["left"].append(
+                np.where(columns > 0, indices - 1, indices).ravel()
+            )
+            neighbors["back"].append(
+                np.where(
+                    rows < num_chordwise_panels - 1,
+                    indices + num_spanwise_panels,
+                    indices,
+                ).ravel()
+            )
+            offset += num_chordwise_panels * num_spanwise_panels
+        airplane_panel_ranges.append((airplane_start, offset))
+
     def stacked(name: str) -> np.ndarray:
         return _step_parameters.make_read_only(np.concatenate(flags[name]).astype(bool))
+
+    def stacked_neighbors(name: str) -> np.ndarray:
+        return _step_parameters.make_read_only(
+            np.concatenate(neighbors[name]).astype(int)
+        )
 
     return LayoutPlan(
         wing_shapes=tuple(wing_shapes),
@@ -93,6 +143,11 @@ def build_layout_plan(
         is_trailing_edge=stacked("trailing"),
         is_left_edge=stacked("left"),
         is_right_edge=stacked("right"),
+        right_neighbors=stacked_neighbors("right"),
+        front_neighbors=stacked_neighbors("front"),
+        left_neighbors=stacked_neighbors("left"),
+        back_neighbors=stacked_neighbors("back"),
+        airplane_panel_ranges=tuple(airplane_panel_ranges),
     )
 
 

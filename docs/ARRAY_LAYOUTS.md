@@ -57,6 +57,8 @@ The torsional springs' strips run root to tip, so for a mirror only Wing the spa
 
 The `LayoutPlan`'s `is_leading_edge`, `is_trailing_edge`, `is_left_edge`, and `is_right_edge` are global (num_panels,) arrays of bools, one entry per Panel in global order: the Panel's Wing's first chordwise row, last chordwise row, first spanwise column, and last spanwise column. They never change during a run, so they are computed once.
 
+The `LayoutPlan` also holds each Panel's neighbors in its Wing, `right_neighbors`, `front_neighbors`, `left_neighbors`, and `back_neighbors` (global indices: one column to the right or left, one row of num_spanwise_panels in front or behind, or the Panel's own index on that edge, which the edge flags mark), and each Airplane's Panels' (start, stop) range, `airplane_panel_ranges`. The loads use them to find neighbors' strengths and to total each Airplane.
+
 ## Mesh plans
 
 Each Wing's `MeshPlan` holds its symmetry type (1 to 4), its chordwise and spanwise panel counts (the spanwise count doubled for a type 4 Wing, whose grid holds both halves), the normalized chordwise coordinates of the Panels' edges (from 0.0 at the leading edge to 1.0 at the trailing edge, uniform or cosine spaced exactly as `mesh_wing` spaces them), and, for each Panel column of the main half, its wing section and the normalized spanwise coordinates of its inner and outer edges within that wing section.
@@ -89,6 +91,19 @@ Where each time step's meshes come from:
 | The coupled solvers (aeroelastic, flap driven, free flight) | `wing_mesh_from_wing` from the Wings the problem built during the run, until step 6 of the arrays rewrite gives their step parameters the run's deformation, flap angles, and trial states |
 
 The solver builds the first time step's geometry at the start of the run, and each later time step's one time step early (its wake shedding reads the next time step's ring vortex corners). It keeps only the previous, current, and next time steps' geometry.
+
+## Loads
+
+Both force methods already work on the solver's per Panel arrays, except for the parts that walked the Panels, which `_loads_arrays.py` replaces with the same operations in the same order, so they are bit for bit the object path's:
+
+| Function | Replaces |
+|---|---|
+| `effective_line_vortex_strengths` | the Kutta-Joukowski method's Panel loop (`_effective_line_vortex_strengths_from_panels` on the object path) |
+| `chordwise_vorticity_densities`, `spanwise_vorticity_densities`, `chordwise_vorticity_differences` | the Katz method's three Panel loops |
+| `step_loads` | `process_solver_loads`: each Panel's loads in wind axes, each Airplane's totals and coefficients, plus each Wing's totals (for the flap drives in step 6) |
+| `strip_leading_edge_points`, `strip_leading_edge_moments` | the aeroelastic solver's `_populate_slep_positions` and its strip leading edge moments |
+
+The solver keeps the current evaluation's `StepLoads` (run scoped, like the plans). Until step 7 of the arrays rewrite, `apply_step_loads_to_objects` also writes them onto the Panels and Airplanes, which output and the coupled problems still read.
 
 ## Error checking
 

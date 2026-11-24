@@ -49,6 +49,7 @@ import unittest
 import numpy as np
 
 import pterasoftware as ps
+from tests.integration.fixtures import array_path_fixtures
 
 
 def _make_aeroelastic_solver(
@@ -573,3 +574,36 @@ class TestAeroelasticUnsteadySolverMirrorSymmetry(unittest.TestCase):
         self.assertGreater(peak, 0.0)
         max_mismatch = float(np.max(np.abs(theta_main - theta_reflected)))
         self.assertLess(max_mismatch, self.RELATIVE_TOLERANCE * peak)
+
+
+class TestAeroelasticUnsteadySolverArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads on an aeroelastic
+    problem, for both force methods."""
+
+    def test_both_methods_match_the_object_path(self) -> None:
+        """Running the solver with use_arrays=True and a free wake gives the object
+        path's loads at every time step. With the Kutta-Joukowski force method, the
+        comparison allows the model's own sensitivity once the Wing deforms (see
+        AEROELASTIC_JOUKOWSKI_RELATIVE_TOLERANCE), and with the Katz force method, it
+        stays at round off.
+
+        :return: None
+        """
+        for force_method, relative_tolerance in (
+            (
+                "joukowski",
+                array_path_fixtures.AEROELASTIC_JOUKOWSKI_RELATIVE_TOLERANCE,
+            ),
+            ("katz", array_path_fixtures.DEFAULT_RELATIVE_TOLERANCE),
+        ):
+            with self.subTest(force_method=force_method):
+                object_solver, array_solver = (
+                    array_path_fixtures.make_solvers_run_on_both_paths(
+                        lambda: _make_aeroelastic_solver(wing_density=0.01),
+                        prescribed_wake=False,
+                        force_method=force_method,
+                    )
+                )
+                array_path_fixtures.assert_loads_match(
+                    self, object_solver, array_solver, relative_tolerance
+                )
