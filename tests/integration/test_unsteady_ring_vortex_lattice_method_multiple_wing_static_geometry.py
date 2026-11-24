@@ -4,7 +4,7 @@ multi-wing geometry."""
 import unittest
 
 import pterasoftware as ps
-from tests.integration.fixtures import solver_fixtures
+from tests.integration.fixtures import array_path_fixtures, solver_fixtures
 
 
 class TestUnsteadyRingVortexLatticeMethodMultipleWingStaticGeometry(unittest.TestCase):
@@ -38,3 +38,16 @@ class TestUnsteadyRingVortexLatticeMethodMultipleWingStaticGeometry(unittest.Tes
             save=False,
             testing=True,
         )
+
+    def test_array_path_matches_the_object_path(self) -> None:
+        """This method tests that running the solver with use_arrays=True gives the same
+        loads as the object path, at every time step, to round off.
+
+        :return: None
+        """
+        object_solver, array_solver = (
+            array_path_fixtures.make_solvers_run_on_both_paths(
+                solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_multiple_wing_static_geometry
+            )
+        )
+        array_path_fixtures.assert_loads_match(self, object_solver, array_solver)

@@ -19,6 +19,7 @@ from . import (
     _panel,
     _parameter_validation,
     _step_geometry,
+    _step_parameters,
     _transformations,
     geometry,
     operating_point,
@@ -49,6 +50,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_use_arrays",
         "_mesh_plans",
         "_layout_plan",
+        "_step_geometries",
         "current_airplanes",
         "current_operating_point",
         "num_airplanes",
@@ -169,6 +171,13 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # they are needed.
         self._mesh_plans: tuple[_mesh_arrays.MeshPlan, ...] | None = None
         self._layout_plan: _step_geometry.LayoutPlan | None = None
+
+        # The array path's step geometries, keyed by time step. Only the most recent
+        # three are kept (the previous, current, and next time steps'), since a time
+        # step's collapse reads its own and the previous one's, and its wake shedding
+        # reads the next one's ring vortex corners. Like the plans, they are run scoped:
+        # an empty dict during a run with use_arrays=True, and None otherwise.
+        self._step_geometries: dict[int, _step_geometry.StepGeometry] | None = None
 
         first_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(0)
 
@@ -505,6 +514,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 for wing in airplane.wings
             )
             self._layout_plan = _step_geometry.build_layout_plan(first_airplanes)
+            self._step_geometries = {}
             _logger.info(_logging.indent() + "Running with the array path")
 
         # Report the thread dispatch settings this run's kernel launches will operate
@@ -636,6 +646,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # The array path's plans are only needed during the run.
         self._mesh_plans = None
         self._layout_plan = None
+        self._step_geometries = None
 
         # Mark that the solver has run.
         self._ran = True
@@ -861,6 +872,17 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :param step: The time step to initialize.
         :return: None
         """
+        # Changed for the arrays rewrite: the array path builds each time step's
+        # geometry when the run reaches it, rather than every time step's at once, so it
+        # keeps only a few time steps' geometry. At each time step it builds the next
+        # one's, whose ring vortex corners the wake shedding reads.
+        if self._use_arrays:
+            if step == 0:
+                self._initialize_panel_vortices_at(0)
+            if step + 1 < self.num_steps:
+                self._initialize_panel_vortices_at(step + 1)
+            return
+
         if step == 0:
             _logger.debug(
                 _logging.indent() + "Initializing all Airplanes' bound ring vortices"
@@ -919,6 +941,91 @@ class UnsteadyRingVortexLatticeMethodSolver:
         vortex corner positions, strengths, and ages are already stored in the per step
         list arrays; this method only needs to wire the per Panel scalars and last step
         leg derivatives.
+
+        :return: None
+        """
+        step = self._current_step
+        currentStackFr = self._listStackFrbrvp_GP1_CgP1[step]
+        currentStackFl = self._listStackFlbrvp_GP1_CgP1[step]
+        currentStackBl = self._listStackBlbrvp_GP1_CgP1[step]
+        currentStackBr = self._listStackBrbrvp_GP1_CgP1[step]
+
+        # Changed for the arrays rewrite: the per Panel data (unit normals, areas,
+        # collocation points, edge flags, streamline seed points, bound core radii, and
+        # wake ages) used to be written here by walking every Panel. The object path
+        # still does that, in _collapse_panel_attributes, unchanged. The array path
+        # writes the same data from the time step's geometry.
+        if self._use_arrays:
+            self._collapse_step_geometry_attributes()
+        else:
+            self._collapse_panel_attributes()
+
+        # Changed for speed: the bound ring vortex corners, leg center points, and leg
+        # vectors used to be written one Panel at a time inside the loop above, as about
+        # a dozen small (3,) array operations per Panel, which cost far more in Python
+        # and NumPy overhead than in arithmetic. They depend only on the four corner
+        # stacks, which already hold every Panel's corners in the same global order, so
+        # they are now written for all Panels at once. Elementwise NumPy arithmetic on
+        # the stacks rounds each element exactly as the per Panel arithmetic did, and
+        # each formula keeps its original operand order, so the results are
+        # bit-identical. The right leg goes from the back right corner to the front
+        # right corner, the front leg from front right to front left, the left leg from
+        # front left to back left, and the back leg from back left to back right.
+        self.stackFrbrvp_GP1_CgP1[:] = currentStackFr
+        self.stackFlbrvp_GP1_CgP1[:] = currentStackFl
+        self.stackBlbrvp_GP1_CgP1[:] = currentStackBl
+        self.stackBrbrvp_GP1_CgP1[:] = currentStackBr
+
+        # Leg center points: the midpoint of each leg's two corners.
+        self.stackCblvpr_GP1_CgP1[:] = 0.5 * (currentStackBr + currentStackFr)
+        self.stackCblvpf_GP1_CgP1[:] = 0.5 * (currentStackFr + currentStackFl)
+        self.stackCblvpl_GP1_CgP1[:] = 0.5 * (currentStackFl + currentStackBl)
+        self.stackCblvpb_GP1_CgP1[:] = 0.5 * (currentStackBl + currentStackBr)
+
+        # Leg vectors: from each leg's start corner to its end corner.
+        self.stackRbrv_GP1[:] = currentStackFr - currentStackBr
+        self.stackFbrv_GP1[:] = currentStackFl - currentStackFr
+        self.stackLbrv_GP1[:] = currentStackBl - currentStackFl
+        self.stackBbrv_GP1[:] = currentStackBr - currentStackBl
+
+        if self._current_step > 0:
+            last_step = self._current_step - 1
+            lastStackFr = self._listStackFrbrvp_GP1_CgP1[last_step]
+            lastStackFl = self._listStackFlbrvp_GP1_CgP1[last_step]
+            lastStackBl = self._listStackBlbrvp_GP1_CgP1[last_step]
+            lastStackBr = self._listStackBrbrvp_GP1_CgP1[last_step]
+
+            # Bound corner stacks for the last step.
+            self._lastStackFrbrvp_GP1_CgP1[:] = lastStackFr
+            self._lastStackFlbrvp_GP1_CgP1[:] = lastStackFl
+            self._lastStackBlbrvp_GP1_CgP1[:] = lastStackBl
+            self._lastStackBrbrvp_GP1_CgP1[:] = lastStackBr
+
+            # Last step bound leg center points, derived inline from corners. Right leg:
+            # back right -> front right. Front leg: front right -> front left. Left leg:
+            # front left -> back left. Back leg: back left -> back right.
+            self._lastStackCblvpr_GP1_CgP1[:] = 0.5 * (lastStackBr + lastStackFr)
+            self._lastStackCblvpf_GP1_CgP1[:] = 0.5 * (lastStackFr + lastStackFl)
+            self._lastStackCblvpl_GP1_CgP1[:] = 0.5 * (lastStackFl + lastStackBl)
+            self._lastStackCblvpb_GP1_CgP1[:] = 0.5 * (lastStackBl + lastStackBr)
+
+            # Changed for the arrays rewrite: the array path reads the last time step's
+            # collocation points from its geometry rather than from its Panels.
+            if self._use_arrays:
+                assert self._step_geometries is not None
+                self._stackLastCpp_GP1_CgP1[:] = self._step_geometries[
+                    last_step
+                ].stackCpp_GP1_CgP1
+            else:
+                self._collapse_last_collocation_points(last_step)
+
+    def _collapse_panel_attributes(self) -> None:
+        """Writes the current time step's per Panel data into the solver's arrays by
+        walking its Panels, on the object path.
+
+        This is _collapse_geometry's per Panel loop, moved here unchanged for the arrays
+        rewrite: the Panels' unit normals, areas, collocation points, edge flags, and
+        streamline seed points, the bound core radii, and the wake ring vortices' ages.
 
         :return: None
         """
@@ -1002,75 +1109,92 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
                     global_wake_ring_vortex_position += num_wing_wake_vortices
 
-        # Changed for speed: the bound ring vortex corners, leg center points, and leg
-        # vectors used to be written one Panel at a time inside the loop above, as about
-        # a dozen small (3,) array operations per Panel, which cost far more in Python
-        # and NumPy overhead than in arithmetic. They depend only on the four corner
-        # stacks, which already hold every Panel's corners in the same global order, so
-        # they are now written for all Panels at once. Elementwise NumPy arithmetic on
-        # the stacks rounds each element exactly as the per Panel arithmetic did, and
-        # each formula keeps its original operand order, so the results are
-        # bit-identical. The right leg goes from the back right corner to the front
-        # right corner, the front leg from front right to front left, the left leg from
-        # front left to back left, and the back leg from back left to back right.
-        self.stackFrbrvp_GP1_CgP1[:] = currentStackFr
-        self.stackFlbrvp_GP1_CgP1[:] = currentStackFl
-        self.stackBlbrvp_GP1_CgP1[:] = currentStackBl
-        self.stackBrbrvp_GP1_CgP1[:] = currentStackBr
+    def _collapse_step_geometry_attributes(self) -> None:
+        """Writes the current time step's per Panel data into the solver's arrays from
+        its step geometry, on the array path.
 
-        # Leg center points: the midpoint of each leg's two corners.
-        self.stackCblvpr_GP1_CgP1[:] = 0.5 * (currentStackBr + currentStackFr)
-        self.stackCblvpf_GP1_CgP1[:] = 0.5 * (currentStackFr + currentStackFl)
-        self.stackCblvpl_GP1_CgP1[:] = 0.5 * (currentStackFl + currentStackBl)
-        self.stackCblvpb_GP1_CgP1[:] = 0.5 * (currentStackBl + currentStackBr)
+        It writes what _collapse_panel_attributes writes on the object path. The Panels
+        are still gathered into the panels attribute, since the loads still read them
+        (until step 4 of the arrays rewrite).
 
-        # Leg vectors: from each leg's start corner to its end corner.
-        self.stackRbrv_GP1[:] = currentStackFr - currentStackBr
-        self.stackFbrv_GP1[:] = currentStackFl - currentStackFr
-        self.stackLbrv_GP1[:] = currentStackBl - currentStackFl
-        self.stackBbrv_GP1[:] = currentStackBr - currentStackBl
+        :return: None
+        """
+        assert self._layout_plan is not None
+        assert self._step_geometries is not None
+        layout_plan = self._layout_plan
+        geometry = self._step_geometries[self._current_step]
 
-        if self._current_step > 0:
-            last_step = self._current_step - 1
-            lastStackFr = self._listStackFrbrvp_GP1_CgP1[last_step]
-            lastStackFl = self._listStackFlbrvp_GP1_CgP1[last_step]
-            lastStackBl = self._listStackBlbrvp_GP1_CgP1[last_step]
-            lastStackBr = self._listStackBrbrvp_GP1_CgP1[last_step]
+        global_panel_position = 0
+        for airplane in self.current_airplanes:
+            for wing in airplane.wings:
+                _panels = wing.panels
+                assert _panels is not None
+                panels = np.ravel(_panels)
+                self.panels[
+                    global_panel_position : global_panel_position + panels.size
+                ] = panels
+                global_panel_position += panels.size
 
-            # Bound corner stacks for the last step.
-            self._lastStackFrbrvp_GP1_CgP1[:] = lastStackFr
-            self._lastStackFlbrvp_GP1_CgP1[:] = lastStackFl
-            self._lastStackBlbrvp_GP1_CgP1[:] = lastStackBl
-            self._lastStackBrbrvp_GP1_CgP1[:] = lastStackBr
+        self.stackUnitNormals_GP1[:] = geometry.stackUnitNormals_GP1
+        self.panel_areas[:] = geometry.panel_areas
+        self.stackCpp_GP1_CgP1[:] = geometry.stackCpp_GP1_CgP1
+        self.panel_is_trailing_edge[:] = layout_plan.is_trailing_edge
+        self.panel_is_leading_edge[:] = layout_plan.is_leading_edge
+        self.panel_is_left_edge[:] = layout_plan.is_left_edge
+        self.panel_is_right_edge[:] = layout_plan.is_right_edge
+        self.stackSeedPoints_GP1_CgP1 = _step_geometry.seed_points(
+            layout_plan, geometry
+        )
+        self._current_bound_r_c0s[:] = _step_geometry.bound_r_c0s(layout_plan, geometry)
+        self._current_wake_vortex_ages[:] = _step_geometry.wake_vortex_ages(
+            layout_plan, self._current_step, self._max_wake_rows, self.delta_time
+        )
 
-            # Last step bound leg center points, derived inline from corners. Right leg:
-            # back right -> front right. Front leg: front right -> front left. Left leg:
-            # front left -> back left. Back leg: back left -> back right.
-            self._lastStackCblvpr_GP1_CgP1[:] = 0.5 * (lastStackBr + lastStackFr)
-            self._lastStackCblvpf_GP1_CgP1[:] = 0.5 * (lastStackFr + lastStackFl)
-            self._lastStackCblvpl_GP1_CgP1[:] = 0.5 * (lastStackFl + lastStackBl)
-            self._lastStackCblvpb_GP1_CgP1[:] = 0.5 * (lastStackBl + lastStackBr)
+    def _collapse_last_collocation_points(self, last_step: int) -> None:
+        """Writes the last time step's collocation points into the solver's array by
+        walking its Panels, on the object path.
 
-            # Last step Panel collocation points. Panel topology is invariant, but Panel
-            # positions move when the geometry is unsteady, so these need to be re-read
-            # from the previous step's Airplanes.
-            global_panel_position = 0
-            last_problem = self._get_steady_problem_at(last_step)
-            for last_airplane in last_problem.airplanes:
-                for last_wing in last_airplane.wings:
-                    _last_panels = last_wing.panels
-                    assert _last_panels is not None
-                    for last_panel in np.ravel(_last_panels):
-                        self._stackLastCpp_GP1_CgP1[global_panel_position, :] = (
-                            last_panel.Cpp_GP1_CgP1
-                        )
-                        global_panel_position += 1
+        This is the end of _collapse_geometry, moved here unchanged for the arrays
+        rewrite.
+
+        :param last_step: The last time step.
+        :return: None
+        """
+        # Last step Panel collocation points. Panel topology is invariant, but Panel
+        # positions move when the geometry is unsteady, so these need to be re-read from
+        # the previous step's Airplanes.
+        global_panel_position = 0
+        last_problem = self._get_steady_problem_at(last_step)
+        for last_airplane in last_problem.airplanes:
+            for last_wing in last_airplane.wings:
+                _last_panels = last_wing.panels
+                assert _last_panels is not None
+                for last_panel in np.ravel(_last_panels):
+                    self._stackLastCpp_GP1_CgP1[global_panel_position, :] = (
+                        last_panel.Cpp_GP1_CgP1
+                    )
+                    global_panel_position += 1
 
     def _collapse_geometry_katz_data(self) -> None:
         """Populates the Katz-method-specific ndarrays.
 
         :return: None
         """
+        # Changed for the arrays rewrite: the array path computes them from the time
+        # step's geometry rather than from each Panel's legs.
+        if self._use_arrays:
+            assert self._step_geometries is not None
+            katz_geometry = _step_geometry.katz_geometry(
+                self._step_geometries[self._current_step]
+            )
+            self._panel_chord_lengths[:] = katz_geometry.panel_chord_lengths
+            self._panel_span_lengths[:] = katz_geometry.panel_span_lengths
+            self._stackChordwiseTangents_GP1[:] = (
+                katz_geometry.stackChordwiseTangents_GP1
+            )
+            self._stackSpanwiseTangents_GP1[:] = katz_geometry.stackSpanwiseTangents_GP1
+            return
+
         global_panel_position = 0
 
         for airplane in self.current_airplanes:
@@ -3321,6 +3445,80 @@ class UnsteadyRingVortexLatticeMethodSolver:
                         )
                     )
 
+    def _wing_meshes_at(
+        self, step: int
+    ) -> tuple[list[_mesh_arrays.WingMesh], list[np.ndarray]]:
+        """Returns the array path's meshes of every Wing at a given time step, and each
+        Wing's Airplane's Cg_GP1_CgP1, both in global Wing order.
+
+        The plain solver's geometry is prescribed, so it meshes each Wing from the
+        movement's WingStepParameters with mesh_wing_arrays, after validating them as
+        building the objects would. The coupled solvers override this.
+
+        :param step: The time step.
+        :return: The WingMeshes, and for each Wing, a (3,) ndarray of floats
+            representing its Airplane's CG's position (in the first Airplane's geometry
+            axes, relative to the first Airplane's CG). Its units are in meters.
+        """
+        assert self._mesh_plans is not None
+        unsteady_problem = cast(problems.UnsteadyProblem, self.unsteady_problem)
+        wing_meshes: list[_mesh_arrays.WingMesh] = []
+        wingsCg_GP1_CgP1: list[np.ndarray] = []
+        for airplane_movement in unsteady_problem.movement.airplane_movements:
+            # noinspection PyProtectedMember
+            airplane_parameters = (
+                airplane_movement._generate_airplane_parameters_at_time_step(
+                    step, self.delta_time
+                )
+            )
+            _step_parameters.validate_airplane_step_parameters(airplane_parameters)
+            for wing_parameters in airplane_parameters.wings:
+                wing_meshes.append(
+                    _mesh_arrays.mesh_wing_arrays(
+                        self._mesh_plans[len(wing_meshes)], wing_parameters
+                    )
+                )
+                wingsCg_GP1_CgP1.append(airplane_parameters.Cg_GP1_CgP1)
+        return wing_meshes, wingsCg_GP1_CgP1
+
+    def _build_step_geometry_at(self, step: int) -> None:
+        """Builds the array path's geometry at a given time step, stores it, and writes
+        its bound ring vortex corners into the per step lists, as
+        _initialize_panel_vortices_at does on the object path.
+
+        Building a time step's geometry discards any older than the time step before the
+        previous one.
+
+        :param step: The time step.
+        :return: None
+        """
+        assert self._layout_plan is not None
+        assert self._step_geometries is not None
+        wing_meshes, wingsCg_GP1_CgP1 = self._wing_meshes_at(step)
+
+        # The OperatingPoint is fetched through _operating_point_at, as on the object
+        # path, so the strongly coupled free flight solvers can supply a trial
+        # OperatingPoint.
+        last_geometry = None
+        if step > 0:
+            last_geometry = self._step_geometries[step - 1]
+        geometry = _step_geometry.build_step_geometry(
+            self._layout_plan,
+            wing_meshes,
+            wingsCg_GP1_CgP1,
+            self._operating_point_at(step).vInf_GP1__E,
+            self.delta_time,
+            last_geometry,
+        )
+        self._step_geometries[step] = geometry
+        for old_step in [key for key in self._step_geometries if key < step - 2]:
+            del self._step_geometries[old_step]
+
+        self._listStackFrbrvp_GP1_CgP1[step][:] = geometry.stackFrbrvp_GP1_CgP1
+        self._listStackFlbrvp_GP1_CgP1[step][:] = geometry.stackFlbrvp_GP1_CgP1
+        self._listStackBlbrvp_GP1_CgP1[step][:] = geometry.stackBlbrvp_GP1_CgP1
+        self._listStackBrbrvp_GP1_CgP1[step][:] = geometry.stackBrbrvp_GP1_CgP1
+
     def _get_steady_problem_at(self, step: int) -> problems.SteadyProblem:
         """Gets the SteadyProblem at a given time step.
 
@@ -3357,6 +3555,12 @@ class UnsteadyRingVortexLatticeMethodSolver:
             corner positions.
         :return: None
         """
+        # Changed for the arrays rewrite: the array path builds the time step's
+        # geometry, including its ring vortex corners, as arrays.
+        if self._use_arrays:
+            self._build_step_geometry_at(step)
+            return
+
         steady_problem = self._get_steady_problem_at(step)
 
         # Find the freestream velocity (in the first Airplane's geometry axes, observed

@@ -196,8 +196,9 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
 
     def test_array_path_run_matches_the_object_path(self) -> None:
         """Test that a run with use_arrays=True records the choice, clears its per run
-        plans, and (while the array stages are still being built) gives exactly the
-        object path's loads at every time step."""
+        plans and step geometries, and gives the object path's loads at every time step
+        to round off (the array path's vectorized norms round about one unit in the last
+        place differently)."""
         object_solver = solver_fixtures.make_unsteady_ring_solver_fixture()
         object_solver.run(prescribed_wake=True, show_progress=False)
         array_solver = solver_fixtures.make_unsteady_ring_solver_fixture()
@@ -206,6 +207,7 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         self.assertTrue(array_solver.use_arrays)
         self.assertIsNone(array_solver._mesh_plans)
         self.assertIsNone(array_solver._layout_plan)
+        self.assertIsNone(array_solver._step_geometries)
         self.assertEqual(
             len(array_solver.steady_problems), len(object_solver.steady_problems)
         )
@@ -222,7 +224,98 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                         if object_value is None:
                             self.assertIsNone(array_value)
                         else:
-                            self.assertTrue(np.array_equal(array_value, object_value))
+                            np.testing.assert_allclose(
+                                array_value, object_value, rtol=1.0e-12, atol=1.0e-12
+                            )
+
+    def test_array_path_collapse_matches_the_object_path(self) -> None:
+        """Test that, at every time step, the array path writes the object path's
+        collapsed geometry into the solver's arrays (to round off), for plain solvers
+        (whose meshes come from the movement's WingStepParameters) and an aeroelastic
+        solver (whose meshes come from its built Wings), and that the array path keeps
+        at most three time steps' geometry."""
+        makers = (
+            solver_fixtures.make_unsteady_ring_solver_fixture,
+            lambda: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+                problem_fixtures.make_pitching_tip_unsteady_problem_fixture()
+            ),
+            solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture,
+        )
+        names = (
+            "stackUnitNormals_GP1",
+            "panel_areas",
+            "stackCpp_GP1_CgP1",
+            "_stackLastCpp_GP1_CgP1",
+            "stackFrbrvp_GP1_CgP1",
+            "stackFlbrvp_GP1_CgP1",
+            "stackBlbrvp_GP1_CgP1",
+            "stackBrbrvp_GP1_CgP1",
+            "_lastStackFrbrvp_GP1_CgP1",
+            "_lastStackFlbrvp_GP1_CgP1",
+            "_lastStackBlbrvp_GP1_CgP1",
+            "_lastStackBrbrvp_GP1_CgP1",
+            "stackCblvpr_GP1_CgP1",
+            "stackCblvpf_GP1_CgP1",
+            "stackCblvpl_GP1_CgP1",
+            "stackCblvpb_GP1_CgP1",
+            "_lastStackCblvpr_GP1_CgP1",
+            "_lastStackCblvpb_GP1_CgP1",
+            "stackRbrv_GP1",
+            "stackFbrv_GP1",
+            "stackLbrv_GP1",
+            "stackBbrv_GP1",
+            "panel_is_trailing_edge",
+            "panel_is_leading_edge",
+            "panel_is_left_edge",
+            "panel_is_right_edge",
+            "stackSeedPoints_GP1_CgP1",
+            "_current_bound_r_c0s",
+            "_current_wake_vortex_ages",
+        )
+        prepare = (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver._prepare_step_geometry
+        )
+        for maker_index, make in enumerate(makers):
+            records: dict[bool, list[dict[str, Any]]] = {}
+            for use_arrays in (False, True):
+                solver = make()
+                steps: list[dict[str, Any]] = []
+
+                def recording_prepare(self: Any) -> None:
+                    prepare(self)
+                    record: dict[str, Any] = {
+                        name: np.copy(getattr(self, name)) for name in names
+                    }
+                    record["panels_filled"] = all(
+                        panel is not None for panel in self.panels
+                    )
+                    record["num_step_geometries"] = (
+                        len(self._step_geometries)
+                        if self._step_geometries is not None
+                        else 0
+                    )
+                    steps.append(record)
+
+                with patch.object(
+                    type(solver), "_prepare_step_geometry", recording_prepare
+                ):
+                    solver.run(show_progress=False, use_arrays=use_arrays)
+                records[use_arrays] = steps
+
+            self.assertEqual(len(records[True]), len(records[False]))
+            for step, (array_record, object_record) in enumerate(
+                zip(records[True], records[False])
+            ):
+                self.assertTrue(array_record["panels_filled"])
+                self.assertLessEqual(array_record["num_step_geometries"], 3)
+                for name in names:
+                    with self.subTest(maker=maker_index, step=step, name=name):
+                        np.testing.assert_allclose(
+                            array_record[name],
+                            object_record[name],
+                            rtol=0.0,
+                            atol=1.0e-12,
+                        )
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):

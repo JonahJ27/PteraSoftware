@@ -71,20 +71,28 @@ class MeshPlan(NamedTuple):
     symmetryPoint_G_Cg: np.ndarray | None
 
 
-class WingCorners(NamedTuple):
-    """One Wing's Panel corners at one geometry build, from mesh_wing_arrays.
+class WingMesh(NamedTuple):
+    """One Wing's mesh at one geometry build, from mesh_wing_arrays (or, for a Wing
+    already built, wing_mesh_from_wing): its Panel corners, and the two values of the
+    Wing that the step geometry needs besides them."""
 
-    Each is a (num_chordwise_panels, num_spanwise_panels, 3) ndarray of floats, read
-    only, in the Wing's Panel grid order (see docs/ARRAY_LAYOUTS.md), holding the
-    position of each Panel's corner (in geometry axes, relative to the CG). Their units
-    are in meters.
-    """
-
-    # The front left, front right, back left, and back right corners.
+    # The front left, front right, back left, and back right Panel corners. Each is a
+    # (num_chordwise_panels, num_spanwise_panels, 3) ndarray of floats, read only, in
+    # the Wing's Panel grid order (see docs/ARRAY_LAYOUTS.md), holding the position of
+    # each Panel's corner (in geometry axes, relative to the CG). Their units are in
+    # meters.
     gridFlpp_G_Cg: np.ndarray
     gridFrpp_G_Cg: np.ndarray
     gridBlpp_G_Cg: np.ndarray
     gridBrpp_G_Cg: np.ndarray
+
+    # The Wing's span, as Wing.span computes it (doubled for a type 4 Wing). Its units
+    # are in meters.
+    span: float
+
+    # A (3,) ndarray of floats, read only, representing the wing axes' third basis
+    # vector (in geometry axes), as Wing.WnZ_G computes it.
+    WnZ_G: np.ndarray
 
 
 def build_mesh_plan(wing: geometry.wing.Wing) -> MeshPlan:
@@ -239,7 +247,7 @@ def _mcl_points_Wcs_Lp(
 
 def mesh_wing_arrays(
     plan: MeshPlan, parameters: _step_parameters.WingStepParameters
-) -> WingCorners:
+) -> WingMesh:
     """Meshes one Wing from its values at one geometry build, without building any Wing,
     WingCrossSection, Airfoil, or Panel.
 
@@ -271,6 +279,15 @@ def mesh_wing_arrays(
     T_pas_G_Cg_to_Wn_Ler = _T_pas_G_Cg_to_Wn_Ler(plan, parameters)
     T_pas_Wn_Ler_to_G_Cg = _transformations.invert_T_pas(T_pas_G_Cg_to_Wn_Ler)
 
+    # The Wing's span and wing axes' third basis vector (in geometry axes), as Wing.span
+    # and Wing.WnZ_G compute them.
+    span = _span(plan, parameters, stackT_pas_Wcs_Lp_to_Wn_Ler)
+    WnZ_G = _step_parameters.make_read_only(
+        _transformations.apply_T_to_vectors(
+            T_pas_Wn_Ler_to_G_Cg, np.array([0.0, 0.0, 1.0]), is_position=False
+        )
+    )
+
     # The main half's Panel column edges (in wing axes, relative to the leading edge
     # root point).
     gridInnerPoints_Wn_Ler, gridOuterPoints_Wn_Ler = _column_edge_points_Wn_Ler(
@@ -294,15 +311,17 @@ def mesh_wing_arrays(
     gridBopp_G_Cg = gridOuterPoints_G_Cg[1:]
 
     if symmetry_type == 1:
-        return _read_only_corners(
-            gridFipp_G_Cg, gridFopp_G_Cg, gridBipp_G_Cg, gridBopp_G_Cg
+        return _wing_mesh(
+            span, WnZ_G, gridFipp_G_Cg, gridFopp_G_Cg, gridBipp_G_Cg, gridBopp_G_Cg
         )
 
     if symmetry_type in (2, 3):
         # mesh_wing puts each mirror only wing section's Panels, flipped, to the left of
         # those before it, so the columns end up in reverse order. Each Panel's outer
         # corners are on its left.
-        return _read_only_corners(
+        return _wing_mesh(
+            span,
+            WnZ_G,
             gridFopp_G_Cg[:, ::-1],
             gridFipp_G_Cg[:, ::-1],
             gridBopp_G_Cg[:, ::-1],
@@ -357,7 +376,9 @@ def mesh_wing_arrays(
     # of the main half. Each mirrored Panel's outer corners are on its left.
     gridMirroredInnerPoints_G_Cg = gridMirroredInnerPoints_G_Cg[:, ::-1]
     gridMirroredOuterPoints_G_Cg = gridMirroredOuterPoints_G_Cg[:, ::-1]
-    return _read_only_corners(
+    return _wing_mesh(
+        span,
+        WnZ_G,
         np.concatenate([gridMirroredOuterPoints_G_Cg[:-1], gridFipp_G_Cg], axis=1),
         np.concatenate([gridMirroredInnerPoints_G_Cg[:-1], gridFopp_G_Cg], axis=1),
         np.concatenate([gridMirroredOuterPoints_G_Cg[1:], gridBipp_G_Cg], axis=1),
@@ -587,24 +608,98 @@ def _column_edge_points_Wn_Ler(
     )
 
 
-def _read_only_corners(
+def _span(
+    plan: MeshPlan,
+    parameters: _step_parameters.WingStepParameters,
+    stackT_pas_Wcs_Lp_to_Wn_Ler: np.ndarray,
+) -> float:
+    """Returns a Wing's span, as Wing.span computes it: the length of its tip
+    WingCrossSection's leading point's projection on the wing axes' y axis (in wing
+    axes, relative to the leading edge root point), doubled for a type 4 Wing.
+
+    :param plan: The Wing's MeshPlan.
+    :param parameters: The Wing's WingStepParameters at this geometry build.
+    :param stackT_pas_Wcs_Lp_to_Wn_Ler: A (K,4,4) ndarray of floats, each
+        WingCrossSection's transformation matrix to wing axes, relative to the leading
+        edge root point.
+    :return: The span. Its units are in meters.
+    """
+    # The tip's leading point is given in its parent WingCrossSection's axes, so it uses
+    # the parent's transformation.
+    tipLp_Wn_Ler = _transformations.apply_T_to_vectors(
+        stackT_pas_Wcs_Lp_to_Wn_Ler[-2],
+        parameters.stackLp_Wcsp_Lpp[-1],
+        is_position=True,
+    )
+    projectedTipLp_Wn_Ler = np.dot(tipLp_Wn_Ler, np.array([0.0, 1.0, 0.0])) * np.array(
+        [0.0, 1.0, 0.0]
+    )
+    span = float(np.linalg.norm(projectedTipLp_Wn_Ler))
+    if plan.symmetry_type == 4:
+        span *= 2
+    return span
+
+
+def _wing_mesh(
+    span: float,
+    WnZ_G: np.ndarray,
     gridFlpp_G_Cg: np.ndarray,
     gridFrpp_G_Cg: np.ndarray,
     gridBlpp_G_Cg: np.ndarray,
     gridBrpp_G_Cg: np.ndarray,
-) -> WingCorners:
-    """Returns WingCorners holding contiguous, read only copies of four corner grids.
+) -> WingMesh:
+    """Returns a WingMesh holding contiguous, read only copies of four corner grids.
 
+    :param span: The Wing's span. Its units are in meters.
+    :param WnZ_G: A read only (3,) ndarray of floats representing the wing axes' third
+        basis vector (in geometry axes).
     :param gridFlpp_G_Cg: A (M,N,3) ndarray of floats for the front left corners (in
         geometry axes, relative to the CG). The units are in meters.
     :param gridFrpp_G_Cg: The same for the front right corners.
     :param gridBlpp_G_Cg: The same for the back left corners.
     :param gridBrpp_G_Cg: The same for the back right corners.
-    :return: The WingCorners.
+    :return: The WingMesh.
     """
-    return WingCorners(
+
+    def read_only(grid: np.ndarray) -> np.ndarray:
+        return _step_parameters.make_read_only(np.ascontiguousarray(grid, dtype=float))
+
+    return WingMesh(
+        gridFlpp_G_Cg=read_only(gridFlpp_G_Cg),
+        gridFrpp_G_Cg=read_only(gridFrpp_G_Cg),
+        gridBlpp_G_Cg=read_only(gridBlpp_G_Cg),
+        gridBrpp_G_Cg=read_only(gridBrpp_G_Cg),
+        span=span,
+        WnZ_G=WnZ_G,
+    )
+
+
+def wing_mesh_from_wing(wing: geometry.wing.Wing) -> WingMesh:
+    """Returns the WingMesh of a Wing that is already built and meshed, read from its
+    Panels and properties.
+
+    The coupled solvers use it on the array path until their geometry is built from step
+    parameters (step 6 of the arrays rewrite), since their Wings at each time step are
+    built during the run.
+
+    :param wing: The meshed Wing.
+    :return: Its WingMesh, with the same values as the Wing's Panels' corners and its
+        span and WnZ_G properties.
+    """
+    panels = wing.panels
+    assert panels is not None
+    span = wing.span
+    assert span is not None
+    WnZ_G = wing.WnZ_G
+    assert WnZ_G is not None
+    return _wing_mesh(
+        span,
+        WnZ_G,
         *(
-            _step_parameters.make_read_only(np.ascontiguousarray(grid, dtype=float))
-            for grid in (gridFlpp_G_Cg, gridFrpp_G_Cg, gridBlpp_G_Cg, gridBrpp_G_Cg)
-        )
+            np.array(
+                [[getattr(panel, name) for panel in row] for row in panels],
+                dtype=float,
+            )
+            for name in ("Flpp_G_Cg", "Frpp_G_Cg", "Blpp_G_Cg", "Brpp_G_Cg")
+        ),
     )

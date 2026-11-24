@@ -21,7 +21,7 @@ from tests.unit.fixtures import (
     movement_fixtures,
 )
 
-# The Panel corner attributes, in the order of the WingCorners fields.
+# The Panel corner attributes, in the order of the WingMesh corner fields.
 _CORNER_NAMES = ("Flpp_G_Cg", "Frpp_G_Cg", "Blpp_G_Cg", "Brpp_G_Cg")
 
 # The largest difference allowed between a corner from mesh_wing_arrays and the same
@@ -54,6 +54,22 @@ _WING_FIXTURE_MAKERS = (
     geometry_fixtures.make_wing_with_2_chordwise_panels,
     mesh_arrays_fixtures.make_type_4_asymmetric_control_surface_wing_fixture,
 )
+
+
+def _corner_grids(
+    wing_mesh: _mesh_arrays.WingMesh,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Returns a WingMesh's four corner grids, in the order of _CORNER_NAMES.
+
+    :param wing_mesh: The WingMesh.
+    :return: Its front left, front right, back left, and back right corner grids.
+    """
+    return (
+        wing_mesh.gridFlpp_G_Cg,
+        wing_mesh.gridFrpp_G_Cg,
+        wing_mesh.gridBlpp_G_Cg,
+        wing_mesh.gridBrpp_G_Cg,
+    )
 
 
 def _helper_test_wings() -> list[ps.geometry.wing.Wing]:
@@ -225,19 +241,20 @@ class TestMeshWingArrays(unittest.TestCase):
         self,
         wing: ps.geometry.wing.Wing,
         plan: _mesh_arrays.MeshPlan,
-        corners: _mesh_arrays.WingCorners,
+        corners: _mesh_arrays.WingMesh,
     ) -> None:
-        """Asserts that WingCorners match the Panel corners mesh_wing gave a Wing, in
-        the same Panel grid order.
+        """Asserts that a WingMesh's corners match the Panel corners mesh_wing gave a
+        Wing, in the same Panel grid order, and that its span and WnZ_G match the
+        Wing's.
 
         :param wing: The meshed Wing.
-        :param plan: The MeshPlan the WingCorners were meshed with.
-        :param corners: The WingCorners.
+        :param plan: The MeshPlan the WingMesh was meshed with.
+        :param corners: The WingMesh.
         :return: None
         """
         assert wing.panels is not None
         expected_shape = (plan.num_chordwise_panels, plan.num_spanwise_panels, 3)
-        for name, grid in zip(_CORNER_NAMES, corners):
+        for name, grid in zip(_CORNER_NAMES, _corner_grids(corners)):
             expected = np.array(
                 [[getattr(panel, name) for panel in row] for row in wing.panels],
                 dtype=float,
@@ -247,6 +264,17 @@ class TestMeshWingArrays(unittest.TestCase):
             np.testing.assert_allclose(
                 grid, expected, rtol=0.0, atol=_CORNER_TOLERANCE, err_msg=name
             )
+
+        # The span and wing axes' third basis vector, which mesh_wing_arrays computes as
+        # Wing.span and Wing.WnZ_G do.
+        expected_span = wing.span
+        assert expected_span is not None
+        expected_WnZ_G = wing.WnZ_G
+        assert expected_WnZ_G is not None
+        self.assertAlmostEqual(corners.span, expected_span, delta=_CORNER_TOLERANCE)
+        np.testing.assert_allclose(
+            corners.WnZ_G, expected_WnZ_G, rtol=0.0, atol=_MATRIX_TOLERANCE
+        )
 
     def test_matches_mesh_wing_on_wing_fixtures(self) -> None:
         """Test that mesh_wing_arrays gives the Panel corners mesh_wing gives each Wing
@@ -367,9 +395,43 @@ class TestMeshWingArrays(unittest.TestCase):
                         _mesh_arrays.build_mesh_plan(wing),
                         mesh_arrays_fixtures.make_wing_step_parameters_fixture(wing),
                     )
-                    for grid in corners:
+                    for grid in _corner_grids(corners):
                         self.assertFalse(grid.flags.writeable)
                         self.assertTrue(grid.flags.c_contiguous)
+                    self.assertFalse(corners.WnZ_G.flags.writeable)
+
+    def test_wing_mesh_from_wing_matches_the_wing(self) -> None:
+        """Test that wing_mesh_from_wing reads a built Wing's Panel corners, span, and
+        WnZ_G exactly, and gives the same WingMesh as mesh_wing_arrays (to round off)
+        for every fixture and random Wing."""
+        for wing in _helper_test_wings():
+            with self.subTest(wing=wing.name):
+                wing_mesh = _mesh_arrays.wing_mesh_from_wing(wing)
+                assert wing.panels is not None
+                for name, grid in zip(_CORNER_NAMES, _corner_grids(wing_mesh)):
+                    expected = np.array(
+                        [
+                            [getattr(panel, name) for panel in row]
+                            for row in wing.panels
+                        ],
+                        dtype=float,
+                    )
+                    self.assertTrue(np.array_equal(grid, expected))
+                    self.assertFalse(grid.flags.writeable)
+                self.assertEqual(wing_mesh.span, wing.span)
+                expected_WnZ_G = wing.WnZ_G
+                assert expected_WnZ_G is not None
+                self.assertTrue(np.array_equal(wing_mesh.WnZ_G, expected_WnZ_G))
+
+                plan = _mesh_arrays.build_mesh_plan(wing)
+                self._assert_matches_mesh_wing(
+                    wing,
+                    plan,
+                    _mesh_arrays.mesh_wing_arrays(
+                        plan,
+                        mesh_arrays_fixtures.make_wing_step_parameters_fixture(wing),
+                    ),
+                )
 
 
 class TestMeshArraysHelpers(unittest.TestCase):

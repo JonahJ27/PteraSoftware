@@ -12,7 +12,7 @@ results of this unsteady solver should converge to be close to XFLR5's static re
 import unittest
 
 import pterasoftware as ps
-from tests.integration.fixtures import solver_fixtures
+from tests.integration.fixtures import array_path_fixtures, solver_fixtures
 
 
 class TestUnsteadyRingVortexLatticeMethodStaticGeometry(unittest.TestCase):
@@ -85,3 +85,16 @@ class TestUnsteadyRingVortexLatticeMethodStaticGeometry(unittest.TestCase):
         self.assertTrue(abs(c_di_error) < allowable_error)
         self.assertTrue(abs(c_l_error) < allowable_error)
         self.assertTrue(abs(c_m_error) < allowable_error)
+
+    def test_array_path_matches_the_object_path(self) -> None:
+        """This method tests that running the solver with use_arrays=True gives the same
+        loads as the object path, at every time step, to round off.
+
+        :return: None
+        """
+        object_solver, array_solver = (
+            array_path_fixtures.make_solvers_run_on_both_paths(
+                solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_static_geometry
+            )
+        )
+        array_path_fixtures.assert_loads_match(self, object_solver, array_solver)

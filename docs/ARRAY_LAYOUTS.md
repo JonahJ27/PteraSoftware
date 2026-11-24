@@ -19,7 +19,7 @@ Only what runs at every time step (or every free flight coupling trial) has an a
 
 Plans and step parameters are immutable: NamedTuples whose arrays are read only. Step geometry is immutable once built, so a free flight coupling trial builds new geometry rather than copying an Airplane.
 
-The plans are run scoped: the solver builds them at the start of a run with `use_arrays=True` and clears them when the run ends, so they are never saved in a `.psz` file.
+The plans are run scoped: the solver builds them at the start of a run with `use_arrays=True` and clears them when the run ends, so they are never saved in a `.psz` file. The solver's step geometries are run scoped the same way.
 
 ## Step parameters
 
@@ -71,9 +71,24 @@ A type 5 Wing needs nothing extra: its Airplane has already split it into a type
 
 ## Meshing
 
-`mesh_wing_arrays(plan, parameters)` meshes one Wing from its `MeshPlan` and its `WingStepParameters`, returning a `WingCorners`: four read only (num_chordwise_panels, num_spanwise_panels, 3) arrays, `gridFlpp_G_Cg`, `gridFrpp_G_Cg`, `gridBlpp_G_Cg`, and `gridBrpp_G_Cg`, the Panels' corners (in geometry axes, relative to the CG) in the Wing's Panel grid order (see the column order table above). It does the same operations as `mesh_wing`, in the same order, for every `WingCrossSection` and Panel column at once, and its corners equal `mesh_wing`'s bit for bit on the development machine (its tests allow 1.0e-12 m, since batched NumPy calls aren't guaranteed to round identically on every platform).
+`mesh_wing_arrays(plan, parameters)` meshes one Wing from its `MeshPlan` and its `WingStepParameters`, returning a `WingMesh`: four read only (num_chordwise_panels, num_spanwise_panels, 3) arrays, `gridFlpp_G_Cg`, `gridFrpp_G_Cg`, `gridBlpp_G_Cg`, and `gridBrpp_G_Cg`, the Panels' corners (in geometry axes, relative to the CG) in the Wing's Panel grid order (see the column order table above), plus the Wing's `span` and `WnZ_G`, computed as `Wing.span` and `Wing.WnZ_G` compute them, which the step geometry needs for the standard mean chord. `wing_mesh_from_wing(wing)` reads the same `WingMesh` from a Wing that is already built. It does the same operations as `mesh_wing`, in the same order, for every `WingCrossSection` and Panel column at once, and its corners equal `mesh_wing`'s bit for bit on the development machine (its tests allow 1.0e-12 m, since batched NumPy calls aren't guaranteed to round identically on every platform).
 
 It first calls `_step_parameters.validate_wing_step_parameters`, which raises the error the object path's constructors would raise for the same values (non finite values, angles outside [-90, 90] degrees, a non zero root `WingCrossSection` position or angles, or a non positive spanwise offset), with the same type and message. It also raises if the values change the Wing's symmetry type, which the plans assume is fixed. The object path has no such check (its Airplane would process the Wing as its new type).
+
+## Step geometry
+
+`build_step_geometry` turns every Wing's `WingMesh` (and its Airplane's `Cg_GP1_CgP1`) into a `StepGeometry`, every per Panel quantity in global Panel order: the corners and collocation points (in the first Airplane's geometry axes, relative to its CG), unit normals, areas, each Wing's standard mean chord, and the bound ring vortex corners (whose trailing edge back corners need the previous time step's geometry and the freestream velocity). It replaces `SteadyProblem`'s per Panel transformation, `set_derived_GP1_caches`, `Wing.standard_mean_chord`, and `_initialize_panel_vortices_at`. `bound_r_c0s`, `seed_points`, `wake_vortex_ages`, and `katz_geometry` derive the rest of what `_collapse_geometry` and `_collapse_geometry_katz_data` write.
+
+Everything is bit for bit the object path's except the norms (in the unit normals, areas, projected areas, and Katz lengths), which are vectorized and round about one unit in the last place differently from the object path's one row at a time `np.linalg.norm`. Whole runs agree to about 1e-15 relative. A free wake can amplify that exponentially on a chaotic problem (a flapping Wing's rolled up wake grew it to about 3e-7 over 42 time steps), as any perturbation would.
+
+Where each time step's meshes come from:
+
+| Solver | Meshes |
+|---|---|
+| The plain solver | `mesh_wing_arrays` from the movement's `WingStepParameters` (validated first with `validate_airplane_step_parameters`) |
+| The coupled solvers (aeroelastic, flap driven, free flight) | `wing_mesh_from_wing` from the Wings the problem built during the run, until step 6 of the arrays rewrite gives their step parameters the run's deformation, flap angles, and trial states |
+
+The solver builds the first time step's geometry at the start of the run, and each later time step's one time step early (its wake shedding reads the next time step's ring vortex corners). It keeps only the previous, current, and next time steps' geometry.
 
 ## Error checking
 
