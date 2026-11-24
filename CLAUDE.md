@@ -89,7 +89,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_fixed_point_relaxation.py`: Pure fixed-point relaxation helpers (weighted norm, convergence test, Aitken relaxation factor) for the strong-coupling sub-iteration
     - `_functions.py`: Shared utility functions
     - `_logging.py`: Contains the function for setting up logging
-    - `_mesh_arrays.py`: Array meshing for the unsteady solvers' array path, starting with each Wing's per run `MeshPlan`
+    - `_mesh_arrays.py`: Array meshing for the unsteady solvers' array path: each Wing's per run `MeshPlan` and `mesh_wing_arrays`, which meshes a Wing from its `WingStepParameters` into its Panel corners without building any objects
     - `_mujoco_model.py`: Contains the `MuJoCoModel` class
     - `_oscillation.py`: Oscillation functions for movement classes
     - `_output_plotting.py`: Matplotlib figure drawing for the visualization functions
@@ -99,7 +99,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_private_access.py`: Registration pattern that grants cross-module access to private attributes, currently a `FreeFlightUnsteadyProblem`'s `MuJoCoModel` for the rendering layer
     - `_serialization.py`: Serialization and deserialization (save/load) to and from `.psz` files, which are zip archives of JSON members chunked by time step
     - `_step_geometry.py`: The unsteady solvers' array path's per time step geometry, starting with the per run `LayoutPlan` (global Panel order and edge flags)
-    - `_step_parameters.py`: The per time step parameter records (`WingCrossSectionStepParameters`, `WingStepParameters`, `AirplaneStepParameters`) the movement classes evaluate their motion into, which their object builders and the array path both use
+    - `_step_parameters.py`: The per time step parameter records (`WingCrossSectionStepParameters`, `WingStepParameters`, `AirplaneStepParameters`) the movement classes evaluate their motion into, which their object builders and the array path both use, and their validation, which raises the same errors as the objects' constructors
     - `_transformations.py`: Coordinate transformations and rotations
     - `aeroelastic_unsteady_ring_vortex_lattice_method.py`: Aeroelastic UVLM solver subclass with first-order structural deformation
     - `approximations.py`: `Approximations` class, the opt in approximations (off by default) that make the free flight sub-iteration faster in exchange for small, measured changes to the results

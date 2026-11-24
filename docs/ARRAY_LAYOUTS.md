@@ -61,6 +61,24 @@ The `LayoutPlan`'s `is_leading_edge`, `is_trailing_edge`, `is_left_edge`, and `i
 
 Each Wing's `MeshPlan` holds its symmetry type (1 to 4), its chordwise and spanwise panel counts (the spanwise count doubled for a type 4 Wing, whose grid holds both halves), the normalized chordwise coordinates of the Panels' edges (from 0.0 at the leading edge to 1.0 at the trailing edge, uniform or cosine spaced exactly as `mesh_wing` spaces them), and, for each Panel column of the main half, its wing section and the normalized spanwise coordinates of its inner and outer edges within that wing section.
 
+It also holds everything else about the Wing's mesh that is fixed for the run:
+
+- `gridMclPoints_Wcs_Lp`, (K, num_chordwise_panels + 1, 3), with one entry per `WingCrossSection`: its mean camber line points at the chordwise coordinates (in its own axes, relative to its leading point), with its control surface deflected and scaled by its chord. A `WingCrossSection`'s `Airfoil`, chord, and control surface never change during a run, so no `Airfoil` work happens inside the loop.
+- `gridMirroredMclPoints_Wcs_Lp`, the same points for a type 4 Wing's mirrored half when some asymmetric control surface has a non zero deflection (so it deflects the other way on that half), and otherwise `None`.
+- The symmetry plane, `symmetryNormal_G` and `symmetryPoint_G_Cg` (`None` for a type 1 Wing).
+
+A type 5 Wing needs nothing extra: its Airplane has already split it into a type 1 Wing and its type 3 reflection, each with its own movement, step parameters, and `MeshPlan` (the reflection's `WingCrossSection`s already carry its reversed asymmetric deflections).
+
+## Meshing
+
+`mesh_wing_arrays(plan, parameters)` meshes one Wing from its `MeshPlan` and its `WingStepParameters`, returning a `WingCorners`: four read only (num_chordwise_panels, num_spanwise_panels, 3) arrays, `gridFlpp_G_Cg`, `gridFrpp_G_Cg`, `gridBlpp_G_Cg`, and `gridBrpp_G_Cg`, the Panels' corners (in geometry axes, relative to the CG) in the Wing's Panel grid order (see the column order table above). It does the same operations as `mesh_wing`, in the same order, for every `WingCrossSection` and Panel column at once, and its corners equal `mesh_wing`'s bit for bit on the development machine (its tests allow 1.0e-12 m, since batched NumPy calls aren't guaranteed to round identically on every platform).
+
+It first calls `_step_parameters.validate_wing_step_parameters`, which raises the error the object path's constructors would raise for the same values (non finite values, angles outside [-90, 90] degrees, a non zero root `WingCrossSection` position or angles, or a non positive spanwise offset), with the same type and message. It also raises if the values change the Wing's symmetry type, which the plans assume is fixed. The object path has no such check (its Airplane would process the Wing as its new type).
+
+## Error checking
+
+The array path raises the same errors as the object path. The object path checks most per time step values implicitly, in the constructors of the objects it builds, so each array function that replaces object building has a validation function that repeats those checks, and a test that it raises exactly where building the objects raises. The step parameter checks are `validate_wing_step_parameters` and `validate_airplane_step_parameters` in `_step_parameters.py`. `FreeFlightAeroelasticMovement`, which no longer builds its Airplanes when it is created, runs `validate_airplane_step_parameters` on every prescribed time step instead, so invalid prescribed motion still raises when the movement is created.
+
 ## The copy dimension and the array module
 
 For GPU batches (Part B of `experimental/plan_arrays_and_gpu.md`), the array functions will accept an optional leading copy axis, (B, N, 3) rather than (N, 3), and broadcast over it. Plans have no copy axis, since every copy shares the problem's structure. The functions Part B runs on the GPU will take an array module (`xp`, NumPy or CuPy). Index arithmetic from the plans stays NumPy and is moved to the device once per run.

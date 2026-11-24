@@ -583,6 +583,46 @@ class TestFreeFlightAeroelasticMovementPrescribedAirplanes(unittest.TestCase):
                     )
         self.assertEqual(airplane_movement.base_airplane.c_ref, airplanes[0][0].c_ref)
 
+    def test_out_of_range_motion_is_rejected_at_construction(self) -> None:
+        """Test that a movement whose Wing's or tip WingCrossSection's angle leaves
+        [-90.0, 90.0] degrees at a later time step is rejected when it is created, with
+        the error building that time step's Airplane raises, as when the movement built
+        every Airplane up front, and that the same motion within range is accepted."""
+        cases = (
+            (dict(ampAngleY_Gs_to_Wn=100.0), True),
+            (dict(ampTipAngleY_Wcsp_to_Wcs=100.0), True),
+            (dict(ampAngleY_Gs_to_Wn=80.0), False),
+        )
+        for amplitudes, should_raise in cases:
+            with self.subTest(amplitudes=amplitudes):
+
+                def make() -> None:
+                    ps.movements.free_flight_movement.FreeFlightAeroelasticMovement(
+                        airplane_movements=[
+                            aeroelastic_airplane_movement_fixtures.make_out_of_range_aeroelastic_airplane_movement_fixture(
+                                **amplitudes
+                            )
+                        ],
+                        operating_point_movement=free_flight_operating_point_movement_fixtures.make_basic_free_flight_operating_point_movement_fixture(),
+                        delta_time=0.1,
+                        prescribed_num_steps=3,
+                        free_num_steps=2,
+                    )
+
+                if not should_raise:
+                    make()
+                    continue
+
+                # The angle is out of range at time step 1 (a quarter period).
+                airplane_movement = aeroelastic_airplane_movement_fixtures.make_out_of_range_aeroelastic_airplane_movement_fixture(
+                    **amplitudes
+                )
+                with self.assertRaises(ValueError) as expected:
+                    airplane_movement.generate_airplane_at_time_step(1, 0.1)
+                with self.assertRaises(ValueError) as context:
+                    make()
+                self.assertEqual(str(context.exception), str(expected.exception))
+
     def test_a_symmetry_type_change_is_rejected_at_construction(self) -> None:
         """Test that a movement whose Wing changes symmetry type at a later time step is
         rejected when it is created, and that the same movement without the motion is

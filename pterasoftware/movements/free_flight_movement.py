@@ -360,6 +360,29 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
         # )
         # octowrap: on
 
+        # Validate every time step's values as building its Airplane would, so invalid
+        # prescribed motion raises here, as it did when the Airplanes were built here,
+        # rather than at the time step that first builds the invalid Airplane during the
+        # run. Like the old code, this checks every AirplaneMovement's time steps before
+        # any symmetry types. An AirplaneMovement with static geometry has its base
+        # Airplane's (already valid) values at every time step, so it is skipped, as the
+        # old code built only its first Airplane.
+        airplanes_parameters: list[list[_step_parameters.AirplaneStepParameters]] = []
+        for validated_airplane_movement in self.airplane_movements:
+            this_airplanes_parameters: list[_step_parameters.AirplaneStepParameters] = (
+                []
+            )
+            if validated_airplane_movement.max_period != 0.0:
+                for step_id in range(self._num_steps):
+                    airplane_parameters = validated_airplane_movement._generate_airplane_parameters_at_time_step(
+                        step_id, self._delta_time
+                    )
+                    _step_parameters.validate_airplane_step_parameters(
+                        airplane_parameters
+                    )
+                    this_airplanes_parameters.append(airplane_parameters)
+            airplanes_parameters.append(this_airplanes_parameters)
+
         # Validate that all Wings maintain their symmetry type across all time steps.
         # Each time step's symmetry types are found from its parameters, with the same
         # decision the Airplane makes when it is built, so no Airplanes are built here.
@@ -380,13 +403,13 @@ class FreeFlightAeroelasticMovement(_core.CoreMovement):
                 for wing_movement in airplane_movement.wing_movements
             ):
                 continue
+            # A Wing with position or angle motion has a non zero period, so the
+            # validation above stored this AirplaneMovement's parameters.
             base_wing_symmetry_types: list[int] = []
             for step_id in range(self._num_steps):
-                airplane_parameters = (
-                    airplane_movement._generate_airplane_parameters_at_time_step(
-                        step_id, self._delta_time
-                    )
-                )
+                airplane_parameters = airplanes_parameters[airplane_movement_id][
+                    step_id
+                ]
                 for wing_id, (base_wing, wing_parameters) in enumerate(
                     zip(base_wings, airplane_parameters.wings)
                 ):
