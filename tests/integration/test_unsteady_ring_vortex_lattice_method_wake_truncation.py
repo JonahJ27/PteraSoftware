@@ -9,7 +9,11 @@ loads that are close to the non truncated simulation.
 import unittest
 
 import pterasoftware as ps
-from tests.integration.fixtures import airplane_fixtures, operating_point_fixtures
+from tests.integration.fixtures import (
+    airplane_fixtures,
+    array_path_fixtures,
+    operating_point_fixtures,
+)
 
 
 def _make_static_movement_components() -> tuple[
@@ -191,3 +195,36 @@ class TestWakeTruncation(unittest.TestCase):
 
             # The point grid has one more row than the vortex grid.
             self.assertEqual(grid.shape[0], self.max_wake_rows + 1)
+
+    def test_array_path_matches_the_object_path(self) -> None:
+        """Test that the truncated simulation gives the same loads on the array path as
+        on the object path, at every time step, to round off, with a prescribed and a
+        free wake."""
+
+        def make_truncated_solver() -> (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+        ):
+            airplane_movement, operating_point_movement = (
+                _make_static_movement_components()
+            )
+            movement = ps.movements.movement.Movement(
+                airplane_movements=[airplane_movement],
+                operating_point_movement=operating_point_movement,
+                delta_time=self.truncated_solver.delta_time,
+                num_steps=self.truncated_solver.num_steps,
+                max_wake_chords=3,
+            )
+            return ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+                ps.problems.UnsteadyProblem(movement=movement)
+            )
+
+        for prescribed_wake in (True, False):
+            with self.subTest(prescribed_wake=prescribed_wake):
+                object_solver, array_solver = (
+                    array_path_fixtures.make_solvers_run_on_both_paths(
+                        make_truncated_solver, prescribed_wake=prescribed_wake
+                    )
+                )
+                array_path_fixtures.assert_loads_match(
+                    self, object_solver, array_solver
+                )

@@ -309,6 +309,95 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                                 atol=1.0e-10 * float(np.max(np.abs(object_value))),
                             )
 
+    def test_array_path_wake_matches_the_object_path(self) -> None:
+        """Test that, at every time step, for prescribed and free wakes, the array
+        path's next wake ring vortices and wake point grids match the object path's to
+        round off, that it keeps at most two time steps' grids, and that it clears them
+        when the run ends."""
+        populate = (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver._populate_next_airplanes_wake
+        )
+        for maker_index, make in enumerate(
+            (
+                solver_fixtures.make_unsteady_ring_solver_fixture,
+                lambda: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+                    problem_fixtures.make_pitching_tip_unsteady_problem_fixture()
+                ),
+                solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture,
+            )
+        ):
+            for prescribed_wake in (True, False):
+                records: dict[bool, list[dict[str, Any]]] = {}
+                for use_arrays in (False, True):
+                    solver = make()
+                    steps: list[dict[str, Any]] = []
+
+                    def recording_populate(self: Any) -> None:
+                        populate(self)
+                        next_step = self._current_step + 1
+                        if next_step >= self.num_steps:
+                            return
+                        next_problem = self._get_steady_problem_at(next_step)
+                        steps.append(
+                            {
+                                "Fl": self.listStackFlwrvp_GP1_CgP1[next_step].copy(),
+                                "Br": self.listStackBrwrvp_GP1_CgP1[next_step].copy(),
+                                "strengths": self._list_wake_vortex_strengths[
+                                    next_step
+                                ].copy(),
+                                "r_c0s": self._list_wake_r_c0s[next_step].copy(),
+                                "grids": np.concatenate(
+                                    [
+                                        wing.gridWrvp_GP1_CgP1.ravel()
+                                        for airplane in next_problem.airplanes
+                                        for wing in airplane.wings
+                                    ]
+                                ),
+                                "num_kept_grids": (
+                                    len(self._wake_grids)
+                                    if self._wake_grids is not None
+                                    else 0
+                                ),
+                            }
+                        )
+
+                    with patch.object(
+                        type(solver),
+                        "_populate_next_airplanes_wake",
+                        recording_populate,
+                    ):
+                        solver.run(
+                            show_progress=False,
+                            use_arrays=use_arrays,
+                            prescribed_wake=prescribed_wake,
+                        )
+                    records[use_arrays] = steps
+                    self.assertIsNone(solver._wake_grids)
+
+                self.assertEqual(len(records[True]), len(records[False]))
+                for step, (array_record, object_record) in enumerate(
+                    zip(records[True], records[False])
+                ):
+                    self.assertLessEqual(array_record["num_kept_grids"], 2)
+                    for name in ("Fl", "Br", "strengths", "r_c0s", "grids"):
+                        with self.subTest(
+                            maker=maker_index,
+                            prescribed_wake=prescribed_wake,
+                            step=step,
+                            name=name,
+                        ):
+                            object_value = object_record[name]
+                            np.testing.assert_allclose(
+                                array_record[name],
+                                object_value,
+                                rtol=1.0e-10,
+                                atol=1.0e-10
+                                * max(
+                                    float(np.max(np.abs(object_value), initial=0.0)),
+                                    1.0,
+                                ),
+                            )
+
     def test_array_path_collapse_matches_the_object_path(self) -> None:
         """Test that, at every time step, the array path writes the object path's
         collapsed geometry into the solver's arrays (to round off), for plain solvers

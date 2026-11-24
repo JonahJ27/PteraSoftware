@@ -3267,6 +3267,7 @@ class TestUnsteadySolverRoundTrip(unittest.TestCase):
                 self.assertIsNone(loaded._mesh_plans)
                 self.assertIsNone(loaded._layout_plan)
                 self.assertIsNone(loaded._step_geometries)
+                self.assertIsNone(loaded._wake_grids)
 
     def test_shared_reference_identity(self) -> None:
         """Tests that the solver's shared references point into the UnsteadyProblem

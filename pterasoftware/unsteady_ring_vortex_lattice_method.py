@@ -22,6 +22,7 @@ from . import (
     _step_geometry,
     _step_parameters,
     _transformations,
+    _wake_arrays,
     geometry,
     operating_point,
     problems,
@@ -53,6 +54,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_layout_plan",
         "_step_geometries",
         "_current_step_loads",
+        "_wake_grids",
         "current_airplanes",
         "current_operating_point",
         "num_airplanes",
@@ -185,6 +187,14 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # _loads_arrays.step_loads. Like the plans, they are run scoped: None outside a
         # run with use_arrays=True, and before the first loads of one.
         self._current_step_loads: _loads_arrays.StepLoads | None = None
+
+        # The array path's wake point grids, keyed by time step, each a list with one (R
+        # + 1, N + 1, 3) grid per Wing in global Wing order. On the object path they are
+        # stored on each time step's Wings instead. Only the current and next time
+        # steps' are kept, since a time step's wake update reads its own grids and
+        # writes the next one's. Like the plans, they are run scoped: an empty dict
+        # during a run with use_arrays=True, and None otherwise.
+        self._wake_grids: dict[int, list[np.ndarray]] | None = None
 
         first_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(0)
 
@@ -522,6 +532,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
             )
             self._layout_plan = _step_geometry.build_layout_plan(first_airplanes)
             self._step_geometries = {}
+            self._wake_grids = {}
             _logger.info(_logging.indent() + "Running with the array path")
 
         # Report the thread dispatch settings this run's kernel launches will operate
@@ -655,6 +666,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         self._layout_plan = None
         self._step_geometries = None
         self._current_step_loads = None
+        self._wake_grids = None
 
         # Mark that the solver has run.
         self._ran = True
@@ -2240,6 +2252,27 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """
         stackVIndGridWrvp_GP1__E: list[list[np.ndarray]] = []
 
+        # Changed for the arrays rewrite: the array path reads the current wake grids
+        # from the solver's store rather than from the Wings, in the same order, and
+        # groups the results by Airplane in the same way.
+        if self._use_arrays:
+            assert self._wake_grids is not None
+            currentGridsWrvp_GP1_CgP1 = self._wake_grids[self._current_step]
+            wing_id = 0
+            for this_airplane in self.current_airplanes:
+                thisAirplaneStackVIndGridWrvp_GP1__E: list[np.ndarray] = []
+                for _ in this_airplane.wings:
+                    thisAirplaneStackVIndGridWrvp_GP1__E.append(
+                        self._calculate_induced_velocity(
+                            currentGridsWrvp_GP1_CgP1[wing_id].reshape(-1, 3),
+                            bound_singularity_counts=bound_singularity_counts,
+                            wake_singularity_counts=wake_singularity_counts,
+                        )
+                    )
+                    wing_id += 1
+                stackVIndGridWrvp_GP1__E.append(thisAirplaneStackVIndGridWrvp_GP1__E)
+            return stackVIndGridWrvp_GP1__E
+
         # Iterate through the current time step's Airplanes and Wings, matching the
         # [airplane_id][wing_id] indexing used by
         # _populate_next_airplanes_wake_vortex_points.
@@ -3001,258 +3034,28 @@ class UnsteadyRingVortexLatticeMethodSolver:
                     bound_singularity_counts, wake_singularity_counts
                 )
 
-            # Iterate through this time step's Airplanes' successor objects.
-            for airplane_id, next_airplane in enumerate(next_airplanes):
-
-                # Iterate through the next Airplane's Wings.
-                for wing_id, next_wing in enumerate(next_airplane.wings):
-
-                    # Get the Wings at this position from the current Airplane.
-                    this_airplane = self.current_airplanes[airplane_id]
-                    this_wing = this_airplane.wings[wing_id]
-
-                    # Check if this is the first time step.
-                    if self._current_step == 0:
-
-                        # Get the current Wing's number of chordwise and spanwise
-                        # panels.
-                        num_spanwise_panels = this_wing.num_spanwise_panels
-                        assert num_spanwise_panels is not None
-
-                        num_chordwise_panels = this_wing.num_chordwise_panels
-
-                        # Set the chordwise position to be at the trailing edge.
-                        chordwise_panel_id = num_chordwise_panels - 1
-
-                        # Initialize a ndarray to hold the points of the new row of wake
-                        # ring vortices (in the first Airplane's geometry axes, relative
-                        # to the first Airplane's CG).
-                        newRowWrvp_GP1_CgP1 = np.zeros(
-                            (1, num_spanwise_panels + 1, 3), dtype=float
-                        )
-
-                        next_step = self._current_step + 1
-                        next_stackBl = self._listStackBlbrvp_GP1_CgP1[next_step]
-                        next_stackBr = self._listStackBrbrvp_GP1_CgP1[next_step]
-                        wing_panel_offset = self._per_wing_panel_offsets[airplane_id][
-                            wing_id
-                        ]
-                        te_panel_base = (
-                            wing_panel_offset + chordwise_panel_id * num_spanwise_panels
-                        )
-
-                        # Iterate through the spanwise Panel positions.
-                        for spanwise_panel_id in range(num_spanwise_panels):
-                            te_global_idx = te_panel_base + spanwise_panel_id
-
-                            # The position of the new front left wake ring vortex's
-                            # point is the next time step's Panel's bound ring vortex's
-                            # back left point.
-                            newRowWrvp_GP1_CgP1[0, spanwise_panel_id] = next_stackBl[
-                                te_global_idx
-                            ]
-
-                            # If the Panel is at the right edge of the Wing, add its
-                            # back right bound ring vortex point to the row of new wake
-                            # ring vortex points.
-                            if spanwise_panel_id == (num_spanwise_panels - 1):
-                                newRowWrvp_GP1_CgP1[0, spanwise_panel_id + 1] = (
-                                    next_stackBr[te_global_idx]
-                                )
-
-                        # Set the next time step's Wing's grid of wake ring vortex
-                        # points to a copy of the row of new wake ring vortex points.
-                        # This is correct because it is currently the first time step.
-                        next_wing.gridWrvp_GP1_CgP1 = np.copy(newRowWrvp_GP1_CgP1)
-
-                        # If the wake is prescribed, the velocity at every point is the
-                        # freestream velocity (in the first Airplane's geometry axes,
-                        # observed from the Earth frame). Otherwise, batch one
-                        # solution-velocity call across all of the row's points.
-                        if self._prescribed_wake:
-                            vRowWrvp_GP1__E = convectionVInf_GP1__E
-                        else:
-                            stackRowWrvp_GP1_CgP1 = next_wing.gridWrvp_GP1_CgP1.reshape(
-                                -1, 3
-                            )
-                            # Take the induced velocity at the current step and add the
-                            # next step's freestream (the interval's end frame), rather
-                            # than the current step's freestream that
-                            # calculate_solution_velocity would add.
-                            stackVRowWrvp_GP1__E = (
-                                self._calculate_induced_velocity(
-                                    stackRowWrvp_GP1_CgP1,
-                                    bound_singularity_counts=bound_singularity_counts,
-                                    wake_singularity_counts=wake_singularity_counts,
-                                )
-                                + convectionVInf_GP1__E
-                            )
-                            vRowWrvp_GP1__E = stackVRowWrvp_GP1__E.reshape(
-                                next_wing.gridWrvp_GP1_CgP1.shape
-                            )
-
-                        # The wake points are stored in the first Airplane's geometry
-                        # axes, which rotate with the body. Apply the apparent velocity
-                        # from body rotation (omega cross r), just as is done at the
-                        # collocation points and bound line vortex leg centers, so the
-                        # wake convects with the fluid velocity relative to the rotating
-                        # body frame. Without this term, a nonzero body rate would carry
-                        # the wake along with the body instead of leaving it fixed in
-                        # the Earth frame. When the solver does not model body rotation,
-                        # this is a no-op.
-                        vRowWrvp_GP1__E = self._apply_body_rate(
-                            next_wing.gridWrvp_GP1_CgP1,
-                            vRowWrvp_GP1__E,
-                            convectionOmegasRad_GP1__E,
-                        )
-
-                        # Build the second new row by advecting the first row.
-                        secondNewRowWrvp_GP1_CgP1 = (
-                            next_wing.gridWrvp_GP1_CgP1
-                            + vRowWrvp_GP1__E * self.delta_time
-                        )
-
-                        # Update the next time step's Wing's grid of wake ring vortex
-                        # points by vertically stacking the new second row below it.
-                        next_wing.gridWrvp_GP1_CgP1 = np.vstack(
-                            (
-                                next_wing.gridWrvp_GP1_CgP1,
-                                secondNewRowWrvp_GP1_CgP1,
-                            )
-                        )
-
-                    # If this isn't the first time step, then do this.
-                    else:
-                        _thisGridWrvp_GP1_CgP1 = this_wing.gridWrvp_GP1_CgP1
-                        assert _thisGridWrvp_GP1_CgP1 is not None
-
-                        # Set the next time step's Wing's grid of wake ring vortex
-                        # points to a copy of this time step's Wing's grid of wake ring
-                        # vortex points.
-                        next_wing.gridWrvp_GP1_CgP1 = np.copy(_thisGridWrvp_GP1_CgP1)
-
-                        # If the wake is prescribed, the velocity at every point is the
-                        # freestream velocity (in the first Airplane's geometry axes,
-                        # observed from the Earth frame). Otherwise, add the next step's
-                        # freestream (the interval's end frame, rather than the current
-                        # step's freestream that calculate_solution_velocity would add)
-                        # to the induced velocity at the aged grid, computed up front
-                        # for this call or supplied by a strongly coupled sub-iteration
-                        # that reuses it across trials.
-                        #
-                        # The transport velocity has three terms, and only the first can
-                        # be reused:
-                        #   1. The induced velocity, stackVIndGridWrvp_GP1__E. It
-                        #      depends only on this time step's wake points, bound and
-                        #      wake geometry, and strengths, all of which are already
-                        #      solved and fixed. It does not depend on the next time
-                        #      step's OperatingPoint, so a strongly coupled free flight
-                        #      step can compute it once and reuse it for every trial and
-                        #      for the official wake build after the solve accepts.
-                        #   2. The freestream, convectionVInf_GP1__E, added below.
-                        #   3. The apparent velocity from body rotation, which
-                        #      _apply_body_rate adds below from
-                        #      convectionOmegasRad_GP1__E.
-                        # Terms 2 and 3 come from the next time step's OperatingPoint (a
-                        # trial's during a sub-iteration, the accepted one in the
-                        # official wake build), and are recomputed at the top of every
-                        # call, so a reused induced velocity never carries a stale body
-                        # state.
-                        if self._prescribed_wake:
-                            vGridWrvp_GP1__E = convectionVInf_GP1__E
-                        else:
-                            assert stackVIndGridWrvp_GP1__E is not None
-                            stackVGridWrvp_GP1__E = (
-                                stackVIndGridWrvp_GP1__E[airplane_id][wing_id]
-                                + convectionVInf_GP1__E
-                            )
-                            vGridWrvp_GP1__E = stackVGridWrvp_GP1__E.reshape(
-                                next_wing.gridWrvp_GP1_CgP1.shape
-                            )
-
-                        # The wake points are stored in the first Airplane's geometry
-                        # axes, which rotate with the body. Apply the apparent velocity
-                        # from body rotation (omega cross r), just as is done at the
-                        # collocation points and bound line vortex leg centers, so the
-                        # wake convects with the fluid velocity relative to the rotating
-                        # body frame. Without this term, a nonzero body rate would carry
-                        # the wake along with the body instead of leaving it fixed in
-                        # the Earth frame. When the solver does not model body rotation,
-                        # this is a no-op.
-                        vGridWrvp_GP1__E = self._apply_body_rate(
-                            next_wing.gridWrvp_GP1_CgP1,
-                            vGridWrvp_GP1__E,
-                            convectionOmegasRad_GP1__E,
-                        )
-
-                        # Advect the entire aged grid in one vector add.
-                        next_wing.gridWrvp_GP1_CgP1 = (
-                            next_wing.gridWrvp_GP1_CgP1
-                            + vGridWrvp_GP1__E * self.delta_time
-                        )
-
-                        # Find the chordwise position of the Wing's trailing edge.
-                        chordwise_panel_id = this_wing.num_chordwise_panels - 1
-
-                        _num_spanwise_panels = this_wing.num_spanwise_panels
-                        assert _num_spanwise_panels is not None
-
-                        # Initialize a new ndarray to hold the new row of wake ring
-                        # vortex vertices.
-                        newRowWrvp_GP1_CgP1 = np.zeros(
-                            (1, _num_spanwise_panels + 1, 3), dtype=float
-                        )
-
-                        next_step = self._current_step + 1
-                        next_stackBl = self._listStackBlbrvp_GP1_CgP1[next_step]
-                        next_stackBr = self._listStackBrbrvp_GP1_CgP1[next_step]
-                        wing_panel_offset = self._per_wing_panel_offsets[airplane_id][
-                            wing_id
-                        ]
-                        te_panel_base = (
-                            wing_panel_offset
-                            + chordwise_panel_id * _num_spanwise_panels
-                        )
-
-                        # Iterate spanwise through the trailing edge Panels.
-                        for spanwise_panel_id in range(_num_spanwise_panels):
-                            te_global_idx = te_panel_base + spanwise_panel_id
-
-                            # Add the Panel's back left bound ring vortex point to the
-                            # grid of new wake ring vortex points.
-                            newRowWrvp_GP1_CgP1[0, spanwise_panel_id] = next_stackBl[
-                                te_global_idx
-                            ]
-
-                            # If the Panel is at the right edge of the Wing, add its
-                            # back right bound ring vortex point to the grid of new wake
-                            # ring vortex vertices.
-                            if spanwise_panel_id == (_num_spanwise_panels - 1):
-                                newRowWrvp_GP1_CgP1[0, spanwise_panel_id + 1] = (
-                                    next_stackBr[te_global_idx]
-                                )
-
-                        # Stack the new row of wake ring vortex points above the Wing's
-                        # grid of wake ring vortex points.
-                        next_wing.gridWrvp_GP1_CgP1 = np.vstack(
-                            (
-                                newRowWrvp_GP1_CgP1,
-                                next_wing.gridWrvp_GP1_CgP1,
-                            )
-                        )
-
-                        # If wake truncation is enabled, discard the oldest (most
-                        # downstream) rows of wake points. The point grid has one more
-                        # row than the vortex grid because points form vertices and
-                        # vortices form cells.
-                        if (
-                            self._max_wake_rows is not None
-                            and next_wing.gridWrvp_GP1_CgP1.shape[0]
-                            > self._max_wake_rows + 1
-                        ):
-                            next_wing.gridWrvp_GP1_CgP1 = next_wing.gridWrvp_GP1_CgP1[
-                                : self._max_wake_rows + 1
-                            ]
+            # Changed for the arrays rewrite: each Wing's next wake grid used to be
+            # built here, on the next time step's Wings. The object path still does
+            # that, in _populate_next_wake_grids_on_wings, unchanged. The array path
+            # builds the same grids with _wake_arrays and keeps them on the solver.
+            if self._use_arrays:
+                self._populate_next_wake_grids_as_arrays(
+                    next_airplanes,
+                    stackVIndGridWrvp_GP1__E,
+                    convectionVInf_GP1__E,
+                    convectionOmegasRad_GP1__E,
+                    bound_singularity_counts,
+                    wake_singularity_counts,
+                )
+            else:
+                self._populate_next_wake_grids_on_wings(
+                    next_airplanes,
+                    stackVIndGridWrvp_GP1__E,
+                    convectionVInf_GP1__E,
+                    convectionOmegasRad_GP1__E,
+                    bound_singularity_counts,
+                    wake_singularity_counts,
+                )
 
             unexpected_bound_singularity_counts = np.copy(bound_singularity_counts)
             unexpected_wake_singularity_counts = np.copy(wake_singularity_counts)
@@ -3269,6 +3072,387 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 "_populate_next_airplanes_wake_vortex_points (wake)",
                 unexpected_wake_singularity_counts,
             )
+
+    def _populate_next_wake_grids_on_wings(
+        self,
+        next_airplanes: tuple[geometry.airplane.Airplane, ...],
+        stackVIndGridWrvp_GP1__E: list[list[np.ndarray]] | None,
+        convectionVInf_GP1__E: np.ndarray,
+        convectionOmegasRad_GP1__E: np.ndarray,
+        bound_singularity_counts: np.ndarray,
+        wake_singularity_counts: np.ndarray,
+    ) -> None:
+        """Builds each Wing's next wake point grid on the next time step's Wings, on the
+        object path.
+
+        This is _populate_next_airplanes_wake_vortex_points' per Wing loop, moved here
+        unchanged for the arrays rewrite.
+
+        :param next_airplanes: The next time step's Airplanes.
+        :param stackVIndGridWrvp_GP1__E: A list, indexed [airplane_id][wing_id], of (N,
+            3) ndarrays of floats holding the induced velocity (in the first Airplane's
+            geometry axes, observed from the Earth frame) at each Wing's current wake
+            point grid, or None at the first time step and for a prescribed wake. The
+            units are in meters per second.
+        :param convectionVInf_GP1__E: A (3,) ndarray of floats representing the next
+            time step's freestream velocity (in the first Airplane's geometry axes,
+            observed from the Earth frame), which convects the wake. The units are in
+            meters per second.
+        :param convectionOmegasRad_GP1__E: A (3,) ndarray of floats representing the
+            next time step's body rate (in the first Airplane's geometry axes, observed
+            from the Earth frame). The units are in radians per second.
+        :param bound_singularity_counts: A (3,) ndarray of int64 for accumulating
+            singularity event counts from bound ring vortices.
+        :param wake_singularity_counts: A (3,) ndarray of int64 for accumulating
+            singularity event counts from wake ring vortices.
+        :return: None
+        """
+        # Iterate through this time step's Airplanes' successor objects.
+        for airplane_id, next_airplane in enumerate(next_airplanes):
+
+            # Iterate through the next Airplane's Wings.
+            for wing_id, next_wing in enumerate(next_airplane.wings):
+
+                # Get the Wings at this position from the current Airplane.
+                this_airplane = self.current_airplanes[airplane_id]
+                this_wing = this_airplane.wings[wing_id]
+
+                # Check if this is the first time step.
+                if self._current_step == 0:
+
+                    # Get the current Wing's number of chordwise and spanwise panels.
+                    num_spanwise_panels = this_wing.num_spanwise_panels
+                    assert num_spanwise_panels is not None
+
+                    num_chordwise_panels = this_wing.num_chordwise_panels
+
+                    # Set the chordwise position to be at the trailing edge.
+                    chordwise_panel_id = num_chordwise_panels - 1
+
+                    # Initialize a ndarray to hold the points of the new row of wake
+                    # ring vortices (in the first Airplane's geometry axes, relative to
+                    # the first Airplane's CG).
+                    newRowWrvp_GP1_CgP1 = np.zeros(
+                        (1, num_spanwise_panels + 1, 3), dtype=float
+                    )
+
+                    next_step = self._current_step + 1
+                    next_stackBl = self._listStackBlbrvp_GP1_CgP1[next_step]
+                    next_stackBr = self._listStackBrbrvp_GP1_CgP1[next_step]
+                    wing_panel_offset = self._per_wing_panel_offsets[airplane_id][
+                        wing_id
+                    ]
+                    te_panel_base = (
+                        wing_panel_offset + chordwise_panel_id * num_spanwise_panels
+                    )
+
+                    # Iterate through the spanwise Panel positions.
+                    for spanwise_panel_id in range(num_spanwise_panels):
+                        te_global_idx = te_panel_base + spanwise_panel_id
+
+                        # The position of the new front left wake ring vortex's point is
+                        # the next time step's Panel's bound ring vortex's back left
+                        # point.
+                        newRowWrvp_GP1_CgP1[0, spanwise_panel_id] = next_stackBl[
+                            te_global_idx
+                        ]
+
+                        # If the Panel is at the right edge of the Wing, add its back
+                        # right bound ring vortex point to the row of new wake ring
+                        # vortex points.
+                        if spanwise_panel_id == (num_spanwise_panels - 1):
+                            newRowWrvp_GP1_CgP1[0, spanwise_panel_id + 1] = (
+                                next_stackBr[te_global_idx]
+                            )
+
+                    # Set the next time step's Wing's grid of wake ring vortex points to
+                    # a copy of the row of new wake ring vortex points. This is correct
+                    # because it is currently the first time step.
+                    next_wing.gridWrvp_GP1_CgP1 = np.copy(newRowWrvp_GP1_CgP1)
+
+                    # If the wake is prescribed, the velocity at every point is the
+                    # freestream velocity (in the first Airplane's geometry axes,
+                    # observed from the Earth frame). Otherwise, batch one
+                    # solution-velocity call across all of the row's points.
+                    if self._prescribed_wake:
+                        vRowWrvp_GP1__E = convectionVInf_GP1__E
+                    else:
+                        stackRowWrvp_GP1_CgP1 = next_wing.gridWrvp_GP1_CgP1.reshape(
+                            -1, 3
+                        )
+                        # Take the induced velocity at the current step and add the next
+                        # step's freestream (the interval's end frame), rather than the
+                        # current step's freestream that calculate_solution_velocity
+                        # would add.
+                        stackVRowWrvp_GP1__E = (
+                            self._calculate_induced_velocity(
+                                stackRowWrvp_GP1_CgP1,
+                                bound_singularity_counts=bound_singularity_counts,
+                                wake_singularity_counts=wake_singularity_counts,
+                            )
+                            + convectionVInf_GP1__E
+                        )
+                        vRowWrvp_GP1__E = stackVRowWrvp_GP1__E.reshape(
+                            next_wing.gridWrvp_GP1_CgP1.shape
+                        )
+
+                    # The wake points are stored in the first Airplane's geometry axes,
+                    # which rotate with the body. Apply the apparent velocity from body
+                    # rotation (omega cross r), just as is done at the collocation
+                    # points and bound line vortex leg centers, so the wake convects
+                    # with the fluid velocity relative to the rotating body frame.
+                    # Without this term, a nonzero body rate would carry the wake along
+                    # with the body instead of leaving it fixed in the Earth frame. When
+                    # the solver does not model body rotation, this is a no-op.
+                    vRowWrvp_GP1__E = self._apply_body_rate(
+                        next_wing.gridWrvp_GP1_CgP1,
+                        vRowWrvp_GP1__E,
+                        convectionOmegasRad_GP1__E,
+                    )
+
+                    # Build the second new row by advecting the first row.
+                    secondNewRowWrvp_GP1_CgP1 = (
+                        next_wing.gridWrvp_GP1_CgP1 + vRowWrvp_GP1__E * self.delta_time
+                    )
+
+                    # Update the next time step's Wing's grid of wake ring vortex points
+                    # by vertically stacking the new second row below it.
+                    next_wing.gridWrvp_GP1_CgP1 = np.vstack(
+                        (
+                            next_wing.gridWrvp_GP1_CgP1,
+                            secondNewRowWrvp_GP1_CgP1,
+                        )
+                    )
+
+                # If this isn't the first time step, then do this.
+                else:
+                    _thisGridWrvp_GP1_CgP1 = this_wing.gridWrvp_GP1_CgP1
+                    assert _thisGridWrvp_GP1_CgP1 is not None
+
+                    # Set the next time step's Wing's grid of wake ring vortex points to
+                    # a copy of this time step's Wing's grid of wake ring vortex points.
+                    next_wing.gridWrvp_GP1_CgP1 = np.copy(_thisGridWrvp_GP1_CgP1)
+
+                    # If the wake is prescribed, the velocity at every point is the
+                    # freestream velocity (in the first Airplane's geometry axes,
+                    # observed from the Earth frame). Otherwise, add the next step's
+                    # freestream (the interval's end frame, rather than the current
+                    # step's freestream that calculate_solution_velocity would add) to
+                    # the induced velocity at the aged grid, computed up front for this
+                    # call or supplied by a strongly coupled sub-iteration that reuses
+                    # it across trials.
+                    #
+                    # The transport velocity has three terms, and only the first can be
+                    # reused:
+                    #   1. The induced velocity, stackVIndGridWrvp_GP1__E. It depends
+                    #      only on this time step's wake points, bound and wake
+                    #      geometry, and strengths, all of which are already solved and
+                    #      fixed. It does not depend on the next time step's
+                    #      OperatingPoint, so a strongly coupled free flight step can
+                    #      compute it once and reuse it for every trial and for the
+                    #      official wake build after the solve accepts.
+                    #   2. The freestream, convectionVInf_GP1__E, added below.
+                    #   3. The apparent velocity from body rotation, which
+                    #      _apply_body_rate adds below from convectionOmegasRad_GP1__E.
+                    # Terms 2 and 3 come from the next time step's OperatingPoint (a
+                    # trial's during a sub-iteration, the accepted one in the official
+                    # wake build), and are recomputed at the top of every call, so a
+                    # reused induced velocity never carries a stale body state.
+                    if self._prescribed_wake:
+                        vGridWrvp_GP1__E = convectionVInf_GP1__E
+                    else:
+                        assert stackVIndGridWrvp_GP1__E is not None
+                        stackVGridWrvp_GP1__E = (
+                            stackVIndGridWrvp_GP1__E[airplane_id][wing_id]
+                            + convectionVInf_GP1__E
+                        )
+                        vGridWrvp_GP1__E = stackVGridWrvp_GP1__E.reshape(
+                            next_wing.gridWrvp_GP1_CgP1.shape
+                        )
+
+                    # The wake points are stored in the first Airplane's geometry axes,
+                    # which rotate with the body. Apply the apparent velocity from body
+                    # rotation (omega cross r), just as is done at the collocation
+                    # points and bound line vortex leg centers, so the wake convects
+                    # with the fluid velocity relative to the rotating body frame.
+                    # Without this term, a nonzero body rate would carry the wake along
+                    # with the body instead of leaving it fixed in the Earth frame. When
+                    # the solver does not model body rotation, this is a no-op.
+                    vGridWrvp_GP1__E = self._apply_body_rate(
+                        next_wing.gridWrvp_GP1_CgP1,
+                        vGridWrvp_GP1__E,
+                        convectionOmegasRad_GP1__E,
+                    )
+
+                    # Advect the entire aged grid in one vector add.
+                    next_wing.gridWrvp_GP1_CgP1 = (
+                        next_wing.gridWrvp_GP1_CgP1 + vGridWrvp_GP1__E * self.delta_time
+                    )
+
+                    # Find the chordwise position of the Wing's trailing edge.
+                    chordwise_panel_id = this_wing.num_chordwise_panels - 1
+
+                    _num_spanwise_panels = this_wing.num_spanwise_panels
+                    assert _num_spanwise_panels is not None
+
+                    # Initialize a new ndarray to hold the new row of wake ring vortex
+                    # vertices.
+                    newRowWrvp_GP1_CgP1 = np.zeros(
+                        (1, _num_spanwise_panels + 1, 3), dtype=float
+                    )
+
+                    next_step = self._current_step + 1
+                    next_stackBl = self._listStackBlbrvp_GP1_CgP1[next_step]
+                    next_stackBr = self._listStackBrbrvp_GP1_CgP1[next_step]
+                    wing_panel_offset = self._per_wing_panel_offsets[airplane_id][
+                        wing_id
+                    ]
+                    te_panel_base = (
+                        wing_panel_offset + chordwise_panel_id * _num_spanwise_panels
+                    )
+
+                    # Iterate spanwise through the trailing edge Panels.
+                    for spanwise_panel_id in range(_num_spanwise_panels):
+                        te_global_idx = te_panel_base + spanwise_panel_id
+
+                        # Add the Panel's back left bound ring vortex point to the grid
+                        # of new wake ring vortex points.
+                        newRowWrvp_GP1_CgP1[0, spanwise_panel_id] = next_stackBl[
+                            te_global_idx
+                        ]
+
+                        # If the Panel is at the right edge of the Wing, add its back
+                        # right bound ring vortex point to the grid of new wake ring
+                        # vortex vertices.
+                        if spanwise_panel_id == (_num_spanwise_panels - 1):
+                            newRowWrvp_GP1_CgP1[0, spanwise_panel_id + 1] = (
+                                next_stackBr[te_global_idx]
+                            )
+
+                    # Stack the new row of wake ring vortex points above the Wing's grid
+                    # of wake ring vortex points.
+                    next_wing.gridWrvp_GP1_CgP1 = np.vstack(
+                        (
+                            newRowWrvp_GP1_CgP1,
+                            next_wing.gridWrvp_GP1_CgP1,
+                        )
+                    )
+
+                    # If wake truncation is enabled, discard the oldest (most
+                    # downstream) rows of wake points. The point grid has one more row
+                    # than the vortex grid because points form vertices and vortices
+                    # form cells.
+                    if (
+                        self._max_wake_rows is not None
+                        and next_wing.gridWrvp_GP1_CgP1.shape[0]
+                        > self._max_wake_rows + 1
+                    ):
+                        next_wing.gridWrvp_GP1_CgP1 = next_wing.gridWrvp_GP1_CgP1[
+                            : self._max_wake_rows + 1
+                        ]
+
+    def _populate_next_wake_grids_as_arrays(
+        self,
+        next_airplanes: tuple[geometry.airplane.Airplane, ...],
+        stackVIndGridWrvp_GP1__E: list[list[np.ndarray]] | None,
+        convectionVInf_GP1__E: np.ndarray,
+        convectionOmegasRad_GP1__E: np.ndarray,
+        bound_singularity_counts: np.ndarray,
+        wake_singularity_counts: np.ndarray,
+    ) -> None:
+        """Builds each Wing's next wake point grid on the array path and keeps it on the
+        solver, as _populate_next_wake_grids_on_wings builds them on the object path.
+
+        Each grid is also set on the next time step's Wing, which is only read outside
+        the solver, until step 7 of the arrays rewrite builds the objects on demand.
+
+        :param next_airplanes: The next time step's Airplanes.
+        :param stackVIndGridWrvp_GP1__E: A list, indexed [airplane_id][wing_id], of (N,
+            3) ndarrays of floats holding the induced velocity (in the first Airplane's
+            geometry axes, observed from the Earth frame) at each Wing's current wake
+            point grid, or None at the first time step and for a prescribed wake. The
+            units are in meters per second.
+        :param convectionVInf_GP1__E: A (3,) ndarray of floats representing the next
+            time step's freestream velocity (in the first Airplane's geometry axes,
+            observed from the Earth frame), which convects the wake. The units are in
+            meters per second.
+        :param convectionOmegasRad_GP1__E: A (3,) ndarray of floats representing the
+            next time step's body rate (in the first Airplane's geometry axes, observed
+            from the Earth frame). The units are in radians per second.
+        :param bound_singularity_counts: A (3,) ndarray of int64 for accumulating
+            singularity event counts from bound ring vortices.
+        :param wake_singularity_counts: A (3,) ndarray of int64 for accumulating
+            singularity event counts from wake ring vortices.
+        :return: None
+        """
+        assert self._layout_plan is not None
+        assert self._wake_grids is not None
+        next_step = self._current_step + 1
+        newRowsWrvp_GP1_CgP1 = _wake_arrays.new_wake_rows(
+            self._layout_plan,
+            self._listStackBlbrvp_GP1_CgP1[next_step],
+            self._listStackBrbrvp_GP1_CgP1[next_step],
+        )
+        currentGridsWrvp_GP1_CgP1 = self._wake_grids.get(self._current_step)
+
+        nextGridsWrvp_GP1_CgP1: list[np.ndarray] = []
+        wing_id = 0
+        for airplane_id, next_airplane in enumerate(next_airplanes):
+            for airplane_wing_id, next_wing in enumerate(next_airplane.wings):
+                newRowWrvp_GP1_CgP1 = newRowsWrvp_GP1_CgP1[wing_id]
+                if self._current_step == 0:
+                    # The new row convects with the freestream, plus its induced
+                    # velocity for a free wake, and the body rate, as on the object
+                    # path.
+                    if self._prescribed_wake:
+                        vRowWrvp_GP1__E = convectionVInf_GP1__E
+                    else:
+                        vRowWrvp_GP1__E = (
+                            self._calculate_induced_velocity(
+                                newRowWrvp_GP1_CgP1.reshape(-1, 3),
+                                bound_singularity_counts=bound_singularity_counts,
+                                wake_singularity_counts=wake_singularity_counts,
+                            )
+                            + convectionVInf_GP1__E
+                        ).reshape(newRowWrvp_GP1_CgP1.shape)
+                    vRowWrvp_GP1__E = self._apply_body_rate(
+                        newRowWrvp_GP1_CgP1,
+                        vRowWrvp_GP1__E,
+                        convectionOmegasRad_GP1__E,
+                    )
+                    nextGridWrvp_GP1_CgP1 = _wake_arrays.first_wake_grid(
+                        newRowWrvp_GP1_CgP1, vRowWrvp_GP1__E, self.delta_time
+                    )
+                else:
+                    assert currentGridsWrvp_GP1_CgP1 is not None
+                    gridWrvp_GP1_CgP1 = currentGridsWrvp_GP1_CgP1[wing_id]
+                    if self._prescribed_wake:
+                        vGridWrvp_GP1__E = convectionVInf_GP1__E
+                    else:
+                        assert stackVIndGridWrvp_GP1__E is not None
+                        vGridWrvp_GP1__E = (
+                            stackVIndGridWrvp_GP1__E[airplane_id][airplane_wing_id]
+                            + convectionVInf_GP1__E
+                        ).reshape(gridWrvp_GP1_CgP1.shape)
+                    vGridWrvp_GP1__E = self._apply_body_rate(
+                        gridWrvp_GP1_CgP1,
+                        vGridWrvp_GP1__E,
+                        convectionOmegasRad_GP1__E,
+                    )
+                    nextGridWrvp_GP1_CgP1 = _wake_arrays.next_wake_grid(
+                        gridWrvp_GP1_CgP1,
+                        vGridWrvp_GP1__E,
+                        newRowWrvp_GP1_CgP1,
+                        self.delta_time,
+                        self._max_wake_rows,
+                    )
+                nextGridsWrvp_GP1_CgP1.append(nextGridWrvp_GP1_CgP1)
+                next_wing.gridWrvp_GP1_CgP1 = nextGridWrvp_GP1_CgP1
+                wing_id += 1
+
+        self._wake_grids[next_step] = nextGridsWrvp_GP1_CgP1
+        for old_step in [key for key in self._wake_grids if key < self._current_step]:
+            del self._wake_grids[old_step]
 
     def _populate_next_airplanes_wake_vortices(self) -> None:
         """Populates the next time step's wake corner stacks, strengths, and initial
@@ -3292,6 +3476,41 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         this_step = self._current_step
         next_step = self._current_step + 1
+
+        # Changed for the arrays rewrite: the array path builds the next time step's
+        # wake ring vortices from its kept wake grids, with _wake_arrays, rather than
+        # walking the next time step's Wings row by row.
+        if self._use_arrays:
+            assert self._layout_plan is not None
+            assert self._wake_grids is not None
+            assert self._step_geometries is not None
+            wake_ring_vortices = _wake_arrays.wake_ring_vortices(
+                self._layout_plan,
+                self._wake_grids[next_step],
+                this_step,
+                self._max_wake_rows,
+                self._current_bound_vortex_strengths,
+                self._list_wake_vortex_strengths[this_step],
+                self._list_wake_r_c0s[this_step],
+                self._step_geometries[this_step].wing_standard_mean_chords,
+            )
+            self.listStackFlwrvp_GP1_CgP1[next_step][
+                :
+            ] = wake_ring_vortices.stackFlwrvp_GP1_CgP1
+            self.listStackFrwrvp_GP1_CgP1[next_step][
+                :
+            ] = wake_ring_vortices.stackFrwrvp_GP1_CgP1
+            self.listStackBlwrvp_GP1_CgP1[next_step][
+                :
+            ] = wake_ring_vortices.stackBlwrvp_GP1_CgP1
+            self.listStackBrwrvp_GP1_CgP1[next_step][
+                :
+            ] = wake_ring_vortices.stackBrwrvp_GP1_CgP1
+            self._list_wake_vortex_strengths[next_step][
+                :
+            ] = wake_ring_vortices.strengths
+            self._list_wake_r_c0s[next_step][:] = wake_ring_vortices.r_c0s
+            return
 
         next_num_chordwise_rows = next_step
         if self._max_wake_rows is not None:

@@ -105,6 +105,20 @@ Both force methods already work on the solver's per Panel arrays, except for the
 
 The solver keeps the current evaluation's `StepLoads` (run scoped, like the plans). Until step 7 of the arrays rewrite, `apply_step_loads_to_objects` also writes them onto the Panels and Airplanes, which output and the coupled problems still read.
 
+## Wake
+
+Each Wing's wake is a grid of wake ring vortex points, (R + 1, N + 1, 3) for R wake rows and N spanwise Panels, whose cells are its wake ring vortices. On the object path each grid is stored on the next time step's Wing (`gridWrvp_GP1_CgP1`). On the array path the solver keeps them itself, run scoped and keyed by time step (only the current and next time steps'), and until step 7 also sets each grid on the next time step's Wing.
+
+`_wake_arrays.py` replaces the two Python loops of the wake update, with the same operations in the same order, so the results are bit for bit the object path's:
+
+| Function | Replaces |
+|---|---|
+| `new_wake_rows` | the loop over the trailing edge Panels that builds each Wing's new row |
+| `first_wake_grid`, `next_wake_grid` | the rest of `_populate_next_wake_grids_on_wings` (the object path's per Wing loop): the first time step's two rows, and afterwards the convected grid behind the new row, truncated to `max_wake_rows` |
+| `wake_ring_vortices` | `_populate_next_airplanes_wake_vortices`' loop over every Wing's wake rows: the next time step's wake ring vortex corners, strengths, and initial core radii |
+
+The velocities that convect the grids (the kernels' induced velocities, the freestream, and the body rate) stay in the solver, unchanged.
+
 ## Error checking
 
 The array path raises the same errors as the object path. The object path checks most per time step values implicitly, in the constructors of the objects it builds, so each array function that replaces object building has a validation function that repeats those checks, and a test that it raises exactly where building the objects raises. The step parameter checks are `validate_wing_step_parameters` and `validate_airplane_step_parameters` in `_step_parameters.py`. `FreeFlightAeroelasticMovement`, which no longer builds its Airplanes when it is created, runs `validate_airplane_step_parameters` on every prescribed time step instead, so invalid prescribed motion still raises when the movement is created.

@@ -102,6 +102,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_step_geometry.py`: The unsteady solvers' array path's per time step geometry: the per run `LayoutPlan` (global Panel order and edge flags), and each time step's `StepGeometry` (every per Panel quantity and the bound ring vortex corners) and what the solvers' collapse derives from it
     - `_step_parameters.py`: The per time step parameter records (`WingCrossSectionStepParameters`, `WingStepParameters`, `AirplaneStepParameters`) the movement classes evaluate their motion into, which their object builders and the array path both use, and their validation, which raises the same errors as the objects' constructors
     - `_transformations.py`: Coordinate transformations and rotations
+    - `_wake_arrays.py`: The unsteady solvers' array path's wake update: each Wing's new wake row, its convected and truncated wake point grid, and the next time step's wake ring vortices
     - `aeroelastic_unsteady_ring_vortex_lattice_method.py`: Aeroelastic UVLM solver subclass with first-order structural deformation
     - `approximations.py`: `Approximations` class, the opt in approximations (off by default) that make the free flight sub-iteration faster in exchange for small, measured changes to the results
     - `convergence.py`: Convergence analysis tools
