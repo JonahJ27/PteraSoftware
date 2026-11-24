@@ -56,6 +56,32 @@ class TestMuJoCoModelInit(unittest.TestCase):
             model._model.opt.integrator, mujoco.mjtIntegrator.mjINT_IMPLICITFAST
         )
 
+    def test_initial_position_is_the_given_cg_position(self) -> None:
+        """Test that the body starts at the given CgP1_E_Eo, and at the Earth origin
+        (with the old XML text) when none is given or it is negative zero."""
+
+        def make(CgP1_E_Eo: np.ndarray | None) -> _mujoco_model.MuJoCoModel:
+            return _mujoco_model.MuJoCoModel(
+                name="position_test",
+                mass=1.0,
+                omegas_BP1__E=np.array((0.0, 0.0, 0.0)),
+                T_pas_BP1_CgP1_to_E_CgP1=np.eye(4, dtype=float),
+                vCg_E__E=np.array((10.0, 0.0, 0.0)),
+                I_BP1_CgP1=np.eye(3, dtype=float),
+                delta_time=0.01,
+                CgP1_E_Eo=CgP1_E_Eo,
+            )
+
+        CgP1_E_Eo = np.array((1.5, -2.0, -50.0))
+        model = make(CgP1_E_Eo)
+        npt.assert_array_equal(model.get_state()["position_E_Eo"], CgP1_E_Eo)
+        npt.assert_array_equal(model.initial_qpos[0:3], CgP1_E_Eo)
+        for origin in (None, np.zeros(3), np.array((-0.0, -0.0, -0.0))):
+            with self.subTest(origin=origin):
+                model = make(origin)
+                npt.assert_array_equal(model.get_state()["position_E_Eo"], np.zeros(3))
+                self.assertIn('qpos="0.0 0.0 0.0 ', model.xml_str)
+
     def test_model_is_mj_model(self) -> None:
         """Test that the internal model object is an MjModel."""
         self.assertIsInstance(self.model._model, mujoco.MjModel)

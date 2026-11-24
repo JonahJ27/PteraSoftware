@@ -1033,3 +1033,23 @@ class TestFreeFlightUnsteadyProblemExternalLoadsOnTheArrayPath(unittest.TestCase
                     rtol=0,
                     atol=1e-12,
                 )
+
+
+class TestFreeFlightUnsteadyProblemInitialPosition(unittest.TestCase):
+    """This is a class with functions to test that a FreeFlightUnsteadyProblem's body
+    starts at its initial OperatingPoint's position."""
+
+    def test_body_starts_at_the_initial_operating_points_position(self) -> None:
+        """Test that MuJoCo starts the body at the initial OperatingPoint's CgP1_E_Eo
+        rather than at the Earth origin, so the position (which matters with ground
+        effect) doesn't jump after the first time step."""
+        CgP1_E_Eo = np.array((3.0, -1.0, -20.0))
+        base_operating_point = ps.operating_point.OperatingPoint(
+            rho=1.225, vCg__E=10.0, alpha=2.0, CgP1_E_Eo=CgP1_E_Eo
+        )
+        problem = problem_fixtures.make_basic_free_flight_unsteady_problem_fixture(
+            base_operating_point=base_operating_point
+        )
+        np.testing.assert_array_equal(
+            problem._mujoco_model.get_state()["position_E_Eo"], CgP1_E_Eo
+        )

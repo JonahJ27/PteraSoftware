@@ -56,7 +56,9 @@ def make_surface_effect_free_air_operating_point() -> ps.operating_point.Operati
     return operating_point_fixture
 
 
-def make_simple_glider_operating_point() -> ps.operating_point.OperatingPoint:
+def make_simple_glider_operating_point(
+    ground_height: float | None = None,
+) -> ps.operating_point.OperatingPoint:
     """This function creates the trimmed OperatingPoint for the simple glider's free
     flight test.
 
@@ -66,9 +68,20 @@ def make_simple_glider_operating_point() -> ps.operating_point.OperatingPoint:
     Earth x axis at the start of free flight. No external thrust is applied, so the
     glider flies an unpowered glide.
 
+    :param ground_height: None for free air, or the height (m) of the glider's CG above
+        a flat ground (the Earth xy plane), for ground effect. The default is None.
     :return operating_point_fixture: OperatingPoint This is the simple glider
         OperatingPoint fixture.
     """
+    # The ground is the Earth xy plane, with its normal along the Earth z axis, and the
+    # CG is ground_height above it (Earth z points down).
+    ground: dict[str, object] = {}
+    if ground_height is not None:
+        ground = {
+            "surfaceNormal_E": (0.0, 0.0, 1.0),
+            "surfacePoint_E_Eo": (0.0, 0.0, 0.0),
+            "CgP1_E_Eo": (0.0, 0.0, -ground_height),
+        }
     operating_point_fixture = ps.operating_point.OperatingPoint(
         rho=1.225,
         vCg__E=12.9,
@@ -76,6 +89,7 @@ def make_simple_glider_operating_point() -> ps.operating_point.OperatingPoint:
         beta=0.0,
         angles_E_to_BP1_izyx=(0.0, 3.3, 0.0),
         g_E=(0.0, 0.0, 9.80665),
+        **ground,  # type: ignore[arg-type]
     )
     return operating_point_fixture
 

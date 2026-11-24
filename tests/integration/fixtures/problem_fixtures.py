@@ -311,6 +311,7 @@ def make_surface_effect_free_air_unsteady_problem() -> ps.problems.UnsteadyProbl
 
 def make_simple_glider_free_flight_problem(
     extra_xml: dict[str, str] | None = None,
+    ground_height: float | None = None,
 ) -> ps.problems.FreeFlightUnsteadyProblem:
     """This function creates the simple glider's FreeFlightUnsteadyProblem to be used as
     a fixture.
@@ -325,11 +326,13 @@ def make_simple_glider_free_flight_problem(
     :param extra_xml: dict or None A dict mapping injection point names to XML fragment
         strings to inject into the FreeFlightUnsteadyProblem's generated MuJoCo XML. If
         None, no extra XML is injected. The default is None.
+    :param ground_height: None for free air, or the height (m) of the glider's CG above
+        a flat ground (the Earth xy plane), for ground effect. The default is None.
     :return simple_glider_free_flight_problem: FreeFlightUnsteadyProblem This is the
         simple glider FreeFlightUnsteadyProblem fixture.
     """
     simple_glider_free_flight_movement = (
-        movement_fixtures.make_simple_glider_free_flight_movement()
+        movement_fixtures.make_simple_glider_free_flight_movement(ground_height)
     )
 
     # Derive the mass from the glider's weight and gravitational field so that the

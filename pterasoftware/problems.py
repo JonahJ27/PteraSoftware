@@ -1348,6 +1348,7 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             I_BP1_CgP1=self._I_BP1_CgP1,
             delta_time=movement.delta_time,
             integrator=integrator,
+            CgP1_E_Eo=initial_operating_point.CgP1_E_Eo,
             extra_xml=extra_xml,
             mujoco_assets=mujoco_assets,
         )
@@ -3703,6 +3704,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
             I_BP1_CgP1=self._I_BP1_CgP1,
             delta_time=movement.delta_time,
             integrator=integrator,
+            CgP1_E_Eo=initial_operating_point.CgP1_E_Eo,
             extra_xml=extra_xml,
             mujoco_assets=mujoco_assets,
         )

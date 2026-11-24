@@ -16,6 +16,7 @@ _INERTIA = ((0.1, 0.0, 0.0), (0.0, 0.2, 0.0), (0.0, 0.0, 0.3))
 def _make_movement(
     g_E: tuple[float, float, float] = (0.0, 0.0, 0.0),
     externalFX_W: float = 0.0,
+    CgP1_E_Eo: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> ps.movements.free_flight_movement.FreeFlightAeroelasticMovement:
     """Makes a FreeFlightAeroelasticMovement for the basic aeroelastic movement
     fixture's Airplane, whose weight is zero.
@@ -24,6 +25,8 @@ def _make_movement(
         default is (0.0, 0.0, 0.0).
     :param externalFX_W: The initial OperatingPoint's externalFX_W (N). The default is
         0.0.
+    :param CgP1_E_Eo: The initial OperatingPoint's CgP1_E_Eo (m). The default is (0.0,
+        0.0, 0.0).
     :return: The FreeFlightAeroelasticMovement, with 2 prescribed and 2 free time steps.
     """
     aeroelastic_movement = movement_fixtures.make_basic_aeroelastic_movement_fixture()
@@ -36,7 +39,12 @@ def _make_movement(
         airplane_movements=[airplane_movement],
         operating_point_movement=ps.movements.free_flight_operating_point_movement.FreeFlightOperatingPointMovement(
             base_operating_point=ps.operating_point.OperatingPoint(
-                rho=1.225, vCg__E=10.0, alpha=0.0, externalFX_W=externalFX_W, g_E=g_E
+                rho=1.225,
+                vCg__E=10.0,
+                alpha=0.0,
+                externalFX_W=externalFX_W,
+                g_E=g_E,
+                CgP1_E_Eo=CgP1_E_Eo,
             )
         ),
         delta_time=0.1,
@@ -321,3 +329,18 @@ class TestFreeFlightAeroelasticUnsteadyProblemExternalLoadsOnTheArrayPath(
                     rtol=0.0,
                     atol=1.0e-12,
                 )
+
+
+class TestFreeFlightAeroelasticUnsteadyProblemInitialPosition(unittest.TestCase):
+    """This is a class with functions to test that a
+    FreeFlightAeroelasticUnsteadyProblem's body starts at its initial OperatingPoint's
+    position."""
+
+    def test_body_starts_at_the_initial_operating_points_position(self) -> None:
+        """Test that MuJoCo starts the body at the initial OperatingPoint's CgP1_E_Eo
+        rather than at the Earth origin."""
+        CgP1_E_Eo = (3.0, -1.0, -20.0)
+        problem = _make_problem(movement=_make_movement(CgP1_E_Eo=CgP1_E_Eo))
+        np.testing.assert_array_equal(
+            problem._mujoco_model.get_state()["position_E_Eo"], np.array(CgP1_E_Eo)
+        )

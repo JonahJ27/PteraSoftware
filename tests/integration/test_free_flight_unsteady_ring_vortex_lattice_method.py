@@ -816,3 +816,37 @@ class TestFreeFlightArrayPathWithApproximations(unittest.TestCase):
             array_solver,
             array_path_fixtures.FREE_FLIGHT_FLAPPING_RELATIVE_TOLERANCE,
         )
+
+
+class TestFreeFlightNearTheGround(unittest.TestCase):
+    """This is a class for testing free flight with ground effect: the glider flying 1 m
+    above the ground."""
+
+    def test_glider_stays_near_the_ground_with_more_lift(self) -> None:
+        """The glider starts 1 m above the ground, stays near that height (its body
+        starts at the initial OperatingPoint's position, not the Earth origin, which put
+        it on the ground before this was fixed), and its held lift coefficient is higher
+        than in free air, as ground effect gives (measured: 11.5% higher).
+
+        :return: None
+        """
+        free_air = solver_fixtures.make_simple_glider_free_flight_solver()
+        free_air.run(prescribed_wake=True, show_progress=False)
+        near_ground = solver_fixtures.make_simple_glider_free_flight_solver(
+            ground_height=1.0
+        )
+        near_ground.run(prescribed_wake=True, show_progress=False)
+
+        movement: Any = near_ground.unsteady_problem.movement
+        operating_points = movement.operating_point_movement.operating_points
+        heights = np.array([-op.CgP1_E_Eo[2] for op in operating_points])
+        np.testing.assert_allclose(heights, 1.0, atol=0.05)
+
+        # The last held time step, before the body is released.
+        held_step = movement.prescribed_num_steps - 1
+        lift_ratio = (
+            near_ground.steady_problems[held_step].airplanes[0].forceCoefficients_W[2]
+            / free_air.steady_problems[held_step].airplanes[0].forceCoefficients_W[2]
+        )
+        self.assertGreater(lift_ratio, 1.05)
+        self.assertLess(lift_ratio, 1.3)

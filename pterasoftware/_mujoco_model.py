@@ -82,6 +82,7 @@ class MuJoCoModel:
         integrator: str = "RK4",
         extra_xml: dict[str, str] | None = None,
         mujoco_assets: dict[str, bytes] | None = None,
+        CgP1_E_Eo: np.ndarray | None = None,
     ) -> None:
         """The initialization method.
 
@@ -125,6 +126,10 @@ class MuJoCoModel:
             string's asset references after a load. Validated by
             FreeFlightUnsteadyProblem before being passed here. The default is None,
             which provides no extra assets.
+        :param CgP1_E_Eo: A (3,) ndarray of floats representing the initial position of
+            the first Airplane's CG (in Earth axes, relative to the Earth origin), in
+            meters, or None for the Earth origin. Supplied by FreeFlightUnsteadyProblem
+            from the OperatingPoint. The default is None.
         :return: None
         """
         start_key_frame_name: str = "start"
@@ -165,9 +170,19 @@ class MuJoCoModel:
             f"{IXX_BP1_CgP1} {IYY_BP1_CgP1} {IZZ_BP1_CgP1} {IXY_BP1_CgP1} "
             f"{IXZ_BP1_CgP1} {IYZ_BP1_CgP1}"
         )
+        # Changed (2026-11-24): the body used to always start at the Earth origin ("0.0
+        # 0.0 0.0"), whatever the initial OperatingPoint's CgP1_E_Eo was, so a free
+        # flight run's position (which only matters with ground effect) jumped to the
+        # origin after its first time step. Adding 0.0 turns a -0.0 into 0.0, so a body
+        # at the origin gets exactly the old string.
+        if CgP1_E_Eo is None:
+            CgP1_E_Eo = np.zeros(3, dtype=float)
+        CgP1X_E_Eo, CgP1Y_E_Eo, CgP1Z_E_Eo = (
+            float(component) + 0.0 for component in CgP1_E_Eo
+        )
         qpos_str = (
-            f"0.0 0.0 0.0 {quatW_act_E_to_BP1} {quatX_act_E_to_BP1} {quatY_act_E_to_BP1} "
-            f"{quatZ_act_E_to_BP1}"
+            f"{CgP1X_E_Eo} {CgP1Y_E_Eo} {CgP1Z_E_Eo} {quatW_act_E_to_BP1} "
+            f"{quatX_act_E_to_BP1} {quatY_act_E_to_BP1} {quatZ_act_E_to_BP1}"
         )
         qvel_str = (
             f"{vCgX_E__E} {vCgY_E__E} {vCgZ_E__E} {omegaXRad_BP1__E} "

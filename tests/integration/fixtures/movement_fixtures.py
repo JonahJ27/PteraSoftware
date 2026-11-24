@@ -600,9 +600,9 @@ def make_multiple_wing_variable_validation_movement() -> ps.movements.movement.M
     return unsteady_validation_movement
 
 
-def make_simple_glider_free_flight_movement() -> (
-    ps.movements.free_flight_movement.FreeFlightMovement
-):
+def make_simple_glider_free_flight_movement(
+    ground_height: float | None = None,
+) -> ps.movements.free_flight_movement.FreeFlightMovement:
     """This function creates the simple glider's FreeFlightMovement to be used as a
     fixture.
 
@@ -612,12 +612,14 @@ def make_simple_glider_free_flight_movement() -> (
     steps so the wake can develop, then the solver releases the rigid body dynamics for
     the remaining free_num_steps time steps.
 
+    :param ground_height: None for free air, or the height (m) of the glider's CG above
+        a flat ground (the Earth xy plane), for ground effect. The default is None.
     :return simple_glider_free_flight_movement: FreeFlightMovement This is the simple
         glider FreeFlightMovement fixture.
     """
     simple_glider_airplane = airplane_fixtures.make_simple_glider_airplane()
     simple_glider_operating_point = (
-        operating_point_fixtures.make_simple_glider_operating_point()
+        operating_point_fixtures.make_simple_glider_operating_point(ground_height)
     )
 
     # Build a static WingMovement for each of the glider's three Wings.
