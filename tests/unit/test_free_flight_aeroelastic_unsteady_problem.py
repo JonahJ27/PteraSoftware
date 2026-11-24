@@ -2,7 +2,7 @@
 class."""
 
 import unittest
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import numpy as np
@@ -256,3 +256,68 @@ class TestFreeFlightAeroelasticUnsteadyProblemStepParameters(unittest.TestCase):
             problem.movement.airplane_movements[0],
             range(problem.num_steps),
         )
+
+
+class TestFreeFlightAeroelasticUnsteadyProblemExternalLoadsOnTheArrayPath(
+    unittest.TestCase
+):
+    """This is a class with functions to test that the external_loads_fn gets the same
+    Airplanes on both paths."""
+
+    def test_external_loads_fn_gets_the_object_paths_airplanes(self) -> None:
+        """Test that, on the array path, which builds no Airplanes during the run, the
+        external_loads_fn is called as often as on the object path, with Airplanes
+        carrying the same deformed Panel corners and the same loads, to round off."""
+        records: dict[bool, list[dict[str, Any]]] = {}
+        for use_arrays in (False, True):
+            calls: list[dict[str, Any]] = []
+
+            def external_loads_fn(
+                operating_point: ps.operating_point.OperatingPoint,
+                airplane: ps.geometry.airplane.Airplane,
+            ) -> tuple[np.ndarray, np.ndarray]:
+                panels = [
+                    panel
+                    for wing in airplane.wings
+                    for panel in np.ravel(cast(np.ndarray, wing.panels))
+                ]
+                calls.append(
+                    {
+                        "forces_W": (
+                            None
+                            if airplane.forces_W is None
+                            else np.copy(airplane.forces_W)
+                        ),
+                        "Frpp_G_Cg": np.array([panel.Frpp_G_Cg for panel in panels]),
+                    }
+                )
+                return np.array([0.1, 0.0, -0.2]), np.array([0.0, 0.01, 0.0])
+
+            problem = _make_problem(external_loads_fn=external_loads_fn)
+            solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                problem
+            )
+            solver.run(show_progress=False, use_arrays=use_arrays)
+            records[use_arrays] = calls
+
+        self.assertGreater(len(records[False]), 1)
+        self.assertEqual(len(records[True]), len(records[False]))
+        for call_id, (array_call, object_call) in enumerate(
+            zip(records[True], records[False])
+        ):
+            with self.subTest(call=call_id):
+                if object_call["forces_W"] is None:
+                    self.assertIsNone(array_call["forces_W"])
+                else:
+                    np.testing.assert_allclose(
+                        array_call["forces_W"],
+                        object_call["forces_W"],
+                        rtol=1.0e-9,
+                        atol=1.0e-9 * float(np.max(np.abs(object_call["forces_W"]))),
+                    )
+                np.testing.assert_allclose(
+                    array_call["Frpp_G_Cg"],
+                    object_call["Frpp_G_Cg"],
+                    rtol=0.0,
+                    atol=1.0e-12,
+                )

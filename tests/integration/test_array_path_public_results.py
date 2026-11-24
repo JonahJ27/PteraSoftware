@@ -17,6 +17,9 @@ from tests.integration.fixtures import (
 from tests.integration.test_aeroelastic_unsteady_ring_vortex_lattice_method import (
     _make_aeroelastic_solver,
 )
+from tests.integration.test_unsteady_ring_vortex_lattice_method_wake_truncation import (
+    _make_static_movement_components,
+)
 
 
 def _run(make_solver: Callable[[], Any], use_arrays: bool, **run_arguments: Any) -> Any:
@@ -70,6 +73,38 @@ class TestArrayPathPublicResults(unittest.TestCase):
         """A plain solver with two Wings, variable geometry, and a free wake."""
         self._assert_match(
             solver_fixtures.make_unsteady_ring_vortex_lattice_method_validation_solver_with_multiple_wing_variable_geometry,
+            array_path_fixtures.DEFAULT_RELATIVE_TOLERANCE,
+            prescribed_wake=False,
+        )
+
+    def test_plain_wake_truncation(self) -> None:
+        """A plain solver whose wake is truncated to 3 chord lengths, with a free wake,
+        so the wake point grids written onto the Wings after the run are truncated."""
+
+        def make_solver() -> Any:
+            airplane_movement, operating_point_movement = (
+                _make_static_movement_components()
+            )
+            reference = ps.movements.movement.Movement(
+                airplane_movements=[airplane_movement],
+                operating_point_movement=operating_point_movement,
+                num_chords=6,
+            )
+            movement = ps.movements.movement.Movement(
+                airplane_movements=[airplane_movement],
+                operating_point_movement=operating_point_movement,
+                delta_time=reference.delta_time,
+                num_steps=reference.num_steps,
+                max_wake_chords=3,
+            )
+            assert movement.max_wake_rows is not None
+            assert movement.max_wake_rows < movement.num_steps - 1
+            return ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+                ps.problems.UnsteadyProblem(movement=movement)
+            )
+
+        self._assert_match(
+            make_solver,
             array_path_fixtures.DEFAULT_RELATIVE_TOLERANCE,
             prescribed_wake=False,
         )

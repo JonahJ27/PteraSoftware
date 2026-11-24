@@ -207,6 +207,13 @@ class StepGeometry(NamedTuple):
     stackBlbrvp_GP1_CgP1: np.ndarray
     stackBrbrvp_GP1_CgP1: np.ndarray
 
+    # A (num_airplanes, 3) ndarray of floats: each Airplane's CG at this geometry build,
+    # as its Airplane.Cg_GP1_CgP1 (in the first Airplane's geometry axes, relative to the
+    # first Airplane's CG). The first Airplane's is always zeros, but a formation's
+    # other Airplanes can move (AirplaneMovement's ampCg_GP1_CgP1), so the loads read
+    # each time step's from here.
+    stackAirplaneCg_GP1_CgP1: np.ndarray
+
 
 def build_step_geometry(
     layout_plan: LayoutPlan,
@@ -370,6 +377,16 @@ def build_step_geometry(
             teBr + (vInf_GP1__E - (teBr - lastTeBr) / delta_time) * delta_time * 0.25
         )
 
+    # Each Airplane's CG, from its first Wing's (every Wing of an Airplane is given its
+    # Airplane's CG). An Airplane's Panels start at its first Wing's offset.
+    stackAirplaneCg_GP1_CgP1 = np.array(
+        [
+            wingsCg_GP1_CgP1[layout_plan.wing_offsets.index(start)]
+            for start, _ in layout_plan.airplane_panel_ranges
+        ],
+        dtype=float,
+    ).reshape(-1, 3)
+
     return StepGeometry(
         *(
             _step_parameters.make_read_only(array)
@@ -386,6 +403,7 @@ def build_step_geometry(
                 stackFlbrvp_GP1_CgP1,
                 stackBlbrvp_GP1_CgP1,
                 stackBrbrvp_GP1_CgP1,
+                stackAirplaneCg_GP1_CgP1,
             )
         )
     )

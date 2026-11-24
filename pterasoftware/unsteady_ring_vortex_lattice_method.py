@@ -846,8 +846,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # if self._force_method == "katz":
         #     unsupported.append('the "katz" force method')
         # octowrap: on
-        if self.num_airplanes > 1:
-            unsupported.append("multiple Airplanes")
+        # Changed for M2 of the arrays rewrite: multiple Airplanes are supported. The old
+        # check was:
+        # if self.num_airplanes > 1:
+        #     unsupported.append("multiple Airplanes")
         if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
             unsupported.append("ground effect")
         if unsupported:
@@ -2383,19 +2385,28 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # Changed for the arrays rewrite: the array path finds every load as arrays and
         # keeps them. The run loop keeps each time step's official loads, which are
         # written onto the Panels and Airplanes when the run ends (step 7 of the arrays
-        # rewrite), so no objects are read or written here. The first Airplane's CG is
-        # its own origin, and the reference dimensions are fixed for the run, so they
-        # are read from the first time step's Airplanes.
+        # rewrite), so no objects are read or written here. Each Airplane's CG is read
+        # from the time step's geometry (a formation's Airplanes can move), and the
+        # reference dimensions, which are fixed for the run, from the first time step's
+        # Airplanes.
         if self._use_arrays:
             assert self._layout_plan is not None
             assert self._first_airplanes is not None
+            assert self._step_geometries is not None
+            # Changed for M2 of the arrays rewrite: the CGs used to be read from the
+            # first time step's Airplanes ([airplane.Cg_GP1_CgP1 for airplane in
+            # self._first_airplanes]), which is only right for the first Airplane.
             self._current_step_loads = _loads_arrays.step_loads(
                 self._layout_plan,
                 forces_GP1,
                 moments_GP1_CgP1,
                 self.current_operating_point.T_pas_GP1_CgP1_to_W_CgP1,
                 self.current_operating_point.qInf__E,
-                [airplane.Cg_GP1_CgP1 for airplane in self._first_airplanes],
+                list(
+                    self._step_geometries[
+                        self._current_step
+                    ].stackAirplaneCg_GP1_CgP1
+                ),
                 [
                     (airplane.s_ref, airplane.c_ref, airplane.b_ref)
                     for airplane in self._first_airplanes

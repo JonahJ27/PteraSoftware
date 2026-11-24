@@ -773,3 +773,46 @@ class TestFreeFlightArrayPath(unittest.TestCase):
                 array_path_fixtures.assert_loads_match(
                     self, object_solver, array_solver, relative_tolerance
                 )
+
+
+class TestFreeFlightArrayPathWithApproximations(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads with the opt in
+    approximations, including reusing the final coupling trial."""
+
+    def test_matches_the_object_path_with_fast_approximations(self) -> None:
+        """Running the flapping free flight problem with Approximations.fast() on both
+        paths gives the same loads at every time step, to within the problem's
+        sensitivity (see FREE_FLIGHT_FLAPPING_RELATIVE_TOLERANCE), and the array path
+        reuses final coupling trials.
+
+        :return: None
+        """
+        approximations = ps.approximations.Approximations.fast()
+        self.assertTrue(approximations.reuse_final_trial)
+        solver_class = (
+            ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver
+        )
+        original = solver_class.keep_final_trial
+        kept = {"array": 0}
+
+        def counting_keep_final_trial(self_: Any) -> None:
+            if self_.use_arrays:
+                kept["array"] += 1
+            original(self_)
+
+        with patch.object(solver_class, "keep_final_trial", counting_keep_final_trial):
+            object_solver, array_solver = (
+                array_path_fixtures.make_solvers_run_on_both_paths(
+                    lambda: solver_fixtures.make_flapping_free_flight_solver(
+                        approximations
+                    ),
+                    prescribed_wake=True,
+                )
+            )
+        self.assertGreater(kept["array"], 0)
+        array_path_fixtures.assert_loads_match(
+            self,
+            object_solver,
+            array_solver,
+            array_path_fixtures.FREE_FLIGHT_FLAPPING_RELATIVE_TOLERANCE,
+        )
