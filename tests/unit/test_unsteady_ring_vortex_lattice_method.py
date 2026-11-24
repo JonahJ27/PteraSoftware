@@ -170,9 +170,11 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                     solver.run(use_arrays=invalid, show_progress=False)
 
     def test_array_path_rejects_unsupported_features(self) -> None:
-        """Test that use_arrays=True raises a ValueError naming the feature for multiple
-        Airplanes and ground effect, before solving, and accepts the "katz" force
-        method."""
+        """Test that use_arrays=True raises a ValueError naming the feature for ground
+        effect, before solving, and accepts the "katz" force method and multiple
+        Airplanes (supported since M2 of the arrays rewrite; the multiple Airplane
+        fixture is numerically singular, so only its support check runs here, and the
+        formation integration module runs formations)."""
         solver_fixtures.make_unsteady_ring_solver_fixture().run(
             use_arrays=True, force_method="katz", show_progress=False
         )
@@ -180,8 +182,8 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         multi_airplane_solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
             problem_fixtures.make_multi_airplane_unsteady_problem_fixture()
         )
-        with self.assertRaisesRegex(ValueError, "multiple Airplanes"):
-            multi_airplane_solver.run(use_arrays=True, show_progress=False)
+        self.assertGreater(multi_airplane_solver.num_airplanes, 1)
+        multi_airplane_solver._check_array_path_support()
 
         ground_movement = ps.movements.movement.Movement(
             airplane_movements=[

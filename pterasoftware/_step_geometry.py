@@ -208,8 +208,8 @@ class StepGeometry(NamedTuple):
     stackBrbrvp_GP1_CgP1: np.ndarray
 
     # A (num_airplanes, 3) ndarray of floats: each Airplane's CG at this geometry build,
-    # as its Airplane.Cg_GP1_CgP1 (in the first Airplane's geometry axes, relative to the
-    # first Airplane's CG). The first Airplane's is always zeros, but a formation's
+    # as its Airplane.Cg_GP1_CgP1 (in the first Airplane's geometry axes, relative to
+    # the first Airplane's CG). The first Airplane's is always zeros, but a formation's
     # other Airplanes can move (AirplaneMovement's ampCg_GP1_CgP1), so the loads read
     # each time step's from here.
     stackAirplaneCg_GP1_CgP1: np.ndarray

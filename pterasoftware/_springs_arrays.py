@@ -62,9 +62,9 @@ def wing_panel_areas_and_strip_widths(
     column to the first.
 
     The front legs are taken from the corners in the first Airplane's geometry axes,
-    which are the Wing's own geometry axes moved by its Airplane's CG. That is zero for
-    the only Airplane the array path supports, so the legs are bit for bit the object
-    path's.
+    which are the Wing's own geometry axes moved by its Airplane's CG. The springs only
+    run on aeroelastic problems, which have one Airplane, whose CG is zero there, so the
+    legs are bit for bit the object path's.
 
     :param layout_plan: The run's LayoutPlan.
     :param geometry: The time step's StepGeometry.

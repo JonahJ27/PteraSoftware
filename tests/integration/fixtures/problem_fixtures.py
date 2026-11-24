@@ -493,3 +493,16 @@ def make_flapping_held_aeroelastic_problem(
     )
 
     return flapping_held_aeroelastic_problem
+
+
+def make_moving_formation_validation_problem() -> ps.problems.UnsteadyProblem:
+    """This function creates an UnsteadyProblem with two Airplanes, the second moving
+    relative to the first, to be used as a fixture.
+
+    :return moving_formation_validation_problem: UnsteadyProblem This is the
+        UnsteadyProblem fixture.
+    """
+    moving_formation_validation_problem = ps.problems.UnsteadyProblem(
+        movement=movement_fixtures.make_moving_formation_validation_movement()
+    )
+    return moving_formation_validation_problem

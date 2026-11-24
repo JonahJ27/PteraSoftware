@@ -204,8 +204,8 @@ class TestBuildStepGeometry(unittest.TestCase):
     def test_matches_the_panels_and_wings(self) -> None:
         """Test that every time step's StepGeometry holds its Panels' corners and
         collocation points (in the first Airplane's geometry axes), unit normals, and
-        areas, and its Wings' standard mean chords, in global Panel order, with read
-        only arrays."""
+        areas, its Wings' standard mean chords, and its Airplanes' CGs, in global Panel
+        order, with read only arrays."""
         for solver in _plain_solvers():
             geometries = _step_geometries_from_wings(solver)
             for step, (steady_problem, geometry) in enumerate(
@@ -244,6 +244,19 @@ class TestBuildStepGeometry(unittest.TestCase):
                         ),
                         rtol=0.0,
                         atol=_NORM_TOLERANCE,
+                    )
+                    # Each Airplane's CG, in Airplane order, exactly as built.
+                    self.assertTrue(
+                        np.array_equal(
+                            geometry.stackAirplaneCg_GP1_CgP1,
+                            np.array(
+                                [
+                                    airplane.Cg_GP1_CgP1
+                                    for airplane in steady_problem.airplanes
+                                ],
+                                dtype=float,
+                            ),
+                        )
                     )
                     for array in geometry:
                         self.assertFalse(array.flags.writeable)

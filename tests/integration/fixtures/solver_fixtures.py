@@ -359,3 +359,21 @@ def make_unsteady_ring_vortex_lattice_method_formation_solver() -> (
     )
 
     return unsteady_ring_vortex_lattice_method_formation_solver
+
+
+def make_unsteady_ring_vortex_lattice_method_moving_formation_solver() -> (
+    ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+):
+    """This function creates an UnsteadyRingVortexLatticeMethodSolver with two
+    Airplanes, the second moving relative to the first, to be used as a fixture.
+
+    :return unsteady_ring_vortex_lattice_method_moving_formation_solver:
+        UnsteadyRingVortexLatticeMethodSolver This is the
+        UnsteadyRingVortexLatticeMethodSolver fixture.
+    """
+    unsteady_ring_vortex_lattice_method_moving_formation_solver = (
+        ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+            problem_fixtures.make_moving_formation_validation_problem()
+        )
+    )
+    return unsteady_ring_vortex_lattice_method_moving_formation_solver

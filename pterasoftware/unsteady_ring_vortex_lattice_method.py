@@ -846,8 +846,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # if self._force_method == "katz":
         #     unsupported.append('the "katz" force method')
         # octowrap: on
-        # Changed for M2 of the arrays rewrite: multiple Airplanes are supported. The old
-        # check was:
+        # Changed for M2 of the arrays rewrite: multiple Airplanes are supported. The
+        # old check was:
         # if self.num_airplanes > 1:
         #     unsupported.append("multiple Airplanes")
         if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
@@ -2403,9 +2403,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 self.current_operating_point.T_pas_GP1_CgP1_to_W_CgP1,
                 self.current_operating_point.qInf__E,
                 list(
-                    self._step_geometries[
-                        self._current_step
-                    ].stackAirplaneCg_GP1_CgP1
+                    self._step_geometries[self._current_step].stackAirplaneCg_GP1_CgP1
                 ),
                 [
                     (airplane.s_ref, airplane.c_ref, airplane.b_ref)

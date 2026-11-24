@@ -109,6 +109,16 @@ class TestArrayPathPublicResults(unittest.TestCase):
             prescribed_wake=False,
         )
 
+    def test_moving_formation(self) -> None:
+        """A plain solver with two Airplanes, the second moving and pitching, and a free
+        wake, so each Airplane's loads about its own CG change every time step (see
+        MOVING_FORMATION_RELATIVE_TOLERANCE)."""
+        self._assert_match(
+            solver_fixtures.make_unsteady_ring_vortex_lattice_method_moving_formation_solver,
+            array_path_fixtures.MOVING_FORMATION_RELATIVE_TOLERANCE,
+            prescribed_wake=False,
+        )
+
     def test_aeroelastic(self) -> None:
         """An aeroelastic solver with the Katz force method and a free wake."""
         self._assert_match(

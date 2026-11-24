@@ -47,6 +47,12 @@ FREE_FLIGHT_AEROELASTIC_RELATIVE_TOLERANCE = 1.0e-3
 FREE_FLIGHT_FLAP_DRIVEN_HELD_RELATIVE_TOLERANCE = 1.0e-12
 FREE_FLIGHT_FLAP_DRIVEN_RELATIVE_TOLERANCE = 1.0e-2
 
+# The tolerance for a formation whose second Airplane moves and pitches. Its pitching
+# Wing's geometry rounds a little differently on each path, and the loads differ by up
+# to about 1.2e-10 relative, just above DEFAULT_RELATIVE_TOLERANCE (measured in M2's
+# survey).
+MOVING_FORMATION_RELATIVE_TOLERANCE = 1.0e-9
+
 
 def make_solvers_run_on_both_paths(
     make_solver: Callable[

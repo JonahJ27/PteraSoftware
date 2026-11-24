@@ -891,3 +891,55 @@ def make_flapping_held_aeroelastic_movement(
     )
 
     return flapping_held_aeroelastic_movement
+
+
+def make_moving_formation_validation_movement() -> ps.movements.movement.Movement:
+    """This function creates the formation validation Movement with its second Airplane
+    moving, to be used as a fixture.
+
+    The second Airplane's CG oscillates in every direction (ampCg_GP1_CgP1), and its
+    Wing pitches (its Wing's angles_Gs_to_Wn_ixyz y component), so each time step's
+    Airplanes are in different relative positions, which tests that each Airplane's
+    moments are found about its CG at that time step. (Its Wing is symmetric, so it
+    pitches rather than flaps: flapping it would change its symmetry type.)
+
+    :return moving_formation_validation_movement: Movement This is the Movement fixture.
+    """
+    formation_airplanes = [
+        airplane_fixtures.make_formation_lead_validation_airplane(),
+        airplane_fixtures.make_separator_named_validation_airplane(),
+    ]
+
+    formation_airplane_movements = []
+    for airplane_id, formation_airplane in enumerate(formation_airplanes):
+        moving = airplane_id == 1
+        wing = formation_airplane.wings[0]
+        formation_wing_movement = ps.movements.wing_movement.WingMovement(
+            base_wing=wing,
+            wing_cross_section_movements=[
+                ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                    base_wing_cross_section=wing_cross_section
+                )
+                for wing_cross_section in wing.wing_cross_sections
+            ],
+            ampAngles_Gs_to_Wn_ixyz=(0.0, 5.0, 0.0) if moving else (0.0, 0.0, 0.0),
+            periodAngles_Gs_to_Wn_ixyz=(0.0, 0.5, 0.0) if moving else (0.0, 0.0, 0.0),
+        )
+        formation_airplane_movements.append(
+            ps.movements.airplane_movement.AirplaneMovement(
+                base_airplane=formation_airplane,
+                wing_movements=[formation_wing_movement],
+                ampCg_GP1_CgP1=(0.3, 0.2, 0.1) if moving else (0.0, 0.0, 0.0),
+                periodCg_GP1_CgP1=(0.5, 0.5, 0.5) if moving else (0.0, 0.0, 0.0),
+            )
+        )
+
+    moving_formation_validation_movement = ps.movements.movement.Movement(
+        airplane_movements=formation_airplane_movements,
+        operating_point_movement=ps.movements.operating_point_movement.OperatingPointMovement(
+            base_operating_point=operating_point_fixtures.make_validation_operating_point()
+        ),
+        num_cycles=2,
+    )
+
+    return moving_formation_validation_movement
