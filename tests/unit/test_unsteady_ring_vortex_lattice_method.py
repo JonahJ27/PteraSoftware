@@ -7,7 +7,12 @@ from unittest.mock import patch
 import numpy as np
 
 import pterasoftware as ps
-from tests.unit.fixtures import problem_fixtures, solver_fixtures
+from tests.unit.fixtures import (
+    airplane_movement_fixtures,
+    operating_point_fixtures,
+    problem_fixtures,
+    solver_fixtures,
+)
 
 
 class TestUnsteadyRingVortexLatticeMethodSolver(unittest.TestCase):
@@ -128,6 +133,96 @@ class TestUnsteadyRingVortexLatticeMethodSolver(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(TypeError):
                     solver.run(force_method=invalid, show_progress=False)
+
+
+class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
+    """This is a class with functions to test the use_arrays run argument."""
+
+    def test_use_arrays_raises_before_run(self) -> None:
+        """Test that reading use_arrays before run raises a RuntimeError."""
+        solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        with self.assertRaises(RuntimeError):
+            _ = solver.use_arrays
+
+    def test_use_arrays_is_read_only(self) -> None:
+        """Test that the use_arrays property cannot be reassigned."""
+        solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        with self.assertRaises(AttributeError):
+            setattr(solver, "use_arrays", True)
+
+    def test_use_arrays_defaults_to_false(self) -> None:
+        """Test that a run without use_arrays uses the geometry objects."""
+        solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        solver.run(prescribed_wake=True, show_progress=False)
+        self.assertFalse(solver.use_arrays)
+
+    def test_run_rejects_non_bool_use_arrays(self) -> None:
+        """Test that run raises a TypeError for a use_arrays that isn't bool like."""
+        invalid_values: list[Any] = ["True", 1, 0.0, None, [True]]
+        for invalid in invalid_values:
+            with self.subTest(invalid=invalid):
+                solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+                with self.assertRaises(TypeError):
+                    solver.run(use_arrays=invalid, show_progress=False)
+
+    def test_array_path_rejects_unsupported_features(self) -> None:
+        """Test that use_arrays=True raises a ValueError naming the feature for the
+        "katz" force method, multiple Airplanes, and ground effect, before solving."""
+        with self.assertRaisesRegex(ValueError, "katz"):
+            solver_fixtures.make_unsteady_ring_solver_fixture().run(
+                use_arrays=True, force_method="katz", show_progress=False
+            )
+
+        multi_airplane_solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+            problem_fixtures.make_multi_airplane_unsteady_problem_fixture()
+        )
+        with self.assertRaisesRegex(ValueError, "multiple Airplanes"):
+            multi_airplane_solver.run(use_arrays=True, show_progress=False)
+
+        ground_movement = ps.movements.movement.Movement(
+            airplane_movements=[
+                airplane_movement_fixtures.make_basic_airplane_movement_fixture()
+            ],
+            operating_point_movement=ps.movements.operating_point_movement.OperatingPointMovement(
+                base_operating_point=operating_point_fixtures.make_with_ground_surface_operating_point_fixture()
+            ),
+            num_cycles=1,
+        )
+        ground_solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
+            ps.problems.UnsteadyProblem(movement=ground_movement)
+        )
+        with self.assertRaisesRegex(ValueError, "ground effect"):
+            ground_solver.run(use_arrays=True, show_progress=False)
+
+    def test_array_path_run_matches_the_object_path(self) -> None:
+        """Test that a run with use_arrays=True records the choice, clears its per run
+        plans, and (while the array stages are still being built) gives exactly the
+        object path's loads at every time step."""
+        object_solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        object_solver.run(prescribed_wake=True, show_progress=False)
+        array_solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        array_solver.run(prescribed_wake=True, show_progress=False, use_arrays=True)
+
+        self.assertTrue(array_solver.use_arrays)
+        self.assertIsNone(array_solver._mesh_plans)
+        self.assertIsNone(array_solver._layout_plan)
+        self.assertEqual(
+            len(array_solver.steady_problems), len(object_solver.steady_problems)
+        )
+        for step, (array_problem, object_problem) in enumerate(
+            zip(array_solver.steady_problems, object_solver.steady_problems)
+        ):
+            for array_airplane, object_airplane in zip(
+                array_problem.airplanes, object_problem.airplanes
+            ):
+                for name in ("forces_W", "moments_W_CgP1"):
+                    with self.subTest(step=step, name=name):
+                        array_value = getattr(array_airplane, name)
+                        object_value = getattr(object_airplane, name)
+                        if object_value is None:
+                            self.assertIsNone(array_value)
+                        else:
+                            self.assertTrue(np.array_equal(array_value, object_value))
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):

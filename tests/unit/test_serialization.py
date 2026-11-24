@@ -3247,6 +3247,26 @@ class TestUnsteadySolverRoundTrip(unittest.TestCase):
         self.assertTrue(result.ran)
         self.assertEqual(result.num_steps, solver.num_steps)
 
+    def test_use_arrays_round_trip(self) -> None:
+        """Tests that a saved and loaded solver keeps whether its run used the array
+        path, and that the array path's per run plans aren't saved.
+
+        :return: None
+        """
+        for use_arrays in (False, True):
+            with self.subTest(use_arrays=use_arrays):
+                problem = serialization_fixtures.make_unsteady_problem_fixture()
+                solver = UnsteadyRingVortexLatticeMethodSolver(problem)
+                solver.run(use_arrays=use_arrays)
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "solver.psz"
+                    save(path, solver)
+                    loaded = load(path)
+                assert isinstance(loaded, UnsteadyRingVortexLatticeMethodSolver)
+                self.assertEqual(loaded.use_arrays, use_arrays)
+                self.assertIsNone(loaded._mesh_plans)
+                self.assertIsNone(loaded._layout_plan)
+
     def test_shared_reference_identity(self) -> None:
         """Tests that the solver's shared references point into the UnsteadyProblem
         graph after round trip.

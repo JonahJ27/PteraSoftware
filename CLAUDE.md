@@ -48,6 +48,7 @@ Requires Python 3.11, but active development is done in 3.14
         - `lambert_2015_2_3__2_4/`: A recreation of Sections 2.3 and 2.4 from Thomas Lambert's thesis "Modeling of aerodynamic forces in flapping flight with the unsteady vortex lattice method"
     - `website/`: Directory with the source files for generating the documentation website
     - `ANGLE_VECTORS_AND_TRANSFORMATIONS.md`: Conventions and definitions for angle vectors and transformations **READ BEFORE CONTRIBUTING ANY CODE, PARTICIPATING IN DISCUSSIONS REGARDING, OR PLANNING RELATED TO VECTOR-VALUED VARIABLES**
+    - `ARRAY_LAYOUTS.md`: Layout conventions for the unsteady solvers' array path (`run(use_arrays=True)`): the per run plans, the per time step parameters, the global Panel order, and the edge flags. **READ BEFORE CONTRIBUTING CODE TO THE ARRAY PATH**
     - `AXES_POINTS_AND_FRAMES.md`: Conventions and definitions for axis systems, points, and reference points: **READ BEFORE CONTRIBUTING ANY CODE, PARTICIPATING IN DISCUSSIONS REGARDING, OR PLANNING RELATED TO VECTOR-VALUED VARIABLES**
     - `CLASSES_AND_IMMUTABILITY.md`: Description of class structure and attribute immutability
     - `CODE_STYLE.md`: Code style guidelines: **READ BEFORE CONTRIBUTING ANY CODE**
@@ -61,6 +62,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `geometry/`: Package with aircraft geometry classes
         - `_airfoils/`: Directory containing data files with airfoil coordinates
         - `_meshing.py`: Wing mesh generation
+        - `_symmetry.py`: Determines a Wing's symmetry type from its symmetry settings, angles, and leading edge root point (shared by `Airplane` symmetry processing and the movements' per time step symmetry check)
         - `airfoil.py`: `Airfoil` class with coordinate generation
         - `airplane.py`: `Airplane` class with coordinate transformations
         - `wing.py`: `Wing` class with symmetry processing
@@ -87,6 +89,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_fixed_point_relaxation.py`: Pure fixed-point relaxation helpers (weighted norm, convergence test, Aitken relaxation factor) for the strong-coupling sub-iteration
     - `_functions.py`: Shared utility functions
     - `_logging.py`: Contains the function for setting up logging
+    - `_mesh_arrays.py`: Array meshing for the unsteady solvers' array path, starting with each Wing's per run `MeshPlan`
     - `_mujoco_model.py`: Contains the `MuJoCoModel` class
     - `_oscillation.py`: Oscillation functions for movement classes
     - `_output_plotting.py`: Matplotlib figure drawing for the visualization functions
@@ -95,6 +98,8 @@ Requires Python 3.11, but active development is done in 3.14
     - `_parameter_validation.py`: Input validation functions
     - `_private_access.py`: Registration pattern that grants cross-module access to private attributes, currently a `FreeFlightUnsteadyProblem`'s `MuJoCoModel` for the rendering layer
     - `_serialization.py`: Serialization and deserialization (save/load) to and from `.psz` files, which are zip archives of JSON members chunked by time step
+    - `_step_geometry.py`: The unsteady solvers' array path's per time step geometry, starting with the per run `LayoutPlan` (global Panel order and edge flags)
+    - `_step_parameters.py`: The per time step parameter records (`WingCrossSectionStepParameters`, `WingStepParameters`, `AirplaneStepParameters`) the movement classes evaluate their motion into, which their object builders and the array path both use
     - `_transformations.py`: Coordinate transformations and rotations
     - `aeroelastic_unsteady_ring_vortex_lattice_method.py`: Aeroelastic UVLM solver subclass with first-order structural deformation
     - `approximations.py`: `Approximations` class, the opt in approximations (off by default) that make the free flight sub-iteration faster in exchange for small, measured changes to the results
@@ -118,6 +123,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `execute_tutorials.py`: Executes all tutorial notebooks (or a single named notebook) in `tutorials/` and stores their outputs in the notebook files for the documentation site to render
     - `find_unused_fixtures.py`: Finds and optionally deletes unused fixtures and dead `setUp` attributes across the test suite (backs the `delete-unused-fixtures` slash command)
     - `regenerate_example_outputs.py`: Runs all example scripts (or a single named example) and collects their outputs into `docs/examples_expected_output/`, re-rendering oversized WebP files at lower quality
+    - `regenerate_movement_reference.py`: Regenerates `tests/references/movement_reference.npz`, the stored movement geometry that `tests/unit/test_movement_reference.py` compares against (run only for a change meant to move that geometry)
 - `tests/`: Directory with unit and integration tests
     - `integration/`: Integration tests for combined functionality, with shared fixtures in a `fixtures/` subpackage. There is one test module per solver configuration worth exercising end-to-end (each solver, plus its surface-effect, wake-truncation, multiple-wing, and variable-geometry variants), along with modules for convergence, trim, output, and serialized output
     - `unit/`: Unit tests for individual classes and functions, with shared fixtures in a `fixtures/` subpackage. The test modules mirror the package's modules one-to-one (for example, `test_wing.py` tests `geometry/wing.py`), plus a few suite-level modules such as `test_package_init.py`, `test_slots.py`, and `test_test_environment.py`. Fixture modules are named after the test modules they serve

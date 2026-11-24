@@ -15,8 +15,10 @@ from . import (
     _core,
     _functions,
     _logging,
+    _mesh_arrays,
     _panel,
     _parameter_validation,
+    _step_geometry,
     _transformations,
     geometry,
     operating_point,
@@ -44,6 +46,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_current_step",
         "_prescribed_wake",
         "_force_method",
+        "_use_arrays",
+        "_mesh_plans",
+        "_layout_plan",
         "current_airplanes",
         "current_operating_point",
         "num_airplanes",
@@ -152,10 +157,18 @@ class UnsteadyRingVortexLatticeMethodSolver:
         self._first_averaging_step = self.unsteady_problem.first_averaging_step
         self._current_step: int = 0
 
-        # These two backing slots hold the configuration of the most recent run. They
-        # are None until the first call to run assigns them validated values.
+        # These backing slots hold the configuration of the most recent run. They are
+        # None until the first call to run assigns them validated values.
         self._prescribed_wake: bool | None = None
         self._force_method: str | None = None
+        self._use_arrays: bool | None = None
+
+        # The array path's per run plans: each Wing's MeshPlan and the global
+        # LayoutPlan. They are built at the start of a run with use_arrays=True, and
+        # cleared when the run ends, since they are rebuilt from the problem whenever
+        # they are needed.
+        self._mesh_plans: tuple[_mesh_arrays.MeshPlan, ...] | None = None
+        self._layout_plan: _step_geometry.LayoutPlan | None = None
 
         first_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(0)
 
@@ -401,6 +414,19 @@ class UnsteadyRingVortexLatticeMethodSolver:
         return self._force_method
 
     @property
+    def use_arrays(self) -> bool:
+        """Whether the most recent call to run used the array path.
+
+        Reading this property before run has been called raises a RuntimeError.
+
+        :return: True if the most recent run used the array path and False if it used
+            the geometry objects.
+        """
+        if self._use_arrays is None:
+            raise RuntimeError("use_arrays is unset because run has not been called.")
+        return self._use_arrays
+
+    @property
     def ran(self) -> bool:
         """Whether the solver has been run.
 
@@ -414,6 +440,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         calculate_streamlines: bool | np.bool = True,
         show_progress: bool | np.bool = True,
         force_method: str = "joukowski",
+        use_arrays: bool | np.bool = False,
     ) -> None:
         """Runs the solver on the UnsteadyProblem.
 
@@ -434,6 +461,14 @@ class UnsteadyRingVortexLatticeMethodSolver:
             RingVortex leg, and "katz" which uses the pressure integration method
             adapted from "Low Speed Aerodynamics" by Katz and Plotkin (Section 13.12,
             Eq. 13.150 and 13.151). The default is "joukowski".
+        :param use_arrays: Set this to True to run each time step's geometry, loads, and
+            wake on arrays rather than on Airplane, Wing, and Panel objects, which is
+            faster and gives the same results to round off. The objects a user reads
+            after the run are still available. The array path is being built in stages,
+            and the stages not converted yet still run on the objects. It doesn't yet
+            support ground effect, multiple Airplanes, or the "katz" force method, and
+            raises a ValueError for them. It can be a bool or a numpy bool and will be
+            converted internally to a bool. The default is False.
         :return: None
         """
         self._prescribed_wake = _parameter_validation.boolLike_return_bool(
@@ -453,8 +488,24 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 f'force_method must be "joukowski" or "katz", got "{force_method}".'
             )
         self._force_method = force_method
+        self._use_arrays = _parameter_validation.boolLike_return_bool(
+            use_arrays, "use_arrays"
+        )
 
         run_start_time = time.time()
+
+        # Set up the array path: reject what it doesn't support yet, then build its per
+        # run plans.
+        if self._use_arrays:
+            self._check_array_path_support()
+            first_airplanes = self._get_steady_problem_at(0).airplanes
+            self._mesh_plans = tuple(
+                _mesh_arrays.build_mesh_plan(wing)
+                for airplane in first_airplanes
+                for wing in airplane.wings
+            )
+            self._layout_plan = _step_geometry.build_layout_plan(first_airplanes)
+            _logger.info(_logging.indent() + "Running with the array path")
 
         # Report the thread dispatch settings this run's kernel launches will operate
         # under, and warn if Numba's threading layer will make them slow.
@@ -582,8 +633,31 @@ class UnsteadyRingVortexLatticeMethodSolver:
             + _functions.format_duration(time.time() - run_start_time)
         )
 
+        # The array path's plans are only needed during the run.
+        self._mesh_plans = None
+        self._layout_plan = None
+
         # Mark that the solver has run.
         self._ran = True
+
+    def _check_array_path_support(self) -> None:
+        """Raises a ValueError if this run uses a feature the array path doesn't support
+        yet.
+
+        :return: None
+        """
+        unsupported = []
+        if self._force_method == "katz":
+            unsupported.append('the "katz" force method')
+        if self.num_airplanes > 1:
+            unsupported.append("multiple Airplanes")
+        if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
+            unsupported.append("ground effect")
+        if unsupported:
+            raise ValueError(
+                f"use_arrays=True doesn't support {' or '.join(unsupported)} yet. Use "
+                f"use_arrays=False."
+            )
 
     def _evaluate_step_aerodynamics(self) -> None:
         """Evaluates the aerodynamics for the current time step.
