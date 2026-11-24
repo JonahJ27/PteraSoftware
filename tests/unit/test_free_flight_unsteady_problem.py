@@ -5,6 +5,7 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -13,7 +14,11 @@ import pterasoftware as ps
 
 # noinspection PyProtectedMember
 from pterasoftware import _mujoco_model, _transformations
-from tests.unit.fixtures import mujoco_model_fixtures, problem_fixtures
+from tests.unit.fixtures import (
+    coupled_unsteady_problem_fixtures,
+    mujoco_model_fixtures,
+    problem_fixtures,
+)
 
 
 def _movement_and_mass() -> (
@@ -874,3 +879,69 @@ class TestFreeFlightUnsteadyProblemRelaxationWeights(unittest.TestCase):
         # The rate blocks are the configuration blocks scaled by the time step.
         np.testing.assert_allclose(weights[6:9], delta_time * weights[0:3])
         np.testing.assert_allclose(weights[9:12], delta_time * weights[3:6])
+
+
+class TestFreeFlightUnsteadyProblemArrayPath(unittest.TestCase):
+    """This is a class with functions to test that a FreeFlightUnsteadyProblem's
+    interval loads on the array path, read from the solver's kept loads, are exactly
+    those read from the Airplane."""
+
+    def test_interval_loads_from_step_loads_match_the_airplane(self) -> None:
+        """Test that, at every call during an array path run (the snapshot, each
+        coupling trial, and the prescribed phase), _assemble_interval_loads given the
+        solver's StepLoads returns exactly what it returns reading the same Airplane,
+        which the array path also writes the loads onto."""
+        problem_class = ps.problems.FreeFlightUnsteadyProblem
+        original = problem_class._assemble_interval_loads
+        results: list[tuple[Any, Any]] = []
+
+        def both_paths(
+            problem: Any,
+            operating_point: Any,
+            airplane: Any,
+            step: int,
+            loads: Any = None,
+        ) -> Any:
+            self.assertIsNotNone(loads)
+            from_loads = original(problem, operating_point, airplane, step, loads=loads)
+            from_airplane = original(problem, operating_point, airplane, step)
+            results.append((from_loads, from_airplane))
+            return from_loads
+
+        problem = problem_fixtures.make_basic_free_flight_unsteady_problem_fixture()
+        solver = ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver(
+            problem
+        )
+        with mock.patch.object(problem_class, "_assemble_interval_loads", both_paths):
+            solver.run(show_progress=False, use_arrays=True)
+        self.assertTrue(solver.use_arrays)
+        self.assertTrue(any(from_loads is not None for from_loads, _ in results))
+        for from_loads, from_airplane in results:
+            if from_airplane is None:
+                self.assertIsNone(from_loads)
+                continue
+            assert from_loads is not None
+            for actual, expected in zip(from_loads, from_airplane):
+                self.assertTrue(np.array_equal(actual, expected))
+
+
+class TestFreeFlightUnsteadyProblemStepParameters(unittest.TestCase):
+    """This is a class with functions to test that a FreeFlightUnsteadyProblem records,
+    on the array path, the step parameters of every time step's Airplane."""
+
+    def test_records_every_time_steps_parameters(self) -> None:
+        """Test that, after an array path run, every time step's recorded step
+        parameters rebuild exactly the Airplane the problem solved there."""
+        problem: Any = (
+            problem_fixtures.make_basic_free_flight_unsteady_problem_fixture()
+        )
+        solver = ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver(
+            problem
+        )
+        solver.run(show_progress=False, use_arrays=True)
+        coupled_unsteady_problem_fixtures.assert_recorded_step_parameters_match_the_airplanes(
+            self,
+            problem,
+            problem.movement.airplane_movements[0],
+            range(problem.num_steps),
+        )

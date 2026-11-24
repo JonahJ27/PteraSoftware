@@ -35,7 +35,11 @@ import unittest
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import movement_fixtures, problem_fixtures
+from tests.integration.fixtures import (
+    array_path_fixtures,
+    movement_fixtures,
+    problem_fixtures,
+)
 
 # These are the stored results of the fixture run, computed with the default numerical
 # spring solver, one entry per time step: the speed (m/s), the angle of attack
@@ -389,3 +393,30 @@ class TestFreeFlightAeroelasticUnsteadyRingVortexLatticeMethod(unittest.TestCase
         )
         _solve(problem)
         self._assert_matches_stored(problem, _SOLVER_TOLERANCE)
+
+
+class TestFreeFlightAeroelasticArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads on a flapping free
+    flight aeroelastic problem."""
+
+    def test_matches_the_object_path(self) -> None:
+        """Running the solver with use_arrays=True gives the object path's loads at
+        every time step, to within the problem's sensitivity (see
+        FREE_FLIGHT_AEROELASTIC_RELATIVE_TOLERANCE).
+
+        :return: None
+        """
+        object_solver, array_solver = (
+            array_path_fixtures.make_solvers_run_on_both_paths(
+                lambda: ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                    problem_fixtures.make_flapping_free_flight_aeroelastic_problem()
+                ),
+                prescribed_wake=False,
+            )
+        )
+        array_path_fixtures.assert_loads_match(
+            self,
+            object_solver,
+            array_solver,
+            array_path_fixtures.FREE_FLIGHT_AEROELASTIC_RELATIVE_TOLERANCE,
+        )

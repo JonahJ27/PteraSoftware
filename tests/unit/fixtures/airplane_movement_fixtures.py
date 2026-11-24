@@ -100,3 +100,57 @@ def make_periodic_geometry_airplane_movement_fixture() -> (
 
     # Return the AirplaneMovement fixture.
     return periodic_geometry_airplane_movement_fixture
+
+
+def make_out_of_range_airplane_movement_fixture(
+    ampAngleY_Gs_to_Wn: float = 0.0,
+    ampTipAngleY_Wcsp_to_Wcs: float = 0.0,
+) -> ps.movements.airplane_movement.AirplaneMovement:
+    """This method makes a fixture that is an AirplaneMovement whose only Wing's y
+    angle, and whose tip WingCrossSection's y angle, oscillate with given amplitudes
+    from zero, with a period of 0.4 s, so an amplitude above 90.0 degrees is valid at
+    time step 0 but out of range a quarter period later.
+
+    :param ampAngleY_Gs_to_Wn: The amplitude of the Wing's angles_Gs_to_Wn_ixyz y
+        component (degrees). The default is 0.0.
+    :param ampTipAngleY_Wcsp_to_Wcs: The amplitude of the tip WingCrossSection's
+        angles_Wcsp_to_Wcs_ixyz y component (degrees). The default is 0.0.
+    :return out_of_range_airplane_movement_fixture: AirplaneMovement This is the
+        AirplaneMovement, for testing that motion that is out of range at a later time
+        step is rejected.
+    """
+    base_airplane = ps.geometry.airplane.Airplane(
+        wings=[geometry_fixtures.make_origin_wing_fixture()],
+        name="Origin Airplane",
+        Cg_GP1_CgP1=(0.0, 0.0, 0.0),
+        weight=0.0,
+    )
+    root_wing_cross_section, tip_wing_cross_section = base_airplane.wings[
+        0
+    ].wing_cross_sections
+    wing_movement = ps.movements.wing_movement.WingMovement(
+        base_wing=base_airplane.wings[0],
+        wing_cross_section_movements=[
+            ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                base_wing_cross_section=root_wing_cross_section,
+            ),
+            ps.movements.wing_cross_section_movement.WingCrossSectionMovement(
+                base_wing_cross_section=tip_wing_cross_section,
+                ampAngles_Wcsp_to_Wcs_ixyz=(0.0, ampTipAngleY_Wcsp_to_Wcs, 0.0),
+                periodAngles_Wcsp_to_Wcs_ixyz=(
+                    0.0,
+                    0.4 if ampTipAngleY_Wcsp_to_Wcs else 0.0,
+                    0.0,
+                ),
+            ),
+        ],
+        ampAngles_Gs_to_Wn_ixyz=(0.0, ampAngleY_Gs_to_Wn, 0.0),
+        periodAngles_Gs_to_Wn_ixyz=(0.0, 0.4 if ampAngleY_Gs_to_Wn else 0.0, 0.0),
+    )
+    out_of_range_airplane_movement_fixture = (
+        ps.movements.airplane_movement.AirplaneMovement(
+            base_airplane=base_airplane,
+            wing_movements=[wing_movement],
+        )
+    )
+    return out_of_range_airplane_movement_fixture

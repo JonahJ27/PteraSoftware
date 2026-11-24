@@ -36,6 +36,14 @@ def effective_line_vortex_strengths(
     """Returns the effective strengths of every Panel's bound ring vortex's right,
     front, left, and back line vortices, as _calculate_loads_joukowski finds them.
 
+    It replaces
+    UnsteadyRingVortexLatticeMethodSolver._effective_line_vortex_strengths_from_panels.
+
+    It exists because the object path finds these strengths by walking every Panel and
+    looking up its neighbors in its Wing's Panel grid, a Python loop over every Panel.
+    This finds them with the LayoutPlan's neighbor indices in a few array operations,
+    without any Panels.
+
     A line vortex shared by two Panels' ring vortices has half the difference of their
     strengths, and one on a Wing's edge has its Panel's full strength. A trailing edge
     Panel's back line vortex is partly canceled by the newest wake row, which carries
@@ -87,6 +95,13 @@ def chordwise_vorticity_differences(
     of it (zero in front of a leading edge Panel), as
     _calculate_chordwise_vorticity_differences finds them.
 
+    It replaces the Panel loop of
+    UnsteadyRingVortexLatticeMethodSolver._calculate_chordwise_vorticity_differences.
+
+    It exists because the object path finds these by walking every Panel and its front
+    neighbor in Python. This uses the LayoutPlan's neighbor indices instead, without any
+    Panels.
+
     :param layout_plan: The run's LayoutPlan.
     :param strengths: A (num_panels,) ndarray of floats representing the bound ring
         vortices' strengths. The units are in meters squared per second.
@@ -110,6 +125,13 @@ def chordwise_vorticity_densities(
     _calculate_chordwise_vorticity_densities finds them: its chordwise circulation
     difference over its chord length, or zero for a Panel with no chord length.
 
+    It replaces the Panel loop of
+    UnsteadyRingVortexLatticeMethodSolver._calculate_chordwise_vorticity_densities.
+
+    It exists because the object path computes these in a Python loop over every Panel.
+    This computes them for every Panel at once from the time step's geometry, without
+    any Panels.
+
     :param layout_plan: The run's LayoutPlan.
     :param strengths: A (num_panels,) ndarray of floats representing the bound ring
         vortices' strengths. The units are in meters squared per second.
@@ -132,6 +154,13 @@ def spanwise_vorticity_densities(
 ) -> np.ndarray:
     """Returns each Panel's average spanwise bound vorticity density, as
     _calculate_spanwise_vorticity_densities finds them.
+
+    It replaces the Panel loop of
+    UnsteadyRingVortexLatticeMethodSolver._calculate_spanwise_vorticity_densities.
+
+    It exists because the object path computes these in a Python loop over every Panel.
+    This computes them for every Panel at once from the time step's geometry, without
+    any Panels.
 
     Each Panel is attributed half of each shared left or right line vortex's net
     circulation and all of an edge one's, signed so the density is positive when the
@@ -171,6 +200,11 @@ def spanwise_vorticity_densities(
 
 class StepLoads(NamedTuple):
     """One aerodynamic evaluation's loads, from step_loads.
+
+    It exists because the object path stores its loads on the Panels and Airplanes,
+    which the array path doesn't use during the run. The array path keeps them here
+    instead, and the parts of the run that need them, such as the coupled problems, read
+    them from here.
 
     Every array is read only. The Panel arrays are in global Panel order, the Airplane
     arrays in Airplane order, and the Wing arrays in global Wing order. Forces are in
@@ -227,6 +261,13 @@ def step_loads(
 ) -> StepLoads:
     """Finds the per Panel loads in wind axes, each Airplane's total loads and their
     coefficients, and each Wing's total loads, as process_solver_loads does.
+
+    It replaces _functions.process_solver_loads.
+
+    It exists because process_solver_loads walks every Panel to write its loads, and
+    sums them Wing by Wing and Airplane by Airplane in Python. This finds the same
+    values with array operations in global Panel order, and keeps them in a StepLoads
+    instead of on the objects.
 
     process_solver_loads sums each Airplane's loads Panel by Panel, from zero. A sum
     over the rows of a stack adds the rows in the same order, so the totals are bit for
@@ -381,6 +422,13 @@ def strip_leading_edge_points(
     """Returns each Panel's strip leading edge point, as the aeroelastic solver's
     _populate_slep_positions finds them.
 
+    It replaces
+    AeroelasticUnsteadyRingVortexLatticeMethodSolver._populate_slep_positions.
+
+    It exists because _populate_slep_positions reads each strip's leading edge points
+    from the Panels. This reads them from the time step's geometry, so the aeroelastic
+    moments need no Panels.
+
     Each Panel's strip leading edge point is the outboard front corner (its front left
     corner on a mirror meshed grid, and its front right corner otherwise) of the first
     chordwise row's Panel its strip starts at.
@@ -415,6 +463,12 @@ def strip_leading_edge_moments(
     first Airplane's CG minus the strip leading edge point's position crossed with its
     force.
 
+    It replaces the moment line in
+    AeroelasticUnsteadyRingVortexLatticeMethodSolver._process_panel_loads_hook.
+
+    It exists so the aeroelastic hook's moment transfer works directly on the array
+    path's per Panel loads, without the Panels.
+
     :param stackPanelForces_GP1: A (num_panels, 3) ndarray of floats representing each
         Panel's force (in the first Airplane's geometry axes). The units are in Newtons.
     :param stackPanelMoments_GP1_CgP1: A (num_panels, 3) ndarray of floats representing
@@ -441,6 +495,13 @@ def apply_step_loads_to_objects(
 ) -> None:
     """Writes a StepLoads' values onto the Panels and Airplanes, as process_solver_loads
     writes them.
+
+    It replaces the writes onto the Panels and Airplanes in
+    _functions.process_solver_loads.
+
+    It exists because users read the loads from the Panels and Airplanes, and the array
+    path computes them as arrays, so this writes them onto the objects, which keeps
+    every quantity the object path gives available.
 
     This is temporary. Output, plotting, and the coupled problems still read the loads
     from the objects, so the array path writes them there until step 7 of the arrays

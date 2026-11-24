@@ -20,7 +20,12 @@ from . import _mesh_arrays, _panel, _step_parameters, _transformations, geometry
 
 
 class LayoutPlan(NamedTuple):
-    """The global Panel layout, fixed for a whole run."""
+    """The global Panel layout, fixed for a whole run.
+
+    It exists because the object path finds each Panel's place in the global order, its
+    edge flags, and its neighbors from the Wing and Panel objects. These don't change
+    during a run, so the array path finds them once and reuses them at every time step.
+    """
 
     # Each Wing's (num_chordwise_panels, num_spanwise_panels), in global order (every
     # Airplane's Wings in order, after symmetry processing).
@@ -60,6 +65,13 @@ def build_layout_plan(
     airplanes: Sequence[geometry.airplane.Airplane],
 ) -> LayoutPlan:
     """Builds the LayoutPlan from one time step's Airplanes.
+
+    It replaces the edge flags each Panel carries (Panel.is_leading_edge,
+    is_trailing_edge, is_left_edge, and is_right_edge) and the solvers' per Wing Panel
+    offsets.
+
+    It exists so the layout, which is fixed for a run, is found once, at the start of
+    the run, from the first time step's Airplanes.
 
     Within each Wing, Panels are in row major order (chordwise row outer, spanwise
     column inner), as the solvers lay them out.
@@ -155,6 +167,10 @@ class StepGeometry(NamedTuple):
     """One geometry build's per Panel quantities, in global Panel order, from
     build_step_geometry.
 
+    It exists because the object path keeps these quantities on the Panels, and the
+    array path keeps them in arrays in global Panel order, so the solver reads them
+    without walking the Panels.
+
     Every array is read only. Positions are in the first Airplane's geometry axes,
     relative to the first Airplane's CG, and vectors in the first Airplane's geometry
     axes. Units are in meters (or square meters for areas).
@@ -201,6 +217,15 @@ def build_step_geometry(
     last_geometry: StepGeometry | None,
 ) -> StepGeometry:
     """Builds one geometry build's per Panel quantities and bound ring vortex corners.
+
+    It replaces SteadyProblem's per Panel transformation to the first Airplane's
+    geometry axes, _panel.set_derived_GP1_caches, Wing.standard_mean_chord (with
+    Wing.projected_area), and
+    UnsteadyRingVortexLatticeMethodSolver._initialize_panel_vortices_at.
+
+    It exists because the object path computes these quantities Panel by Panel, through
+    each Panel's properties and caches. This computes them for every Panel at once from
+    the WingMeshes.
 
     It computes, for every Panel at once, what SteadyProblem and set_derived_GP1_caches
     store on each Panel, what Wing.standard_mean_chord gives each Wing, and what
@@ -370,6 +395,13 @@ def bound_r_c0s(layout_plan: LayoutPlan, geometry: StepGeometry) -> np.ndarray:
     """Returns the bound ring vortices' legs' initial core radii, as _collapse_geometry
     writes them.
 
+    It replaces the trailing edge core radius lines in
+    UnsteadyRingVortexLatticeMethodSolver._collapse_panel_attributes.
+
+    It exists because the object path finds these core radii in its walk over the
+    Panels. This finds them from the time step's geometry, so the array path needs no
+    Panels.
+
     They are zero, except the trailing edge Panels' back legs, which coincide with the
     wake row the time step will shed and take the wake's initial core radius, 3.0% of
     their Wing's standard mean chord (Ramasamy and Leishman, 2007).
@@ -397,6 +429,12 @@ def seed_points(layout_plan: LayoutPlan, geometry: StepGeometry) -> np.ndarray:
     """Returns the streamline seed points, as _collapse_geometry writes them: the middle
     of each trailing edge Panel's back leg, in global Panel order.
 
+    It replaces the streamline seed point part of
+    _functions.update_ring_vortex_solvers_panel_attributes.
+
+    It exists because the object path finds these points in its walk over the Panels.
+    This finds them from the time step's geometry, so the array path needs no Panels.
+
     :param layout_plan: The run's LayoutPlan.
     :param geometry: The time step's StepGeometry.
     :return: A (num_trailing_edge_panels, 3) ndarray of floats representing the seed
@@ -415,6 +453,13 @@ def wake_vortex_ages(
 ) -> np.ndarray:
     """Returns the wake ring vortices' ages at a time step, as _collapse_geometry writes
     them.
+
+    It replaces the wake ring vortex age part of
+    UnsteadyRingVortexLatticeMethodSolver._collapse_panel_attributes.
+
+    It exists because the object path reads each age from a wake ring vortex object, and
+    the array path builds no wake ring vortex objects, so this finds the ages from the
+    wake's shape instead.
 
     Each Wing has min(step, max_wake_rows) chordwise wake rows, newest first, each one
     time step older than the row shed after it, so row c (0 based) has age (c + 1) *
@@ -443,7 +488,11 @@ def wake_vortex_ages(
 
 
 class KatzGeometry(NamedTuple):
-    """The Katz force method's per Panel geometry, from katz_geometry."""
+    """The Katz force method's per Panel geometry, from katz_geometry.
+
+    It exists so the Katz force method's geometry, which the object path finds in a
+    Panel loop, is kept with the rest of the array path's per Panel arrays.
+    """
 
     # Two (num_panels,) ndarrays of floats: each Panel's chordwise and spanwise lengths.
     # Their units are in meters.
@@ -459,6 +508,12 @@ class KatzGeometry(NamedTuple):
 def katz_geometry(geometry: StepGeometry) -> KatzGeometry:
     """Returns the Katz force method's per Panel geometry, as
     _collapse_geometry_katz_data computes it from each Panel's legs.
+
+    It replaces the Panel loop of
+    UnsteadyRingVortexLatticeMethodSolver._collapse_geometry_katz_data.
+
+    It exists because _collapse_geometry_katz_data walks every Panel's legs in Python.
+    This computes the same lengths and directions for every Panel at once.
 
     The chordwise tangent is the average of the right leg and the reversed left leg, and
     the spanwise tangent the average of the front leg and the reversed back leg, each

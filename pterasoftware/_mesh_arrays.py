@@ -23,7 +23,13 @@ from .geometry import _symmetry
 
 
 class MeshPlan(NamedTuple):
-    """The values of one Wing's mesh that are fixed for a whole run."""
+    """The values of one Wing's mesh that are fixed for a whole run.
+
+    It exists because much of meshing a Wing (its chordwise and spanwise coordinates,
+    its WingCrossSections' camber lines, and its symmetry type) doesn't change during a
+    run, so the array path computes it once per run instead of at every time step, as
+    mesh_wing does.
+    """
 
     # The Wing's symmetry type, an int from 1 to 4 (a type 5 Wing has already been split
     # into a type 1 Wing and its type 3 reflection by its Airplane).
@@ -73,8 +79,12 @@ class MeshPlan(NamedTuple):
 
 class WingMesh(NamedTuple):
     """One Wing's mesh at one geometry build, from mesh_wing_arrays (or, for a Wing
-    already built, wing_mesh_from_wing): its Panel corners, and the two values of the
-    Wing that the step geometry needs besides them."""
+    already built, wing_mesh_from_wing, which the tests use): its Panel corners, and the
+    two values of the Wing that the step geometry needs besides them.
+
+    It exists so the array path can hand a meshed Wing's geometry to build_step_geometry
+    without building the Wing or its Panels.
+    """
 
     # The front left, front right, back left, and back right Panel corners. Each is a
     # (num_chordwise_panels, num_spanwise_panels, 3) ndarray of floats, read only, in
@@ -97,6 +107,14 @@ class WingMesh(NamedTuple):
 
 def build_mesh_plan(wing: geometry.wing.Wing) -> MeshPlan:
     """Builds a Wing's MeshPlan from its structure and its run fixed values.
+
+    It replaces the parts of mesh_wing (in geometry/_meshing.py) that are fixed for a
+    whole run: its chordwise and spanwise coordinates, and each WingCrossSection's
+    deflected camber line.
+
+    It exists because the parts of meshing that are fixed for a run need computing only
+    once, so the array path computes them here, at the start of the run, and
+    mesh_wing_arrays does only each time step's work.
 
     The chordwise and spanwise coordinates and the camber line points are computed
     exactly as mesh_wing computes them, so the array meshing matches it.
@@ -220,6 +238,13 @@ def _mcl_points_Wcs_Lp(
     """Returns a WingCrossSection's mean camber line points at the chordwise
     coordinates, as mesh_wing's _get_mcl_points and _get_mcs_points compute them.
 
+    It replaces _get_mcl_points and the camber line scaling at the start of
+    _get_mcs_points (in geometry/_meshing.py), with the Airfoil.add_control_surface
+    calls mesh_wing makes.
+
+    It exists so the MeshPlan can hold each WingCrossSection's camber line points, found
+    once per run, instead of finding them from the Airfoil at every time step.
+
     :param wing_cross_section: The WingCrossSection.
     :param deflection: The control surface deflection to use, in degrees (the
         WingCrossSection's own, or its negative for a type 4 Wing's mirrored half).
@@ -250,6 +275,13 @@ def mesh_wing_arrays(
 ) -> WingMesh:
     """Meshes one Wing from its values at one geometry build, without building any Wing,
     WingCrossSection, Airfoil, or Panel.
+
+    It replaces mesh_wing (in geometry/_meshing.py).
+
+    It exists because building and meshing a Wing on the object path creates a
+    WingCrossSection, Airfoil, and Panel object for every part of it, at every time
+    step. This computes the same Panel corners with array operations from the Wing's
+    step parameters and its MeshPlan.
 
     The Panel corners match those mesh_wing gives the Wing built from the same values,
     in the same Panel grid order.
@@ -428,6 +460,11 @@ def _T_pas_G_Cg_to_Wn_Ler(
     """Returns a Wing's passive transformation matrix from geometry axes, relative to
     the CG, to wing axes, relative to the leading edge root point.
 
+    It replaces Wing.T_pas_G_Cg_to_Wn_Ler.
+
+    It exists because Wing.T_pas_G_Cg_to_Wn_Ler needs a built Wing. This builds the same
+    matrix from the Wing's step parameters.
+
     It computes what Wing.T_pas_G_Cg_to_Wn_Ler computes, with the same scalar functions
     in the same order, from the MeshPlan's symmetry plane and the WingStepParameters'
     position and angles.
@@ -462,6 +499,12 @@ def _stack_T_pas_Wcs_Lp_to_Wn_Ler(
     """Returns each WingCrossSection's passive transformation matrix from its axes,
     relative to its leading point, to wing axes, relative to the leading edge root
     point.
+
+    It replaces WingCrossSection.T_pas_Wcsp_Lpp_to_Wcs_Lp,
+    Wing.children_T_pas_Wn_Ler_to_Wcs_Lp, and Wing.children_T_pas_Wcs_Lp_to_Wn_Ler.
+
+    It exists because the Wing's properties build these matrices one WingCrossSection at
+    a time from built objects. This builds all of them at once from the step parameters.
 
     It computes what WingCrossSection.T_pas_Wcsp_Lpp_to_Wcs_Lp and
     Wing.children_T_pas_Wcs_Lp_to_Wn_Ler compute, in the same order of operations, with
@@ -520,6 +563,12 @@ def _stack_rot_R_act_ixyz(stackAngles_ixyz: np.ndarray) -> np.ndarray:
     """Returns the active intrinsic xyz rotation matrices for a stack of angle vectors,
     as generate_rot_T builds them before it transposes them for a passive matrix.
 
+    It replaces the rotation matrix part of _transformations.generate_rot_T.
+
+    It exists because generate_rot_T builds one matrix per call. This builds a whole
+    stack at once for _stack_T_pas_Wcs_Lp_to_Wn_Ler, with the same operations, so the
+    results match.
+
     :param stackAngles_ixyz: A (K,3) ndarray of floats, each row being an angle vector
         using an intrinsic xy'z" sequence. The units are in degrees.
     :return: A (K,3,3) ndarray of floats, the rotation matrices in order.
@@ -562,6 +611,12 @@ def _column_edge_points_Wn_Ler(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Returns the points on the inner and outer edges of each of the main half's Panel
     columns (in wing axes, relative to the leading edge root point).
+
+    It replaces the transformation and interpolation in _get_mcs_points (in
+    geometry/_meshing.py), including _functions.interp_between_points.
+
+    It exists because _get_mcs_points transforms and interpolates the points one pair of
+    WingCrossSections at a time. This does every Panel column at once.
 
     :param plan: The Wing's MeshPlan.
     :param gridMclPoints_Wcs_Lp: A (K,M,3) ndarray of floats, each WingCrossSection's
@@ -617,6 +672,11 @@ def _span(
     WingCrossSection's leading point's projection on the wing axes' y axis (in wing
     axes, relative to the leading edge root point), doubled for a type 4 Wing.
 
+    It replaces Wing.span.
+
+    It exists because Wing.span needs a built Wing, and the array path needs the span
+    without one.
+
     :param plan: The Wing's MeshPlan.
     :param parameters: The Wing's WingStepParameters at this geometry build.
     :param stackT_pas_Wcs_Lp_to_Wn_Ler: A (K,4,4) ndarray of floats, each
@@ -650,6 +710,10 @@ def _wing_mesh(
 ) -> WingMesh:
     """Returns a WingMesh holding contiguous, read only copies of four corner grids.
 
+    It exists so every WingMesh holds its own contiguous, read only arrays, which keeps
+    the array operations that read them fast and stops one part of the run from changing
+    a mesh another part reads.
+
     :param span: The Wing's span. Its units are in meters.
     :param WnZ_G: A read only (3,) ndarray of floats representing the wing axes' third
         basis vector (in geometry axes).
@@ -678,9 +742,10 @@ def wing_mesh_from_wing(wing: geometry.wing.Wing) -> WingMesh:
     """Returns the WingMesh of a Wing that is already built and meshed, read from its
     Panels and properties.
 
-    The coupled solvers use it on the array path until their geometry is built from step
-    parameters (step 6 of the arrays rewrite), since their Wings at each time step are
-    built during the run.
+    It exists so the tests can give the array functions exactly the geometry of Wings
+    the object path built, and compare the two paths on the same inputs. No solver calls
+    it since the coupled solvers started meshing their recorded step parameters (step 6
+    of the arrays rewrite).
 
     :param wing: The meshed Wing.
     :return: Its WingMesh, with the same values as the Wing's Panels' corners and its

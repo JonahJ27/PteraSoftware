@@ -2,7 +2,7 @@
 
 The unsteady solvers have two paths through each time step. With `run(use_arrays=False)` (the default), each time step builds `Airplane`, `Wing`, `WingCrossSection`, and `Panel` objects and the solver reads its geometry from them. With `run(use_arrays=True)`, each time step's geometry, loads, and wake are computed as arrays, and the objects a user reads are built from those arrays only when something reads them. This document describes how the array path lays out its data. Read [Axes, Points, and Frames](AXES_POINTS_AND_FRAMES.md) first: every array's name follows its conventions.
 
-The array path is being built in stages. Until it is complete, `use_arrays=True` builds the plans below and runs the stages that aren't converted yet on the objects.
+The array path is being built in stages. Every stage inside the time step loop now reads arrays, but until step 7 of the arrays rewrite, `use_arrays=True` also builds each time step's objects (and writes the loads and wake onto them) for output to read, so it isn't faster yet.
 
 ## What runs inside the time step loop, and what doesn't
 
@@ -32,6 +32,15 @@ The movement classes evaluate their motion in private `_generate_*_parameters_at
 Everything else (each WingCrossSection's `Airfoil`, chord, panel counts and spacings, control surface settings; each Wing's symmetry settings and chordwise panels; each Airplane's weight and reference dimensions) is fixed for the run and is read from the movements' base objects.
 
 A movement's Wing movements correspond one to one to its base Airplane's Wings, which are already symmetry processed: a type 5 Wing has already been split into a type 1 Wing and its type 3 reflection, each with its own movement. So `AirplaneStepParameters.wings[i]` describes the Airplane's `i`th Wing.
+
+The coupled problems (aeroelastic, flap driven, free flight, and their combinations) find each time step's geometry during the run, from the structural deformation, the flap angles, or the body's motion, so the solver can't get it from the movement. Each one records, for every time step, the `AirplaneStepParameters` its first Airplane is built from, with `_CoupledUnsteadyProblem._record_airplane_step_parameters`, and the coupled solver reads them with `get_airplane_step_parameters`:
+
+| Problem | Records |
+|---|---|
+| `AeroelasticUnsteadyProblem` (and the flap driven ones) | time step 0 when it is created, then each later time step in `_build_recorded_airplane`, which builds the deformed Airplane from the same parameters |
+| `FreeFlightUnsteadyProblem` | time step 0 when it is created, then, on the array path, each next time step's prescribed parameters in `initialize_next_problem` (a coupling trial changes only the `OperatingPoint`, so it meshes the same parameters) |
+
+The record is run scoped like the plans: it isn't saved in a `.psz` file, and a loaded problem has `None` in its place. Until step 7 of the arrays rewrite, the coupled problems also build each time step's Airplane from the same parameters, which output still reads.
 
 ## The global Panel order
 
@@ -87,8 +96,10 @@ Where each time step's meshes come from:
 
 | Solver | Meshes |
 |---|---|
-| The plain solver | `mesh_wing_arrays` from the movement's `WingStepParameters` (validated first with `validate_airplane_step_parameters`) |
-| The coupled solvers (aeroelastic, flap driven, free flight) | `wing_mesh_from_wing` from the Wings the problem built during the run, until step 6 of the arrays rewrite gives their step parameters the run's deformation, flap angles, and trial states |
+| The plain solver | `mesh_wing_arrays` from the movement's `AirplaneStepParameters` |
+| The coupled solvers (aeroelastic, flap driven, free flight) | `mesh_wing_arrays` from the `AirplaneStepParameters` the problem recorded (see Step parameters) |
+
+Both go through `_wing_meshes_from_parameters`, which first checks each `AirplaneStepParameters` with `validate_airplane_step_parameters`. `wing_mesh_from_wing` reads a `WingMesh` from a Wing that is already built. No solver calls it, and the tests use it to give the array functions exactly the object path's geometry.
 
 The solver builds the first time step's geometry at the start of the run, and each later time step's one time step early (its wake shedding reads the next time step's ring vortex corners). It keeps only the previous, current, and next time steps' geometry.
 
@@ -100,10 +111,15 @@ Both force methods already work on the solver's per Panel arrays, except for the
 |---|---|
 | `effective_line_vortex_strengths` | the Kutta-Joukowski method's Panel loop (`_effective_line_vortex_strengths_from_panels` on the object path) |
 | `chordwise_vorticity_densities`, `spanwise_vorticity_densities`, `chordwise_vorticity_differences` | the Katz method's three Panel loops |
-| `step_loads` | `process_solver_loads`: each Panel's loads in wind axes, each Airplane's totals and coefficients, plus each Wing's totals (for the flap drives in step 6) |
+| `step_loads` | `process_solver_loads`: each Panel's loads in wind axes, each Airplane's totals and coefficients, plus each Wing's totals (for the flap drives' fluid torque) |
 | `strip_leading_edge_points`, `strip_leading_edge_moments` | the aeroelastic solver's `_populate_slep_positions` and its strip leading edge moments |
 
-The solver keeps the current evaluation's `StepLoads` (run scoped, like the plans). Until step 7 of the arrays rewrite, `apply_step_loads_to_objects` also writes them onto the Panels and Airplanes, which output and the coupled problems still read.
+The solver keeps the current evaluation's `StepLoads` (run scoped, like the plans), and on the array path the coupled problems read their loads from it:
+
+- the free flight problems' `_assemble_interval_loads` (for the snapshot, each coupling trial, and the prescribed phase) reads the first Airplane's total force and moment from `stackAirplaneForces_W` and `stackAirplaneMoments_W_CgP1`;
+- the flap driven problems' `_calculate_flap_fluid_torque` reads each Wing's total force and moment from `stackWingForces_GP1` and `stackWingMoments_GP1_CgP1` (summed over the Wing's Panels in the same order as the object path's Panel loop), and the Wing's transformation from its recorded step parameters with `_mesh_arrays._T_pas_G_Cg_to_Wn_Ler`.
+
+Both give exactly the object path's values on the same time step. Until step 7 of the arrays rewrite, `apply_step_loads_to_objects` also writes the loads onto the Panels and Airplanes, which output still reads.
 
 ## Wake
 
@@ -119,9 +135,23 @@ Each Wing's wake is a grid of wake ring vortex points, (R + 1, N + 1, 3) for R w
 
 The velocities that convect the grids (the kernels' induced velocities, the freestream, and the body rate) stay in the solver, unchanged.
 
+## Springs
+
+The torsional spring solve already works on arrays, except for what it read from the current time step's Wings: each Panel's area (for its mass) and each strip's span width (the length of its first chordwise row Panel's front leg). `_springs_arrays.py` computes them from the time step's `StepGeometry`, with the same formulas and operation order:
+
+| Function | Replaces |
+|---|---|
+| `wing_panel_areas_and_strip_widths` | the Panel reads in `_calculate_mass_matrix` (`Panel.area`) and `_calculate_strip_inertias` (`Panel.frontLeg_G`) |
+| `panel_mass_matrix` | `_calculate_mass_matrix` |
+| `strip_inertias` | `_calculate_strip_inertias` |
+
+The areas come from the step geometry's vectorized norms, so they round about one unit in the last place differently from `Panel.area`. The strip widths are bit for bit, and the masses and inertias are bit for bit given the same areas. A mirror only Wing's Panel grid runs tip to root, so its strip widths are read from its last column to its first, and `_calculate_wing_deformation` flips its mass matrix, as on the object path. A strip's width enters the springs only through its flapping axis inertia, which scales the prescribed flapping acceleration.
+
+On the array path, `_calculate_wing_deformation` reads each Wing's counts, chords, and mirroring, which are fixed for the run, from its movement's base Wing, rather than from the current time step's Wing.
+
 ## Error checking
 
-The array path raises the same errors as the object path. The object path checks most per time step values implicitly, in the constructors of the objects it builds, so each array function that replaces object building has a validation function that repeats those checks, and a test that it raises exactly where building the objects raises. The step parameter checks are `validate_wing_step_parameters` and `validate_airplane_step_parameters` in `_step_parameters.py`. `FreeFlightAeroelasticMovement`, which no longer builds its Airplanes when it is created, runs `validate_airplane_step_parameters` on every prescribed time step instead, so invalid prescribed motion still raises when the movement is created.
+The array path raises the same errors as the object path. The object path checks most per time step values implicitly, in the constructors of the objects it builds, so each array function that replaces object building has a validation function that repeats those checks, and a test that it raises exactly where building the objects raises. The step parameter checks are `validate_wing_step_parameters` and `validate_airplane_step_parameters` in `_step_parameters.py`. `FreeFlightMovement` and `FreeFlightAeroelasticMovement`, which no longer build their Airplanes when they are created (their `airplanes` properties build them the first time they are read), run `_validate_prescribed_motion` instead: it checks every prescribed time step with `validate_airplane_step_parameters`, then every Wing's symmetry type at every time step, so invalid prescribed motion still raises when the movement is created.
 
 ## The copy dimension and the array module
 

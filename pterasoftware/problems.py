@@ -15,11 +15,14 @@ from scipy.linalg import expm
 from . import (
     _core,
     _fixed_point_relaxation,
+    _loads_arrays,
     _logging,
     _mujoco_model,
     _panel,
     _parameter_validation,
     _private_access,
+    _springs_arrays,
+    _step_parameters,
     _transformations,
 )
 from . import approximations as approximations_mod
@@ -607,6 +610,7 @@ class _CoupledUnsteadyProblem(_core.CoreUnsteadyProblem):
     __slots__ = (
         "_movement",
         "_steady_problems",
+        "_airplane_step_parameters",
     )
 
     def __init__(
@@ -652,6 +656,15 @@ class _CoupledUnsteadyProblem(_core.CoreUnsteadyProblem):
             )
         ]
 
+        # The AirplaneStepParameters each time step's (first) Airplane is built from,
+        # keyed by time step, which the solvers' array path meshes instead of reading
+        # the Airplanes. The subclasses record them as they build each time step's
+        # Airplane. They are only used during a run, so they aren't saved in .psz files,
+        # and a loaded problem has None here.
+        self._airplane_step_parameters: (
+            dict[int, _step_parameters.AirplaneStepParameters] | None
+        ) = {}
+
     # --- Immutable: read only properties ---
     @property
     def movement(self) -> _core.CoreMovement:
@@ -660,6 +673,44 @@ class _CoupledUnsteadyProblem(_core.CoreUnsteadyProblem):
     @property
     def steady_problems(self) -> tuple[SteadyProblem, ...]:
         return tuple(self._steady_problems)
+
+    def _record_airplane_step_parameters(
+        self, step: int, parameters: _step_parameters.AirplaneStepParameters
+    ) -> None:
+        """Records the AirplaneStepParameters the first Airplane at a given time step is
+        built from.
+
+        It exists so every subclass records them the same way, for
+        get_airplane_step_parameters to return to the array path.
+
+        :param step: The time step.
+        :param parameters: The AirplaneStepParameters.
+        :return: None
+        """
+        assert self._airplane_step_parameters is not None
+        self._airplane_step_parameters[step] = parameters
+
+    def get_airplane_step_parameters(
+        self, step: int
+    ) -> _step_parameters.AirplaneStepParameters:
+        """Gets the AirplaneStepParameters the first Airplane at a given time step was
+        built from.
+
+        It exists because a coupled problem's geometry at each time step depends on the
+        run, so the array path can't get it from the movement. The coupled solver meshes
+        each time step from the values recorded here.
+
+        :param step: The time step. Its Airplane must already have been built.
+        :return: The AirplaneStepParameters.
+        """
+        if self._airplane_step_parameters is None or step not in (
+            self._airplane_step_parameters
+        ):
+            raise ValueError(
+                f"The Airplane at time step {step} hasn't been built from recorded "
+                f"step parameters."
+            )
+        return self._airplane_step_parameters[step]
 
     def get_steady_problem(self, step: int) -> SteadyProblem:
         """Get the SteadyProblem at a given time step.
@@ -819,8 +870,23 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         # so the initial Airplane must be a fresh object, which
         # generate_airplane_at_time_step returns.
         initial_airplane_movement = movement.airplane_movements[0]
-        initial_airplane = initial_airplane_movement.generate_airplane_at_time_step(
-            step=0, delta_time=movement.delta_time
+        # Changed for the arrays rewrite: the initial Airplane is built from its step
+        # parameters, which are recorded for the array path, through the same two halves
+        # generate_airplane_at_time_step calls, so it is identical. The old code was:
+        # octowrap: off
+        # initial_airplane = initial_airplane_movement.generate_airplane_at_time_step(
+        #     step=0, delta_time=movement.delta_time
+        # )
+        # octowrap: on
+        # noinspection PyProtectedMember
+        initial_airplane_parameters = (
+            initial_airplane_movement._generate_airplane_parameters_at_time_step(
+                0, movement.delta_time
+            )
+        )
+        # noinspection PyProtectedMember
+        initial_airplane = initial_airplane_movement._airplane_from_parameters(
+            initial_airplane_parameters
         )
         initial_operating_point = movement.operating_point_movement.operating_points[0]
 
@@ -829,6 +895,7 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
             initial_airplanes=[initial_airplane],
             initial_operating_point=initial_operating_point,
         )
+        self._record_airplane_step_parameters(0, initial_airplane_parameters)
 
         I_BP1_CgP1 = _parameter_validation.m_by_n_number_arrayLike_return_float(
             I_BP1_CgP1, "I_BP1_CgP1", 3, 3
@@ -1100,6 +1167,7 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         operating_point: operating_point_mod.OperatingPoint,
         airplane: geometry.airplane.Airplane,
         step: int,
+        loads: _loads_arrays.StepLoads | None = None,
     ) -> tuple[np.ndarray, np.ndarray] | None:
         """Assembles the Earth-axes interval load to apply over the next time step.
 
@@ -1119,6 +1187,9 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         :param airplane: The first Airplane, carrying the aerodynamic loads the solver
             calculated at this operating point.
         :param step: The current time step index (zero indexed).
+        :param loads: The solver's StepLoads at this operating point, from which the
+            array path reads the aerodynamic loads (the same values the Airplane
+            carries), or None to read them from the Airplane. The default is None.
         :return: A tuple of two (3,) ndarrays of floats representing the total force and
             moment (in Earth axes, relative to the first Airplane's CG) to apply, in
             Newtons and Newton meters, or None to withhold the loads in the prescribed
@@ -1141,10 +1212,19 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
                 self._external_loads_validated = True
             return None
 
-        aeroForces_W = airplane.forces_W
-        assert aeroForces_W is not None
-        aeroMoments_W_CgP1 = airplane.moments_W_CgP1
-        assert aeroMoments_W_CgP1 is not None
+        # Changed for the arrays rewrite: the array path reads the aerodynamic loads
+        # from the solver's StepLoads, which hold the same values it writes onto the
+        # Airplane.
+        if loads is not None:
+            aeroForces_W = loads.stackAirplaneForces_W[0]
+            aeroMoments_W_CgP1 = loads.stackAirplaneMoments_W_CgP1[0]
+        else:
+            _aeroForces_W = airplane.forces_W
+            assert _aeroForces_W is not None
+            _aeroMoments_W_CgP1 = airplane.moments_W_CgP1
+            assert _aeroMoments_W_CgP1 is not None
+            aeroForces_W = _aeroForces_W
+            aeroMoments_W_CgP1 = _aeroMoments_W_CgP1
 
         # Start from the aerodynamic loads and add any external loads from the
         # external_loads_fn.
@@ -1499,7 +1579,10 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         # Seed the iteration with the loose step, S(x_n, l_n), evaluated from the
         # snapshot.
         snapshot_interval_loads = self._assemble_interval_loads(
-            current_operating_point, current_airplane, step
+            current_operating_point,
+            current_airplane,
+            step,
+            loads=solver._current_step_loads if solver.use_arrays else None,
         )
         trial_x = self._state_to_vector(self._advance_body(snapshot_interval_loads))
 
@@ -1531,7 +1614,10 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
                 trial_operating_point, step
             )
             interval_loads = self._assemble_interval_loads(
-                trial_operating_point, trial_airplane, step
+                trial_operating_point,
+                trial_airplane,
+                step,
+                loads=solver._current_step_loads if solver.use_arrays else None,
             )
 
             # Integrate the body from the snapshot under the trial load.
@@ -1656,6 +1742,20 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
         current_operating_point = solver.current_operating_point
 
         if step < self.num_steps - 1:
+            # Changed for the arrays rewrite: the next time step's geometry is
+            # prescribed, so the array path meshes it from the movement's step
+            # parameters, recorded here for the coupling trials and the official solve,
+            # while the object path keeps reading the movement's Airplanes.
+            if solver.use_arrays:
+                # noinspection PyProtectedMember
+                self._record_airplane_step_parameters(
+                    step + 1,
+                    self._free_flight_movement.airplane_movements[
+                        0
+                    ]._generate_airplane_parameters_at_time_step(
+                        step + 1, self._free_flight_movement.delta_time
+                    ),
+                )
             if step >= self._free_flight_movement.prescribed_num_steps:
                 # Free flight phase: drive the loads and the body state to mutual
                 # consistency before committing the next step.
@@ -1673,7 +1773,10 @@ class FreeFlightUnsteadyProblem(_CoupledUnsteadyProblem):
                 # trimmed condition while the wake develops. Advance once and commit the
                 # next step's SteadyProblem from the new state.
                 interval_loads_E = self._assemble_interval_loads(
-                    current_operating_point, current_airplane, step
+                    current_operating_point,
+                    current_airplane,
+                    step,
+                    loads=solver._current_step_loads if solver.use_arrays else None,
                 )
                 new_state = self._advance_body(interval_loads_E)
                 next_operating_point = self._operating_point_from_state(
@@ -1763,9 +1866,22 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         ):
             raise TypeError("movement must be an AeroelasticMovement.")
 
-        # Generate the initial Airplane at step 0 with no deformation.
-        initial_airplane = movement.generate_airplane_at_time_step(
-            airplane_movement_index=0, step=0
+        # Generate the initial Airplane at step 0 with no deformation. Changed for the
+        # arrays rewrite: it is built from its step parameters, which are recorded for
+        # the array path, through the same two halves generate_airplane_at_time_step
+        # calls, so it is identical. The old code was:
+        # octowrap: off
+        # initial_airplane = movement.generate_airplane_at_time_step(
+        #     airplane_movement_index=0, step=0
+        # )
+        # octowrap: on
+        # noinspection PyProtectedMember
+        initial_airplane_parameters = (
+            movement._generate_airplane_parameters_at_time_step(0, 0)
+        )
+        # noinspection PyProtectedMember
+        initial_airplane = movement.airplane_movements[0]._airplane_from_parameters(
+            initial_airplane_parameters
         )
 
         super().__init__(
@@ -1773,6 +1889,7 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             initial_airplanes=[initial_airplane],
             initial_operating_point=movement.operating_points[0],
         )
+        self._record_airplane_step_parameters(0, initial_airplane_parameters)
 
         # These are the tunable parameters.
         self._wing_density = wing_density  # This is per unit height, in kg/m^2.
@@ -1928,11 +2045,19 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             for arr in deformationAnglesRad_Wcsp_to_Wcs_ixyz
         ]
 
-        # Generate the deformed Airplane at this step.
-        airplane = self._aeroelastic_movement.generate_airplane_at_time_step(
-            airplane_movement_index=0,
-            step=next_step,
-            deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        # Generate the deformed Airplane at this step. Changed for the arrays rewrite:
+        # it is built from its step parameters, which are recorded for the array path,
+        # through the same two halves generate_airplane_at_time_step calls, so it is
+        # identical. The old code was:
+        # octowrap: off
+        # airplane = self._aeroelastic_movement.generate_airplane_at_time_step(
+        #     airplane_movement_index=0,
+        #     step=next_step,
+        #     deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        # )
+        # octowrap: on
+        airplane = self._build_recorded_airplane(
+            next_step, deformationAngles_Wcsp_to_Wcs_ixyz
         )
         operating_point = self._aeroelastic_movement.operating_points[next_step]
 
@@ -1942,6 +2067,46 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
                 operating_point=operating_point,
             )
         )
+
+    def _build_recorded_airplane(
+        self,
+        step: int,
+        deformationAngles_Wcsp_to_Wcs_ixyz: list[np.ndarray | None],
+    ) -> geometry.airplane.Airplane:
+        """Builds a time step's deformed Airplane from its step parameters, and records
+        them for the solvers' array path.
+
+        It replaces the movement's generate_airplane_at_time_step calls in
+        AeroelasticUnsteadyProblem.initialize_next_problem and
+        FreeFlightAeroelasticUnsteadyProblem.initialize_next_problem.
+
+        It exists so the aeroelastic problems record each time step's values for the
+        array path in the same place they build the Airplane, so the recorded values are
+        always the ones the Airplane was built from.
+
+        It calls the same two halves as the movement's generate_airplane_at_time_step,
+        so the Airplane is identical.
+
+        :param step: The time step.
+        :param deformationAngles_Wcsp_to_Wcs_ixyz: A list with one entry per Wing: a
+            (num_wing_cross_sections, 3) ndarray of floats of the deformation angles
+            that perturb each WingCrossSection's angles_Wcsp_to_Wcs_ixyz (degrees) for
+            an aeroelastic Wing, or None for a standard Wing.
+        :return: The Airplane.
+        """
+        # noinspection PyProtectedMember
+        airplane_parameters = (
+            self._aeroelastic_movement._generate_airplane_parameters_at_time_step(
+                0,
+                step,
+                deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+            )
+        )
+        self._record_airplane_step_parameters(step, airplane_parameters)
+        # noinspection PyProtectedMember
+        return self._aeroelastic_movement.airplane_movements[
+            0
+        ]._airplane_from_parameters(airplane_parameters)
 
     def _calculate_wing_deformation(
         self,
@@ -1971,10 +2136,20 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         airplane = curr_problem.airplanes[0]
         wing_movements = self._aeroelastic_movement.airplane_movements[0].wing_movements
 
+        # Changed for the arrays rewrite: the array path doesn't read the current time
+        # step's Wings. Their counts, chords, and mirroring are fixed for the run, so it
+        # reads them from the movements' base Wings, and it reads their Panels' areas
+        # and strips' widths from the solver's geometry at the current time step.
+        use_arrays = solver.use_arrays
+        if use_arrays:
+            wings = [wing_movement.base_wing for wing_movement in wing_movements]
+        else:
+            wings = list(airplane.wings)
+
         results: list[np.ndarray | None] = []
         panel_offset = 0
 
-        for wing_idx, wing in enumerate(airplane.wings):
+        for wing_idx, wing in enumerate(wings):
             wing_movement = wing_movements[wing_idx]
             num_chordwise_panels = wing.num_chordwise_panels
             num_spanwise_panels = wing.num_spanwise_panels
@@ -1985,7 +2160,23 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
                 wing_movement,
                 aeroelastic_wing_movement_mod.AeroelasticWingMovement,
             ):
-                mass_matrix = self._calculate_mass_matrix(wing)
+                strip_widths: np.ndarray | None = None
+                if use_arrays:
+                    assert solver._layout_plan is not None
+                    assert solver._step_geometries is not None
+                    panel_areas, strip_widths = (
+                        _springs_arrays.wing_panel_areas_and_strip_widths(
+                            solver._layout_plan,
+                            solver._step_geometries[solver._current_step],
+                            wing_idx,
+                            wing.mirror_only,
+                        )
+                    )
+                    mass_matrix = _springs_arrays.panel_mass_matrix(
+                        panel_areas, self.wing_density
+                    )
+                else:
+                    mass_matrix = self._calculate_mass_matrix(wing)
 
                 aeroMoments_GP1_Slep = self._extract_aero_moments(
                     solver,
@@ -2014,6 +2205,7 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
                     step=step,
                     wing_idx=wing_idx,
                     wing_movement=wing_movement,
+                    strip_widths=strip_widths,
                 )
 
                 self._record_structural_state(
@@ -2184,6 +2376,7 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         step: int,
         wing_idx: int,
         wing_movement: aeroelastic_wing_movement_mod.AeroelasticWingMovement,
+        strip_widths: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Solve the torsional spring-damper ODE for each spanwise section.
 
@@ -2214,6 +2407,9 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
         :param wing_idx: Index of the Wing in airplane.wings.
         :param wing_movement: The AeroelasticWingMovement providing the prescribed
             flapping parameters used for inertial moment generation.
+        :param strip_widths: A (num_spanwise_panels,) ndarray of floats of the strips'
+            span widths (meters), root to tip, which the array path supplies from its
+            geometry, or None to read them from the Wing's Panels. The default is None.
         :return: A tuple of two (num_spanwise_panels + 1,) ndarrays: the new values
             (radians) of the y components of the deformation angle vectors that perturb
             the WingCrossSections' angles_Wcsp_to_Wcs_ixyz, and those y components' new
@@ -2236,11 +2432,24 @@ class AeroelasticUnsteadyProblem(_CoupledUnsteadyProblem):
             self._listDeformationAnglesDerivativeYRad_Wcsp_to_Wcs_ixyz[wing_idx][-1]
         )
         dt = self.movement.delta_time
-        torsional_inertias, flapping_axis_inertias = self._calculate_strip_inertias(
-            wing=wing,
-            num_spanwise_panels=num_spanwise_panels,
-            mass_matrix=mass_matrix,
-        )
+        # Changed for the arrays rewrite: the array path supplies the strips' widths
+        # from its geometry and finds the inertias with _springs_arrays.strip_inertias,
+        # the same formulas, rather than reading the Wing's Panels.
+        if strip_widths is not None:
+            torsional_inertias, flapping_axis_inertias = _springs_arrays.strip_inertias(
+                mass_matrix,
+                [
+                    wing_cross_section.chord
+                    for wing_cross_section in wing.wing_cross_sections
+                ],
+                strip_widths,
+            )
+        else:
+            torsional_inertias, flapping_axis_inertias = self._calculate_strip_inertias(
+                wing=wing,
+                num_spanwise_panels=num_spanwise_panels,
+                mass_matrix=mass_matrix,
+            )
 
         # Changed for speed: with the analytical spring solver, all of the Wing's strips
         # are solved together by _solve_strips_analytically, which gives the same
@@ -3229,6 +3438,7 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         operating_point: operating_point_mod.OperatingPoint,
         airplane: geometry.airplane.Airplane,
         step: int,
+        loads: _loads_arrays.StepLoads | None = None,
     ) -> tuple[np.ndarray, np.ndarray] | None:
         """Assembles the Earth-axes interval load to apply over the next time step.
 
@@ -3248,6 +3458,9 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         :param airplane: The first Airplane, carrying the aerodynamic loads the solver
             calculated at this operating point.
         :param step: The current time step index (zero indexed).
+        :param loads: The solver's StepLoads at this operating point, from which the
+            array path reads the aerodynamic loads (the same values the Airplane
+            carries), or None to read them from the Airplane. The default is None.
         :return: A tuple of two (3,) ndarrays of floats representing the total force and
             moment (in Earth axes, relative to the first Airplane's CG) to apply, in
             Newtons and Newton meters, or None to withhold the loads in the prescribed
@@ -3270,10 +3483,19 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 self._external_loads_validated = True
             return None
 
-        aeroForces_W = airplane.forces_W
-        assert aeroForces_W is not None
-        aeroMoments_W_CgP1 = airplane.moments_W_CgP1
-        assert aeroMoments_W_CgP1 is not None
+        # Changed for the arrays rewrite: the array path reads the aerodynamic loads
+        # from the solver's StepLoads, which hold the same values it writes onto the
+        # Airplane.
+        if loads is not None:
+            aeroForces_W = loads.stackAirplaneForces_W[0]
+            aeroMoments_W_CgP1 = loads.stackAirplaneMoments_W_CgP1[0]
+        else:
+            _aeroForces_W = airplane.forces_W
+            assert _aeroForces_W is not None
+            _aeroMoments_W_CgP1 = airplane.moments_W_CgP1
+            assert _aeroMoments_W_CgP1 is not None
+            aeroForces_W = _aeroForces_W
+            aeroMoments_W_CgP1 = _aeroMoments_W_CgP1
 
         # Start from the aerodynamic loads and add any external loads from the
         # external_loads_fn.
@@ -3634,7 +3856,10 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         # Seed the iteration with the loose step, S(x_n, l_n), evaluated from the
         # snapshot.
         snapshot_interval_loads = self._assemble_interval_loads(
-            current_operating_point, current_airplane, step
+            current_operating_point,
+            current_airplane,
+            step,
+            loads=solver._current_step_loads if solver.use_arrays else None,
         )
         trial_x = self._state_to_vector(self._advance_body(snapshot_interval_loads))
 
@@ -3666,7 +3891,10 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 trial_operating_point, step
             )
             interval_loads = self._assemble_interval_loads(
-                trial_operating_point, trial_airplane, step
+                trial_operating_point,
+                trial_airplane,
+                step,
+                loads=solver._current_step_loads if solver.use_arrays else None,
             )
 
             # Integrate the body from the snapshot under the trial load.
@@ -3811,10 +4039,18 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
         ]
 
         # Generate the deformed Airplane at this step which is our next airplane.
-        next_airplane = self._aeroelastic_movement.generate_airplane_at_time_step(
-            airplane_movement_index=0,
-            step=next_step,
-            deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        # Changed for the arrays rewrite: it is built from its step parameters, which
+        # are recorded for the array path, through the same two halves
+        # generate_airplane_at_time_step calls, so it is identical. The old code was:
+        # octowrap: off
+        # next_airplane = self._aeroelastic_movement.generate_airplane_at_time_step(
+        #     airplane_movement_index=0,
+        #     step=next_step,
+        #     deformationAngles_Wcsp_to_Wcs_ixyz=deformationAngles_Wcsp_to_Wcs_ixyz,
+        # )
+        # octowrap: on
+        next_airplane = self._build_recorded_airplane(
+            next_step, deformationAngles_Wcsp_to_Wcs_ixyz
         )
 
         current_operating_point = solver.current_operating_point
@@ -3838,7 +4074,10 @@ class FreeFlightAeroelasticUnsteadyProblem(AeroelasticUnsteadyProblem):
                 # trimmed condition while the wake develops. Advance once and commit the
                 # next step's SteadyProblem from the new state.
                 interval_loads_E = self._assemble_interval_loads(
-                    current_operating_point, current_airplane, step
+                    current_operating_point,
+                    current_airplane,
+                    step,
+                    loads=solver._current_step_loads if solver.use_arrays else None,
                 )
                 new_state = self._advance_body(interval_loads_E)
                 next_operating_point = self._operating_point_from_state(

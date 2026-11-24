@@ -3,11 +3,12 @@ class."""
 
 import unittest
 from typing import Any
+from unittest import mock
 
 import numpy as np
 
 import pterasoftware as ps
-from tests.unit.fixtures import movement_fixtures
+from tests.unit.fixtures import coupled_unsteady_problem_fixtures, movement_fixtures
 
 _INERTIA = ((0.1, 0.0, 0.0), (0.0, 0.2, 0.0), (0.0, 0.0, 0.3))
 
@@ -178,3 +179,68 @@ class TestFreeFlightAeroelasticUnsteadyProblem(unittest.TestCase):
         """Test that an integrator that MuJoCo doesn't have raises a ValueError."""
         with self.assertRaises(ValueError):
             _make_problem(integrator="Leapfrog")
+
+
+class TestFreeFlightAeroelasticUnsteadyProblemArrayPath(unittest.TestCase):
+    """This is a class with functions to test that a
+    FreeFlightAeroelasticUnsteadyProblem's interval loads on the array path, read from
+    the solver's kept loads, are exactly those read from the Airplane."""
+
+    def test_interval_loads_from_step_loads_match_the_airplane(self) -> None:
+        """Test that, at every call during an array path run (the snapshot, each
+        coupling trial, and the prescribed phase), _assemble_interval_loads given the
+        solver's StepLoads returns exactly what it returns reading the same Airplane,
+        which the array path also writes the loads onto."""
+        problem_class = ps.problems.FreeFlightAeroelasticUnsteadyProblem
+        original = problem_class._assemble_interval_loads
+        results: list[tuple[Any, Any]] = []
+
+        def both_paths(
+            problem: Any,
+            operating_point: Any,
+            airplane: Any,
+            step: int,
+            loads: Any = None,
+        ) -> Any:
+            self.assertIsNotNone(loads)
+            from_loads = original(problem, operating_point, airplane, step, loads=loads)
+            from_airplane = original(problem, operating_point, airplane, step)
+            results.append((from_loads, from_airplane))
+            return from_loads
+
+        problem = _make_problem()
+        solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+            problem
+        )
+        with mock.patch.object(problem_class, "_assemble_interval_loads", both_paths):
+            solver.run(show_progress=False, use_arrays=True)
+        self.assertTrue(solver.use_arrays)
+        self.assertTrue(any(from_loads is not None for from_loads, _ in results))
+        for from_loads, from_airplane in results:
+            if from_airplane is None:
+                self.assertIsNone(from_loads)
+                continue
+            assert from_loads is not None
+            for actual, expected in zip(from_loads, from_airplane):
+                self.assertTrue(np.array_equal(actual, expected))
+
+
+class TestFreeFlightAeroelasticUnsteadyProblemStepParameters(unittest.TestCase):
+    """This is a class with functions to test that a
+    FreeFlightAeroelasticUnsteadyProblem records, on the array path, the step parameters
+    of every time step's Airplane."""
+
+    def test_records_every_time_steps_parameters(self) -> None:
+        """Test that, after an array path run, every time step's recorded step
+        parameters rebuild exactly the Airplane the problem solved there."""
+        problem: Any = _make_problem()
+        solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+            problem
+        )
+        solver.run(show_progress=False, use_arrays=True)
+        coupled_unsteady_problem_fixtures.assert_recorded_step_parameters_match_the_airplanes(
+            self,
+            problem,
+            problem.movement.airplane_movements[0],
+            range(problem.num_steps),
+        )

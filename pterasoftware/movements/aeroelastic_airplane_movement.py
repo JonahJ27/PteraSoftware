@@ -171,6 +171,10 @@ class AeroelasticAirplaneMovement(_core.CoreAirplaneMovement):
         """Evaluates the motion of the Airplane and of each of its Wings at a single
         time step, optionally applying structural deformation to each Wing.
 
+        It exists because the aeroelastic problems record each time step's deformed
+        values for the array path, so the aeroelastic Airplane's movement needs the same
+        split into values and objects as the AirplaneMovement.
+
         This is the first of the two halves of generate_airplane_at_time_step. It only
         evaluates the motion and returns the resulting values, without building an
         Airplane or any Wings: it evaluates the CG and calls each Wing's movement

@@ -161,3 +161,35 @@ class TestCoupledUnsteadyProblemImmutability(unittest.TestCase):
 
         self.assertEqual(len(self.problem._steady_problems), 2)
         self.assertIs(self.problem._steady_problems[1], next_steady_problem)
+
+
+class TestCoupledUnsteadyProblemStepParameters(unittest.TestCase):
+    """This is a class with functions to test _CoupledUnsteadyProblem's record of the
+    step parameters each time step's Airplane was built from."""
+
+    def setUp(self) -> None:
+        """Set up a _CoupledUnsteadyProblem, which records no step parameters itself."""
+        self.problem = ps.problems._CoupledUnsteadyProblem(
+            movement=core_movement_fixtures.make_static_core_movement_fixture(),
+            initial_airplanes=[geometry_fixtures.make_first_airplane_fixture()],
+            initial_operating_point=operating_point_fixtures.make_basic_operating_point_fixture(),
+        )
+
+    def test_returns_the_recorded_step_parameters(self) -> None:
+        """Test that a recorded time step's step parameters are returned as recorded."""
+        recorded: Any = object()
+        self.problem._record_airplane_step_parameters(3, recorded)
+        self.assertIs(self.problem.get_airplane_step_parameters(3), recorded)
+
+    def test_rejects_a_time_step_that_was_not_recorded(self) -> None:
+        """Test that a time step without recorded step parameters raises a ValueError
+        naming it."""
+        with self.assertRaisesRegex(ValueError, "time step 0 hasn't been built"):
+            self.problem.get_airplane_step_parameters(0)
+
+    def test_rejects_every_time_step_after_loading(self) -> None:
+        """Test that a problem whose record is None, as it is after loading, raises a
+        ValueError."""
+        self.problem._airplane_step_parameters = None
+        with self.assertRaisesRegex(ValueError, "time step 0 hasn't been built"):
+            self.problem.get_airplane_step_parameters(0)

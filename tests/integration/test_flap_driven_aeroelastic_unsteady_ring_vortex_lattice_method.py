@@ -28,7 +28,7 @@ import unittest
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import flap_drive_fixtures
+from tests.integration.fixtures import array_path_fixtures, flap_drive_fixtures
 
 # These are the stored results of the fixture run, computed with the default analytical
 # spring solver, one entry per time step. The deformations are the y components
@@ -412,3 +412,30 @@ class TestFlapDrivenAeroelasticUnsteadyRingVortexLatticeMethod(unittest.TestCase
             _deformations(self.problem), _deformations(prescribed), 1e-5
         )
         self._assert_history_matches(_lifts(self.problem), _lifts(prescribed), 1e-5)
+
+
+class TestFlapDrivenAeroelasticArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads on a flap driven
+    problem."""
+
+    def test_matches_the_object_path(self) -> None:
+        """Running the solver with use_arrays=True gives the object path's loads at
+        every time step, to within the problem's sensitivity (see
+        FLAP_DRIVEN_RELATIVE_TOLERANCE).
+
+        :return: None
+        """
+        object_solver, array_solver = (
+            array_path_fixtures.make_solvers_run_on_both_paths(
+                lambda: ps.aeroelastic_unsteady_ring_vortex_lattice_method.AeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                    aeroelastic_unsteady_problem=flap_drive_fixtures.make_flap_driven_problem()
+                ),
+                prescribed_wake=False,
+            )
+        )
+        array_path_fixtures.assert_loads_match(
+            self,
+            object_solver,
+            array_solver,
+            array_path_fixtures.FLAP_DRIVEN_RELATIVE_TOLERANCE,
+        )

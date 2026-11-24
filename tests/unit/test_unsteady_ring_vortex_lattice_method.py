@@ -7,6 +7,9 @@ from unittest.mock import patch
 import numpy as np
 
 import pterasoftware as ps
+
+# noinspection PyProtectedMember
+from pterasoftware import _mesh_arrays
 from tests.unit.fixtures import (
     airplane_movement_fixtures,
     operating_point_fixtures,
@@ -486,6 +489,57 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                             rtol=0.0,
                             atol=1.0e-12,
                         )
+
+
+class TestUnsteadyRingVortexLatticeMethodSolverWingMeshesFromParameters(
+    unittest.TestCase
+):
+    """This is a class with functions to test that the array path checks the step
+    parameters it meshes, as building the objects would."""
+
+    def test_invalid_step_parameters_raise_the_object_paths_error(self) -> None:
+        """Test that _wing_meshes_from_parameters, given step parameters with a Wing
+        angle out of range or a CG that isn't finite, raises the error building the
+        Airplane from them raises, and meshes the same step parameters when they are
+        valid.
+
+        A run can't reach this check with invalid values yet (the movements check their
+        motion when they are created, and the coupled problems build each Airplane
+        before it is meshed), so it is tested directly.
+        """
+        solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        # The run builds the mesh plans from the first time step's Wings and clears them
+        # when it ends, so they are built here the same way.
+        solver._mesh_plans = tuple(
+            _mesh_arrays.build_mesh_plan(wing)
+            for airplane in solver.steady_problems[0].airplanes
+            for wing in airplane.wings
+        )
+        airplane_movement: Any = solver.unsteady_problem.movement.airplane_movements[0]
+        parameters = airplane_movement._generate_airplane_parameters_at_time_step(
+            0, solver.delta_time
+        )
+        wing_meshes, _ = solver._wing_meshes_from_parameters([parameters])
+        self.assertEqual(len(wing_meshes), len(parameters.wings))
+
+        # A Wing angle out of range (which mesh_wing_arrays also checks), and a CG that
+        # isn't finite (which only the Airplane's check catches).
+        bad_wing = parameters.wings[0]._replace(
+            angles_Gs_to_Wn_ixyz=np.array([0.0, 100.0, 0.0])
+        )
+        for name, bad_parameters in (
+            (
+                "wing angle",
+                parameters._replace(wings=(bad_wing, *parameters.wings[1:])),
+            ),
+            ("CG", parameters._replace(Cg_GP1_CgP1=np.array([np.nan, 0.0, 0.0]))),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError) as expected:
+                    airplane_movement._airplane_from_parameters(bad_parameters)
+                with self.assertRaises(ValueError) as context:
+                    solver._wing_meshes_from_parameters([bad_parameters])
+                self.assertEqual(str(context.exception), str(expected.exception))
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):

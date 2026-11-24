@@ -25,7 +25,12 @@ from . import _parameter_validation
 
 
 class WingCrossSectionStepParameters(NamedTuple):
-    """The values of a WingCrossSection that can change at each time step."""
+    """The values of a WingCrossSection that can change at each time step.
+
+    It exists because the array path needs a WingCrossSection's changing values at a
+    time step without the WingCrossSection, and the object path builds its
+    WingCrossSection from this same record, so both paths start from the same values.
+    """
 
     # A (3,) ndarray of floats representing the position of the WingCrossSection's
     # leading point (in wing cross section parent axes, relative to the leading point
@@ -41,6 +46,10 @@ class WingCrossSectionStepParameters(NamedTuple):
 class WingStepParameters(NamedTuple):
     """The values of a Wing, and of each of its WingCrossSections, that can change at
     each time step.
+
+    It exists because the array path meshes a Wing from its changing values at a time
+    step without building the Wing, and the object path builds its Wing from this same
+    record, so both paths start from the same values.
 
     For a Wing with type 5 symmetry, the Airplane replaces it with two Wings, the
     original and its reflection, and both are built from these same values. The symmetry
@@ -71,7 +80,13 @@ class WingStepParameters(NamedTuple):
 
 class AirplaneStepParameters(NamedTuple):
     """The values of an Airplane, and of each of its Wings, that can change at each time
-    step."""
+    step.
+
+    It exists because the array path meshes an Airplane's Wings from their changing
+    values at a time step without building the Airplane, and the object path builds its
+    Airplane from this same record, so both paths start from the same values. The
+    coupled problems record one for each time step.
+    """
 
     # A (3,) ndarray of floats representing the position of the Airplane's CG (in the
     # first Airplane's geometry axes, relative to the first Airplane's CG). Its units
@@ -91,6 +106,10 @@ def stack_wing_step_parameters(
 ) -> WingStepParameters:
     """Builds a Wing's WingStepParameters from its own values and its WingCrossSections'
     WingCrossSectionStepParameters.
+
+    It exists so every movement builds a WingStepParameters the same way, with its
+    WingCrossSections' values stacked into the arrays mesh_wing_arrays reads all at
+    once.
 
     :param Ler_Gs_Cgs: A (3,) ndarray of floats representing the position of the Wing's
         leading edge root point (in geometry axes after accounting for symmetry,
@@ -126,6 +145,9 @@ def stack_wing_step_parameters(
 def make_read_only(array: np.ndarray) -> np.ndarray:
     """Marks an ndarray as read only and returns it.
 
+    It exists so the step parameter records can't be changed after they are built, since
+    both paths read the same record.
+
     :param array: The ndarray to mark as read only.
     :return: The same ndarray, now read only.
     """
@@ -137,6 +159,9 @@ def validate_wing_step_parameters(parameters: WingStepParameters) -> None:
     """Checks a Wing's values at one time step the way building its WingCrossSections
     and Wing on the object path checks them, and raises the same error, with the same
     type and message, that the object path raises first.
+
+    It replaces the checks the WingCrossSection and Wing constructors make on these
+    values, including the Wing's root, middle, and tip WingCrossSection constraints.
 
     The object path validates each time step's values in the constructors of the objects
     it builds, and the array path builds no objects, so it calls this instead. It checks
@@ -181,6 +206,13 @@ def validate_airplane_step_parameters(parameters: AirplaneStepParameters) -> Non
     Airplane on the object path checks them, and raises the same error the object path
     raises first.
 
+    It replaces those checks for each of the Airplane's Wings, and the Airplane
+    constructor's check of Cg_GP1_CgP1.
+
+    It exists because the array path builds no Wings or Airplane whose constructors
+    would check these values, so without it, invalid motion would run without an error
+    on the array path.
+
     The object path builds each Wing in order, then the Airplane, whose constructor
     checks that Cg_GP1_CgP1 is finite.
 
@@ -200,6 +232,10 @@ def _raise_wing_step_parameters_error(
 ) -> None:
     """Repeats the object path's checks of a Wing's values at one geometry build, in its
     order, and raises the first error they find.
+
+    It exists so validate_wing_step_parameters stays fast: it checks every value at once
+    with array operations, and only when that finds a problem does it call this to
+    repeat the checks in the object path's order and raise the same first error.
 
     The movements' _wing_from_parameters builds every WingCrossSection, then the Wing,
     so this checks each WingCrossSection's constructor values in order, then the Wing's

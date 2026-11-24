@@ -184,6 +184,10 @@ def oscillating_vector_at_time(
     """Returns the result of evaluating an oscillating function for each component of a
     vector at a time.
 
+    It exists because the movement classes each repeated this component by component
+    evaluation inline, and splitting their builders into a values half and an objects
+    half for the array path needed it in one place.
+
     Each component uses the function its spacing names: oscillating_sin_at_time for
     "sine", oscillating_lin_at_time for "uniform", or oscillating_custom_at_time for a
     callable. The components are evaluated one at a time, in order, exactly as the

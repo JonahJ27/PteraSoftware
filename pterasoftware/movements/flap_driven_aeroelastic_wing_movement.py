@@ -431,6 +431,9 @@ class FlapDrivenAeroelasticWingMovement(
         """Evaluates the motion of the Wing and of each of its WingCrossSections at a
         single time step, using the recorded flap angle if there is one.
 
+        It exists so the recorded flap angle is applied to the values, which both paths
+        use, instead of only to a built Wing.
+
         This is the first of the two halves of generate_wing_at_time_step. It only picks
         the flap angle, then has the parent class's version of this method evaluate the
         motion with it as the override, without building a Wing. The second half, the

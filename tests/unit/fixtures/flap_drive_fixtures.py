@@ -242,13 +242,15 @@ def make_sine_flap_reference_fixture(
     return sine_flap_reference_fixture
 
 
-def _make_flap_driven_airplane_movement() -> (
-    ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement
-):
+def _make_flap_driven_airplane_movement(
+    rotationPointOffset_Gs_Ler: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> ps.movements.aeroelastic_airplane_movement.AeroelasticAirplaneMovement:
     """Builds the AeroelasticAirplaneMovement that the flap driven movement fixtures
     share: a symmetric two-Wing Airplane with no weight, whose Wings are moved by
     FlapDrivenAeroelasticWingMovements that prescribe no flap motion.
 
+    :param rotationPointOffset_Gs_Ler: Each Wing movement's rotation point offset (m).
+        The default is (0.0, 0.0, 0.0).
     :return: The AeroelasticAirplaneMovement.
     """
     airfoil = ps.geometry.airfoil.Airfoil(name="naca2412")
@@ -297,6 +299,7 @@ def _make_flap_driven_airplane_movement() -> (
                     )
                     for wing_cross_section in wing.wing_cross_sections
                 ],
+                rotationPointOffset_Gs_Ler=rotationPointOffset_Gs_Ler,
             )
         )
 
@@ -307,17 +310,22 @@ def _make_flap_driven_airplane_movement() -> (
 
 def make_flap_driven_aeroelastic_movement_fixture(
     num_steps: int = 6,
+    rotationPointOffset_Gs_Ler: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> ps.movements.aeroelastic_movement.AeroelasticMovement:
     """This method makes a fixture that is an AeroelasticMovement whose Wings are moved
     by FlapDrivenAeroelasticWingMovements.
 
     :param num_steps: The number of time steps. The default is 6.
+    :param rotationPointOffset_Gs_Ler: Each Wing movement's rotation point offset (m).
+        The default is (0.0, 0.0, 0.0).
     :return flap_driven_aeroelastic_movement_fixture: AeroelasticMovement This is the
         AeroelasticMovement for a symmetric two-Wing Airplane whose movements prescribe
         no flap motion, so a FlapDrive must flap it.
     """
     return ps.movements.aeroelastic_movement.AeroelasticMovement(
-        airplane_movements=[_make_flap_driven_airplane_movement()],
+        airplane_movements=[
+            _make_flap_driven_airplane_movement(rotationPointOffset_Gs_Ler)
+        ],
         operating_point_movement=ps.movements.operating_point_movement.OperatingPointMovement(
             base_operating_point=ps.operating_point.OperatingPoint(
                 rho=1.225, vCg__E=10.0, alpha=0.0

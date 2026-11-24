@@ -33,7 +33,11 @@ from unittest.mock import patch
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import problem_fixtures, solver_fixtures
+from tests.integration.fixtures import (
+    array_path_fixtures,
+    problem_fixtures,
+    solver_fixtures,
+)
 
 
 class TestFreeFlightUnsteadyRingVortexLatticeMethod(unittest.TestCase):
@@ -736,3 +740,36 @@ class TestFreeFlightRestoreSubstepMatchesResolve(unittest.TestCase):
                 problem
             ),
         )
+
+
+class TestFreeFlightArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads on the gliding and the
+    flapping free flight problems."""
+
+    def test_matches_the_object_path(self) -> None:
+        """Running the solver with use_arrays=True gives the object path's loads at
+        every time step, to within each problem's sensitivity (see
+        FREE_FLIGHT_GLIDER_RELATIVE_TOLERANCE and
+        FREE_FLIGHT_FLAPPING_RELATIVE_TOLERANCE).
+
+        :return: None
+        """
+        for make_solver, relative_tolerance in (
+            (
+                solver_fixtures.make_simple_glider_free_flight_solver,
+                array_path_fixtures.FREE_FLIGHT_GLIDER_RELATIVE_TOLERANCE,
+            ),
+            (
+                solver_fixtures.make_flapping_free_flight_solver,
+                array_path_fixtures.FREE_FLIGHT_FLAPPING_RELATIVE_TOLERANCE,
+            ),
+        ):
+            with self.subTest(problem=make_solver.__name__):
+                object_solver, array_solver = (
+                    array_path_fixtures.make_solvers_run_on_both_paths(
+                        make_solver, prescribed_wake=True
+                    )
+                )
+                array_path_fixtures.assert_loads_match(
+                    self, object_solver, array_solver, relative_tolerance
+                )

@@ -4,6 +4,7 @@ FlapDrivenAeroelasticUnsteadyProblems."""
 import copy
 import unittest
 from typing import Any
+from unittest import mock
 
 import numpy as np
 import numpy.testing as npt
@@ -715,6 +716,61 @@ class TestFlapDrivenAeroelasticUnsteadyProblem(unittest.TestCase):
         reflected = self.problem._calculate_flap_fluid_torque(solver, 1)
         self.assertNotEqual(main, 0.0)
         self.assertAlmostEqual(reflected / main, 1.0, places=4)
+
+    def test_array_path_fluid_torque_matches_the_object_path(self) -> None:
+        """Test that, at every solved time step of an array path run, the array path's
+        fluid torque (from the solver's kept loads and the recorded step parameters) is
+        exactly the object path's on the same time step (from the Wing's Panels and its
+        transformation), for the main and the mirror only Wing."""
+        problem_class = (
+            ps.flap_driven_aeroelastic_unsteady_problem.FlapDrivenAeroelasticUnsteadyProblem
+        )
+        original = problem_class._calculate_flap_fluid_torque
+        torques: list[tuple[int, float, float]] = []
+
+        def both_paths(
+            problem: Any,
+            solver: Any,
+            wing_index: int,
+        ) -> float:
+            array_torque = original(problem, solver, wing_index)
+            # The array path also writes the loads onto the Panels, so switching the
+            # solver to the object path reads the same time step from them.
+            solver._use_arrays = False
+            try:
+                object_torque = original(problem, solver, wing_index)
+            finally:
+                solver._use_arrays = True
+            torques.append((wing_index, array_torque, object_torque))
+            return array_torque
+
+        # Discard only the first time step, so the torque is found at most time steps.
+        # The rotation point is off the leading edge root point, so the torque depends
+        # on the Wing's transformation at the time step, which moves it.
+        problem = problem_class(
+            movement=flap_drive_fixtures.make_flap_driven_aeroelastic_movement_fixture(
+                8, rotationPointOffset_Gs_Ler=(0.1, 0.05, 0.02)
+            ),
+            wing_density=0.5,
+            spring_constant_rad=20.0,
+            damping_constant_rad=1.0,
+            flap_drives=[flap_drive_fixtures.make_tracking_flap_drive_fixture()],
+            step_discards=1,
+        )
+        solver = ps.aeroelastic_unsteady_ring_vortex_lattice_method.AeroelasticUnsteadyRingVortexLatticeMethodSolver(
+            aeroelastic_unsteady_problem=problem
+        )
+        with mock.patch.object(
+            problem_class, "_calculate_flap_fluid_torque", both_paths
+        ):
+            solver.run(
+                show_progress=False, calculate_streamlines=False, use_arrays=True
+            )
+        self.assertTrue(solver.use_arrays)
+        self.assertEqual({wing_index for wing_index, _, _ in torques}, {0, 1})
+        self.assertTrue(any(array_torque != 0.0 for _, array_torque, _ in torques))
+        for wing_index, array_torque, object_torque in torques:
+            self.assertEqual(array_torque, object_torque, msg=f"Wing {wing_index}")
 
     def test_inertial_moment_uses_the_actual_acceleration(self) -> None:
         """Test that a recorded acceleration is the flap acceleration in the torsional

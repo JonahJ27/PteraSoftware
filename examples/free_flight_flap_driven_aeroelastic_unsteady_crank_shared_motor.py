@@ -119,15 +119,23 @@ MAX_WAKE_ROWS: int | None = MAX_WAKE_FLAPS * STEPS_PER_FLAP
 #     exact run closely.
 APPROXIMATIONS = "coarse"
 
+# Define whether to run the solver on its array path (run's use_arrays). The array path
+# computes each time step's geometry, loads, wake, and springs as arrays rather than
+# from the Airplane, Wing, and Panel objects, and gives the same results to round off
+# (in free flight, a flapping run's own sensitivity can grow that, as any change of one
+# unit in the last place would). It is still being built: until it stops building each
+# time step's objects, it isn't faster than the default (False).
+USE_ARRAYS = False
+
 # Define whether to save each run. A run is saved right after the simulation, before any
 # plots open, in its own folder, saved_results/<this script's name>/<date and
 # time>_wake_<MAX_WAKE_ROWS>/, next to this script (git ignores saved_results), so no
 # run is ever overwritten. The folder always holds:
 #
 # - metadata.json, the run's settings: the flight condition, the time steps and the wake
-#   limit, the mass properties, the torsional springs, the FlapDrives' Wings, the
-#   hardware parameter files' contents, the simulation's run time, and the Ptera
-#   Software version and git commit.
+#   limit, whether it used the array path and which approximations, the mass properties,
+#   the torsional springs, the FlapDrives' Wings, the hardware parameter files'
+#   contents, the simulation's run time, and the Ptera Software version and git commit.
 # - results.npz, the run's time histories, a few hundred kilobytes: each FlapDrive's
 #   flap and motor histories, its torque limit, and the fluid torque on its Wings, each
 #   main Wing's twist, the body's state, and the loads. Load it with numpy.load, or plot
@@ -620,7 +628,7 @@ example_solver = ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.
 )
 
 simulation_start = time.perf_counter()
-example_solver.run(prescribed_wake=False, show_progress=True)
+example_solver.run(prescribed_wake=False, show_progress=True, use_arrays=USE_ARRAYS)
 simulation_run_time = time.perf_counter() - simulation_start
 print("The simulation has finished.")
 
@@ -752,6 +760,8 @@ if SAVE_RESULTS:
         "num_steps": NUM_STEPS,
         "max_wake_flaps": MAX_WAKE_FLAPS,
         "max_wake_rows": MAX_WAKE_ROWS,
+        "use_arrays": USE_ARRAYS,
+        "approximations": APPROXIMATIONS,
         "mass_kg": ROBOT_MASS,
         "I_BP1_CgP1_kg_m2": [list(row) for row in I_BP1_CgP1],
         "wing_density_kg_per_m2": example_problem.wing_density,

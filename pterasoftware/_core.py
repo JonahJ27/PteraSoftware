@@ -621,6 +621,12 @@ class CoreWingCrossSectionMovement:
     ) -> _step_parameters.WingCrossSectionStepParameters:
         """Evaluates the WingCrossSection's motion at a single time step.
 
+        It exists because the array path needs a WingCrossSection's values at each time
+        step without building the WingCrossSection, so
+        generate_wing_cross_section_at_time_step was split into this method, which
+        evaluates the motion, and _wing_cross_section_from_parameters, which builds the
+        object from the values.
+
         This is the first of the two halves of generate_wing_cross_section_at_time_step.
         It only evaluates the motion and returns the resulting values, without building
         a WingCrossSection. The second half, _wing_cross_section_from_parameters, builds
@@ -666,6 +672,11 @@ class CoreWingCrossSectionMovement:
         self, parameters: _step_parameters.WingCrossSectionStepParameters
     ) -> geometry.wing_cross_section.WingCrossSection:
         """Builds the WingCrossSection from its values at a time step.
+
+        It exists because generate_wing_cross_section_at_time_step was split in two (see
+        _generate_wing_cross_section_parameters_at_time_step), so the object path builds
+        its WingCrossSection from the same values the array path reads, and the two
+        paths can't drift apart.
 
         This is the second of the two halves of
         generate_wing_cross_section_at_time_step. It evaluates no motion: it only builds
@@ -1298,6 +1309,11 @@ class CoreWingMovement:
         """Evaluates the motion of the Wing and of each of its WingCrossSections at a
         single time step.
 
+        It exists because the array path meshes each Wing from its values at each time
+        step without building the Wing or its WingCrossSections, so
+        generate_wing_at_time_step was split into this method, which evaluates the
+        motion, and _wing_from_parameters, which builds the objects from the values.
+
         This is the first of the two halves of generate_wing_at_time_step. It only
         evaluates the motion and returns the resulting values, without building a Wing
         or any WingCrossSections: it evaluates the Wing's own position and angles, calls
@@ -1374,6 +1390,10 @@ class CoreWingMovement:
     ) -> geometry.wing.Wing:
         """Builds the Wing, and each of its WingCrossSections, from their values at a
         time step.
+
+        It exists because generate_wing_at_time_step was split in two (see
+        _generate_wing_parameters_at_time_step), so the object path builds its Wing from
+        the same values the array path meshes, and the two paths can't drift apart.
 
         This is the second of the two halves of generate_wing_at_time_step. It evaluates
         no motion: it has each WingCrossSection's movement class build its
@@ -1861,6 +1881,11 @@ class CoreAirplaneMovement:
         """Evaluates the motion of the Airplane and of each of its Wings at a single
         time step.
 
+        It exists because the array path meshes every Wing from these values without
+        building the Airplane, so generate_airplane_at_time_step was split into this
+        method, which evaluates the motion, and _airplane_from_parameters, which builds
+        the objects from the values.
+
         This is the first of the two halves of generate_airplane_at_time_step. It only
         evaluates the motion and returns the resulting values, without building an
         Airplane or any Wings or WingCrossSections: it evaluates the CG with
@@ -1891,6 +1916,10 @@ class CoreAirplaneMovement:
         """Evaluates the oscillating value of each dimension of Cg_GP1_CgP1 at a single
         time step.
 
+        It exists because splitting generate_airplane_at_time_step in two left two
+        places that need the CG at a time step without the rest of the Airplane's
+        values, and this keeps them evaluating it the same way.
+
         _generate_airplane_parameters_at_time_step uses it for the CG, and so do the
         static and periodic geometry shortcuts in generate_airplanes, which need only
         the CG for their deep copies.
@@ -1915,6 +1944,11 @@ class CoreAirplaneMovement:
         self, parameters: _step_parameters.AirplaneStepParameters
     ) -> geometry.airplane.Airplane:
         """Builds the Airplane, and each of its Wings, from their values at a time step.
+
+        It exists because generate_airplane_at_time_step was split in two (see
+        _generate_airplane_parameters_at_time_step), so the object path builds its
+        Airplane from the same values the array path meshes, and the coupled problems
+        can build an Airplane from the values they record.
 
         This is the second of the two halves of generate_airplane_at_time_step. It
         evaluates no motion: it has each Wing's movement class build its Wing from its

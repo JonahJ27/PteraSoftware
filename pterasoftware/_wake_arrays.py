@@ -31,6 +31,12 @@ def new_wake_rows(
     """Returns the row of wake ring vortex points each Wing sheds, as
     _populate_next_airplanes_wake_vortex_points builds it.
 
+    It replaces the loops over the trailing edge Panels in
+    UnsteadyRingVortexLatticeMethodSolver._populate_next_wake_grids_on_wings.
+
+    It exists because the object path builds each new row by walking its Wing's trailing
+    edge Panels. This builds every Wing's row from the time step's geometry.
+
     A Wing's new row is the back left bound ring vortex corners of its trailing edge
     Panels, in spanwise order, followed by the back right corner of the last one.
 
@@ -69,6 +75,12 @@ def first_wake_grid(
     _populate_next_airplanes_wake_vortex_points builds it: the new row, and the new row
     convected over one time step behind it.
 
+    It replaces the first time step's grid building in
+    UnsteadyRingVortexLatticeMethodSolver._populate_next_wake_grids_on_wings.
+
+    It exists because the object path keeps each Wing's wake point grid on the next time
+    step's Wing, and the array path keeps it as an array on the solver.
+
     :param newRowWrvp_GP1_CgP1: A (1, N + 1, 3) ndarray of floats representing the
         Wing's new row of wake ring vortex points (in the first Airplane's geometry
         axes, relative to the first Airplane's CG). The units are in meters.
@@ -96,6 +108,12 @@ def next_wake_grid(
     _populate_next_airplanes_wake_vortex_points builds it: the current grid convected
     over one time step, with the new row in front of it, and without the oldest row when
     the wake is truncated.
+
+    It replaces the later time steps' grid convection, stacking, and truncation in
+    UnsteadyRingVortexLatticeMethodSolver._populate_next_wake_grids_on_wings.
+
+    It exists because the object path keeps each Wing's wake point grid on the next time
+    step's Wing, and the array path keeps it as an array on the solver.
 
     :param gridWrvp_GP1_CgP1: A (R + 1, N + 1, 3) ndarray of floats representing the
         Wing's current wake point grid (in the first Airplane's geometry axes, relative
@@ -125,7 +143,11 @@ def next_wake_grid(
 class WakeRingVortices(NamedTuple):
     """The next time step's wake ring vortices, from wake_ring_vortices, in the solvers'
     wake order: Wing by Wing in global Wing order, and within a Wing, row by row from
-    the newest, spanwise inner."""
+    the newest, spanwise inner.
+
+    It exists because the object path stores the wake as RingVortex objects on each
+    Wing, and the array path keeps their corners, strengths, and ages in arrays instead.
+    """
 
     # Four (num_wake_vortices, 3) ndarrays of floats: the wake ring vortices' front
     # left, front right, back left, and back right corners (in the first Airplane's
@@ -156,6 +178,13 @@ def wake_ring_vortices(
 ) -> WakeRingVortices:
     """Returns the next time step's wake ring vortices, as
     _populate_next_airplanes_wake_vortices builds them.
+
+    It replaces the per Wing and per row loops of
+    UnsteadyRingVortexLatticeMethodSolver._populate_next_airplanes_wake_vortices.
+
+    It exists because the object path builds a RingVortex object for every wake ring
+    vortex, row by row, at every time step. This builds the same vortices' values as
+    arrays, without any objects.
 
     Each Wing's wake ring vortices are its next wake point grid's cells. Its newest row
     was just shed by its trailing edge Panels, so it takes their bound ring vortices'

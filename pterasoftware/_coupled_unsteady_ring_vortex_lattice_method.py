@@ -81,22 +81,37 @@ class CoupledUnsteadyRingVortexLatticeMethodSolver(
         """Returns the array path's meshes of every Wing at a given time step, and each
         Wing's Airplane's Cg_GP1_CgP1, both in global Wing order.
 
-        A coupled problem builds each time step's Wings during the run (with their
-        structural deformation, flap angles, and free flight trial states), which its
-        WingStepParameters don't hold yet. So for now this reads the meshes from the
-        Wings the problem built, through wing_mesh_from_wing. Step 6 of the arrays
-        rewrite replaces it with meshing from WingStepParameters, as the plain solver
-        does.
+        It replaces reading each built Wing's mesh with
+        _mesh_arrays.wing_mesh_from_wing.
+
+        It exists because a coupled problem's geometry depends on the run (its
+        structural deformation and flap angles), so the meshes can't come from the
+        movement as the plain solver's do. They come from the step parameters the
+        problem records as it builds each Airplane.
+
+        A coupled problem builds each time step's Airplane during the run, with its
+        structural deformation and flap angles, from step parameters it records. This
+        meshes those same parameters, so the array path never reads the Wings. A free
+        flight coupling trial changes only the OperatingPoint, not the geometry, so a
+        trial at the next time step meshes the next time step's parameters.
 
         :param step: The time step.
         :return: The WingMeshes, and for each Wing, a (3,) ndarray of floats
             representing its Airplane's CG's position (in the first Airplane's geometry
             axes, relative to the first Airplane's CG). Its units are in meters.
         """
-        wing_meshes: list[_mesh_arrays.WingMesh] = []
-        wingsCg_GP1_CgP1: list[np.ndarray] = []
-        for airplane in self._get_steady_problem_at(step).airplanes:
-            for wing in airplane.wings:
-                wing_meshes.append(_mesh_arrays.wing_mesh_from_wing(wing))
-                wingsCg_GP1_CgP1.append(airplane.Cg_GP1_CgP1)
-        return wing_meshes, wingsCg_GP1_CgP1
+        # Changed for the arrays rewrite (step 6): the meshes used to be read from the
+        # Wings the problem built, with _mesh_arrays.wing_mesh_from_wing, which is no
+        # longer called here. The old code was:
+        # octowrap: off
+        # wing_meshes: list[_mesh_arrays.WingMesh] = []
+        # wingsCg_GP1_CgP1: list[np.ndarray] = []
+        # for airplane in self._get_steady_problem_at(step).airplanes:
+        #     for wing in airplane.wings:
+        #         wing_meshes.append(_mesh_arrays.wing_mesh_from_wing(wing))
+        #         wingsCg_GP1_CgP1.append(airplane.Cg_GP1_CgP1)
+        # return wing_meshes, wingsCg_GP1_CgP1
+        # octowrap: on
+        return self._wing_meshes_from_parameters(
+            [self._coupled_unsteady_problem.get_airplane_step_parameters(step)]
+        )

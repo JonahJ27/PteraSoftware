@@ -443,6 +443,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
     def use_arrays(self) -> bool:
         """Whether the most recent call to run used the array path.
 
+        It exists so the code that reads the solver during and after a run (the coupled
+        problems, and the tests) can tell which path filled its attributes.
+
         Reading this property before run has been called raises a RuntimeError.
 
         :return: True if the most recent run used the array path and False if it used
@@ -674,6 +677,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
     def _check_array_path_support(self) -> None:
         """Raises a ValueError if this run uses a feature the array path doesn't support
         yet.
+
+        It exists so a run that asks for the array path with a feature the array path
+        can't handle yet fails at the start, with a clear error, instead of giving wrong
+        results.
 
         :return: None
         """
@@ -1047,6 +1054,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """Writes the current time step's per Panel data into the solver's arrays by
         walking its Panels, on the object path.
 
+        It exists because the collapse used to walk the Panels inline. That walk was
+        moved here, unchanged, so the collapse can run either it or
+        _collapse_step_geometry_attributes, depending on the path.
+
         This is _collapse_geometry's per Panel loop, moved here unchanged for the arrays
         rewrite: the Panels' unit normals, areas, collocation points, edge flags, and
         streamline seed points, the bound core radii, and the wake ring vortices' ages.
@@ -1137,6 +1148,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """Writes the current time step's per Panel data into the solver's arrays from
         its step geometry, on the array path.
 
+        It replaces _collapse_panel_attributes.
+
+        It exists because the array path has no Panels to walk, so it copies the same
+        quantities from the time step's StepGeometry.
+
         It writes what _collapse_panel_attributes writes on the object path. The Panels
         are still gathered into the panels attribute, since the loads still read them
         (until step 4 of the arrays rewrite).
@@ -1177,6 +1193,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
     def _collapse_last_collocation_points(self, last_step: int) -> None:
         """Writes the last time step's collocation points into the solver's array by
         walking its Panels, on the object path.
+
+        It exists because the collapse used to read these points from the Panels inline.
+        That read was moved here, unchanged, so the array path can read them from the
+        last time step's StepGeometry instead.
 
         This is the end of _collapse_geometry, moved here unchanged for the arrays
         rewrite.
@@ -2041,6 +2061,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Finds the effective strengths of every Panel's ring vortex's right, front,
         left, and back line vortices by walking the Panels, on the object path.
+
+        It exists because the Kutta-Joukowski loads used to find these strengths inline.
+        That Panel walk was moved here, unchanged, so the array path can call
+        _loads_arrays.effective_line_vortex_strengths instead, and the tests can compare
+        the two.
 
         This is _calculate_loads_joukowski's Panel loop, moved here unchanged for the
         arrays rewrite.
@@ -3085,6 +3110,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """Builds each Wing's next wake point grid on the next time step's Wings, on the
         object path.
 
+        It exists because the wake grid update used to run inline. The object path's
+        version was moved here, unchanged, so the array path can call
+        _populate_next_wake_grids_as_arrays instead.
+
         This is _populate_next_airplanes_wake_vortex_points' per Wing loop, moved here
         unchanged for the arrays rewrite.
 
@@ -3362,6 +3391,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
     ) -> None:
         """Builds each Wing's next wake point grid on the array path and keeps it on the
         solver, as _populate_next_wake_grids_on_wings builds them on the object path.
+
+        It replaces _populate_next_wake_grids_on_wings.
+
+        It exists because the array path keeps each Wing's wake point grid on the
+        solver, as an array, instead of on the next time step's Wing.
 
         Each grid is also set on the next time step's Wing, which is only read outside
         the solver, until step 7 of the arrays rewrite builds the objects on demand.
@@ -3777,6 +3811,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """Returns the array path's meshes of every Wing at a given time step, and each
         Wing's Airplane's Cg_GP1_CgP1, both in global Wing order.
 
+        It exists so the array path's geometry build gets its meshes from one place,
+        which each solver fills from wherever its geometry comes from: the plain solver
+        from the movement, and the coupled solvers from their recorded step parameters.
+
         The plain solver's geometry is prescribed, so it meshes each Wing from the
         movement's WingStepParameters with mesh_wing_arrays, after validating them as
         building the objects would. The coupled solvers override this.
@@ -3786,17 +3824,37 @@ class UnsteadyRingVortexLatticeMethodSolver:
             representing its Airplane's CG's position (in the first Airplane's geometry
             axes, relative to the first Airplane's CG). Its units are in meters.
         """
-        assert self._mesh_plans is not None
         unsteady_problem = cast(problems.UnsteadyProblem, self.unsteady_problem)
-        wing_meshes: list[_mesh_arrays.WingMesh] = []
-        wingsCg_GP1_CgP1: list[np.ndarray] = []
-        for airplane_movement in unsteady_problem.movement.airplane_movements:
-            # noinspection PyProtectedMember
-            airplane_parameters = (
+        # noinspection PyProtectedMember
+        return self._wing_meshes_from_parameters(
+            [
                 airplane_movement._generate_airplane_parameters_at_time_step(
                     step, self.delta_time
                 )
-            )
+                for airplane_movement in unsteady_problem.movement.airplane_movements
+            ]
+        )
+
+    def _wing_meshes_from_parameters(
+        self,
+        airplanes_parameters: list[_step_parameters.AirplaneStepParameters],
+    ) -> tuple[list[_mesh_arrays.WingMesh], list[np.ndarray]]:
+        """Meshes every Wing from its Airplanes' AirplaneStepParameters, after
+        validating them as building the objects would.
+
+        It exists so the plain and coupled solvers validate and mesh step parameters the
+        same way, wherever the parameters come from.
+
+        :param airplanes_parameters: Each Airplane's AirplaneStepParameters, in order.
+        :return: The WingMeshes, and for each Wing, a (3,) ndarray of floats
+            representing its Airplane's CG's position (in the first Airplane's geometry
+            axes, relative to the first Airplane's CG), both in global Wing order. Its
+            units are in meters.
+        """
+        assert self._mesh_plans is not None
+        wing_meshes: list[_mesh_arrays.WingMesh] = []
+        wingsCg_GP1_CgP1: list[np.ndarray] = []
+        for airplane_parameters in airplanes_parameters:
             _step_parameters.validate_airplane_step_parameters(airplane_parameters)
             for wing_parameters in airplane_parameters.wings:
                 wing_meshes.append(
@@ -3811,6 +3869,12 @@ class UnsteadyRingVortexLatticeMethodSolver:
         """Builds the array path's geometry at a given time step, stores it, and writes
         its bound ring vortex corners into the per step lists, as
         _initialize_panel_vortices_at does on the object path.
+
+        It replaces the object path of _initialize_panel_vortices_at.
+
+        It exists because the object path's _initialize_panel_vortices_at builds a
+        RingVortex object on every Panel. The array path builds the time step's geometry
+        instead, and writes only the corners the rest of the run reads.
 
         Building a time step's geometry discards any older than the time step before the
         previous one.

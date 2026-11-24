@@ -308,6 +308,9 @@ class AeroelasticWingMovement(_core.CoreWingMovement):
         single time step, optionally applying structural deformation to each
         WingCrossSection and overriding the prescribed flap angle.
 
+        It exists so the structural deformation and the flap angle override are applied
+        to the values, which both paths use, instead of to a built Wing.
+
         This is the first of the two halves of generate_wing_at_time_step. It only
         evaluates the motion and returns the resulting values, without building a Wing
         or any WingCrossSections: it evaluates the Wing's own position and angles,

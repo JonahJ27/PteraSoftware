@@ -14,6 +14,7 @@ from scipy.integrate import solve_ivp
 from . import (
     _core,
     _logging,
+    _mesh_arrays,
     _transformations,
 )
 from . import flap_drive as flap_drive_mod
@@ -608,29 +609,56 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
         # Read the Wing as the solver just solved it, at the current time step's flap
         # angle and deformation, with its Panels' loads. Its movement holds the rotation
         # point offset, which locates the shoulder.
-        wing = solver.current_airplanes[0].wings[wing_index]
-        assert wing.panels is not None
         wing_movement = self._aeroelastic_movement.airplane_movements[0].wing_movements[
             wing_index
         ]
 
-        # Sum the Wing's Panels' forces, and their moments about the first Airplane's
-        # CG, which the solver has just computed for the current time step. These are
-        # the total aerodynamic force and moment on the Wing, before the moment is moved
-        # to the shoulder below.
-        panels = np.ravel(wing.panels)
-        totalForces_GP1 = np.zeros(3, dtype=float)
-        totalMoments_GP1_CgP1 = np.zeros(3, dtype=float)
-        for panel in panels:
-            assert panel.forces_GP1 is not None
-            assert panel.moments_GP1_CgP1 is not None
-            totalForces_GP1 += panel.forces_GP1
-            totalMoments_GP1_CgP1 += panel.moments_GP1_CgP1
+        # Changed for the arrays rewrite: the array path doesn't read the current time
+        # step's Wing. It reads the Wing's total force and moment from the solver's kept
+        # loads (summed over the Wing's Panels in the same order as the loop below),
+        # finds the Wing's transformation from its recorded step parameters with the
+        # same functions as Wing.T_pas_Wn_Ler_to_G_Cg, and reads its mirroring and
+        # symmetry plane, which are fixed for the run, from its movement's base Wing.
+        if solver.use_arrays:
+            loads = solver._current_step_loads
+            assert loads is not None
+            assert solver._mesh_plans is not None
+            wing = wing_movement.base_wing
+            totalForces_GP1 = np.array(loads.stackWingForces_GP1[wing_index])
+            totalMoments_GP1_CgP1 = np.array(
+                loads.stackWingMoments_GP1_CgP1[wing_index]
+            )
+            # noinspection PyProtectedMember
+            T_pas_Wn_Ler_to_G_Cg = _transformations.invert_T_pas(
+                _mesh_arrays._T_pas_G_Cg_to_Wn_Ler(
+                    solver._mesh_plans[wing_index],
+                    self.get_airplane_step_parameters(solver._current_step).wings[
+                        wing_index
+                    ],
+                )
+            )
+        else:
+            wing = solver.current_airplanes[0].wings[wing_index]
+            assert wing.panels is not None
 
-        # The rotation point sits at the rotation point offset in wing axes, relative to
-        # the leading edge root point, however far the Wing has rotated.
-        T_pas_Wn_Ler_to_G_Cg = wing.T_pas_Wn_Ler_to_G_Cg
-        assert T_pas_Wn_Ler_to_G_Cg is not None
+            # Sum the Wing's Panels' forces, and their moments about the first
+            # Airplane's CG, which the solver has just computed for the current time
+            # step. These are the total aerodynamic force and moment on the Wing, before
+            # the moment is moved to the shoulder below.
+            panels = np.ravel(wing.panels)
+            totalForces_GP1 = np.zeros(3, dtype=float)
+            totalMoments_GP1_CgP1 = np.zeros(3, dtype=float)
+            for panel in panels:
+                assert panel.forces_GP1 is not None
+                assert panel.moments_GP1_CgP1 is not None
+                totalForces_GP1 += panel.forces_GP1
+                totalMoments_GP1_CgP1 += panel.moments_GP1_CgP1
+
+            # The rotation point sits at the rotation point offset in wing axes,
+            # relative to the leading edge root point, however far the Wing has rotated.
+            _T_pas_Wn_Ler_to_G_Cg = wing.T_pas_Wn_Ler_to_G_Cg
+            assert _T_pas_Wn_Ler_to_G_Cg is not None
+            T_pas_Wn_Ler_to_G_Cg = _T_pas_Wn_Ler_to_G_Cg
         rotationPoint_G_Cg = _transformations.apply_T_to_vectors(
             T_pas_Wn_Ler_to_G_Cg,
             np.array(wing_movement.rotationPointOffset_Gs_Ler, dtype=float),

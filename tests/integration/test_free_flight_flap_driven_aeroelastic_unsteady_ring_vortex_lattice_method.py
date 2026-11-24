@@ -15,12 +15,13 @@ steps and then moves in free flight.
 """
 
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
 
 import pterasoftware as ps
-from tests.integration.fixtures import flap_drive_fixtures
+from tests.integration.fixtures import array_path_fixtures, flap_drive_fixtures
 
 # These are the stored results of the fixture run, computed with the default analytical
 # spring solver, one entry per time step. The deformations are the y components
@@ -404,4 +405,43 @@ class TestFreeFlightFlapDrivenAeroelasticUnsteadyRingVortexLatticeMethod(
         )
         self._assert_matches_stored(
             problem, _SOLVER_TOLERANCE * 10, num_steps=prescribed + 4
+        )
+
+
+class TestFreeFlightFlapDrivenAeroelasticArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's loads on a free flight flap
+    driven problem."""
+
+    def test_matches_the_object_path(self) -> None:
+        """Running the solver with use_arrays=True gives the object path's loads to
+        round off through the last prescribed time step, and to within the problem's
+        sensitivity over the whole run (see
+        FREE_FLIGHT_FLAP_DRIVEN_HELD_RELATIVE_TOLERANCE and
+        FREE_FLIGHT_FLAP_DRIVEN_RELATIVE_TOLERANCE).
+
+        :return: None
+        """
+        object_solver, array_solver = (
+            array_path_fixtures.make_solvers_run_on_both_paths(
+                lambda: ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                    flap_drive_fixtures.make_free_flight_flap_driven_problem()
+                ),
+                prescribed_wake=False,
+            )
+        )
+        movement: Any = object_solver.unsteady_problem.movement
+        # The loads at the last prescribed time step are found before the body is
+        # released, so they still agree to round off.
+        array_path_fixtures.assert_airplane_loads_match(
+            self,
+            object_solver,
+            array_solver,
+            range(movement.prescribed_num_steps + 1),
+            array_path_fixtures.FREE_FLIGHT_FLAP_DRIVEN_HELD_RELATIVE_TOLERANCE,
+        )
+        array_path_fixtures.assert_loads_match(
+            self,
+            object_solver,
+            array_solver,
+            array_path_fixtures.FREE_FLIGHT_FLAP_DRIVEN_RELATIVE_TOLERANCE,
         )

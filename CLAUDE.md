@@ -99,6 +99,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_parameter_validation.py`: Input validation functions
     - `_private_access.py`: Registration pattern that grants cross-module access to private attributes, currently a `FreeFlightUnsteadyProblem`'s `MuJoCoModel` for the rendering layer
     - `_serialization.py`: Serialization and deserialization (save/load) to and from `.psz` files, which are zip archives of JSON members chunked by time step
+    - `_springs_arrays.py`: The unsteady solvers' array path's torsional spring inputs: each aeroelastic Wing's Panel areas and strip widths from the time step's step geometry, the Panels' masses, and the strips' torsional and flapping axis inertias, which replace the reads of the current time step's Wings in the aeroelastic problems' spring solve
     - `_step_geometry.py`: The unsteady solvers' array path's per time step geometry: the per run `LayoutPlan` (global Panel order and edge flags), and each time step's `StepGeometry` (every per Panel quantity and the bound ring vortex corners) and what the solvers' collapse derives from it
     - `_step_parameters.py`: The per time step parameter records (`WingCrossSectionStepParameters`, `WingStepParameters`, `AirplaneStepParameters`) the movement classes evaluate their motion into, which their object builders and the array path both use, and their validation, which raises the same errors as the objects' constructors
     - `_transformations.py`: Coordinate transformations and rotations

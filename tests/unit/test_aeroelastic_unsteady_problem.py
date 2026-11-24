@@ -1,8 +1,10 @@
 """This module contains classes to test the AeroelasticUnsteadyProblem class."""
 
+import tempfile
 import time
 import unittest
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import MagicMock, PropertyMock, patch
 
@@ -14,8 +16,10 @@ from pterasoftware import flap_driven_aeroelastic_unsteady_problem
 from pterasoftware import problems as problems_module
 from tests.unit.fixtures import (
     aeroelastic_wing_movement_fixtures,
+    coupled_unsteady_problem_fixtures,
     movement_fixtures,
     problem_fixtures,
+    solver_fixtures,
 )
 
 
@@ -1930,3 +1934,37 @@ class TestSpringAnalyticalOde(unittest.TestCase):
             expected[0],
             delta=self._precision(c, inertia, self._DT) * abs(expected[0]),
         )
+
+
+class TestAeroelasticUnsteadyProblemStepParameters(unittest.TestCase):
+    """This is a class with functions to test that an AeroelasticUnsteadyProblem
+    records, for every time step, the step parameters its deformed Airplane was built
+    from, and doesn't save them."""
+
+    def test_records_every_time_steps_parameters_on_both_paths(self) -> None:
+        """Test that, after a run on either path, every time step's recorded step
+        parameters rebuild exactly the Airplane the problem solved there."""
+        for use_arrays in (False, True):
+            with self.subTest(use_arrays=use_arrays):
+                solver = solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture()
+                solver.run(show_progress=False, use_arrays=use_arrays)
+                problem: Any = solver.unsteady_problem
+                coupled_unsteady_problem_fixtures.assert_recorded_step_parameters_match_the_airplanes(
+                    self,
+                    problem,
+                    problem.movement.airplane_movements[0],
+                    range(problem.num_steps),
+                )
+
+    def test_record_is_not_saved(self) -> None:
+        """Test that a loaded problem has no record, so reading it raises a
+        ValueError."""
+        solver = solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture()
+        solver.run(show_progress=False, use_arrays=True)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "aeroelastic.psz"
+            ps.save(path, solver.unsteady_problem)
+            loaded: Any = ps.load(path)
+        self.assertIsNone(loaded._airplane_step_parameters)
+        with self.assertRaises(ValueError):
+            loaded.get_airplane_step_parameters(0)

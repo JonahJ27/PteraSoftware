@@ -448,6 +448,117 @@ class TestFreeFlightMovementImmutability(unittest.TestCase):
             setattr(self.basic_free_flight_movement, "airplane_movements", ())
 
 
+class TestFreeFlightMovementPrescribedAirplanes(unittest.TestCase):
+    """This is a class with functions to test that FreeFlightMovements build their
+    prescribed Airplanes only when they are read, and still check every time step when
+    they are created."""
+
+    def test_no_airplanes_are_built_at_construction(self) -> None:
+        """Test that creating the movement builds no Airplanes."""
+        movement = (
+            free_flight_movement_fixtures.make_basic_free_flight_movement_fixture()
+        )
+        self.assertIsNone(movement._airplanes)
+
+    def test_airplanes_match_building_them_all_at_once(self) -> None:
+        """Test that the airplanes property holds, for every Airplane's movement and
+        time step, the Airplane that building them all at once (as the movement did when
+        it was created) gives, and that they are built once."""
+        for make in (
+            free_flight_movement_fixtures.make_basic_free_flight_movement_fixture,
+            free_flight_movement_fixtures.make_static_free_flight_movement_fixture,
+            free_flight_movement_fixtures.make_free_flight_movement_with_multiple_airplanes_fixture,
+        ):
+            with self.subTest(fixture=make.__name__):
+                movement = make()
+                airplanes = movement.airplanes
+                self.assertIs(movement.airplanes, airplanes)
+                num_steps = movement.prescribed_num_steps + movement.free_num_steps
+                self.assertEqual(len(airplanes), len(movement.airplane_movements))
+                for airplane_movement, these_airplanes in zip(
+                    movement.airplane_movements, airplanes
+                ):
+                    expected_airplanes = airplane_movement.generate_airplanes(
+                        num_steps=num_steps, delta_time=movement.delta_time
+                    )
+                    self.assertEqual(len(these_airplanes), num_steps)
+                    for airplane, expected in zip(these_airplanes, expected_airplanes):
+                        self.assertTrue(
+                            np.array_equal(airplane.Cg_GP1_CgP1, expected.Cg_GP1_CgP1)
+                        )
+                        self.assertEqual(airplane.c_ref, expected.c_ref)
+                        for wing, expected_wing in zip(airplane.wings, expected.wings):
+                            self.assertTrue(
+                                np.array_equal(
+                                    wing.Ler_Gs_Cgs, expected_wing.Ler_Gs_Cgs
+                                )
+                            )
+                            panels = wing.panels
+                            expected_panels = expected_wing.panels
+                            assert panels is not None
+                            assert expected_panels is not None
+                            self.assertEqual(panels.shape, expected_panels.shape)
+                            for panel, expected_panel in zip(
+                                panels.ravel(), expected_panels.ravel()
+                            ):
+                                for corner in ("Frpp", "Flpp", "Blpp", "Brpp"):
+                                    self.assertTrue(
+                                        np.array_equal(
+                                            getattr(panel, corner + "_G_Cg"),
+                                            getattr(expected_panel, corner + "_G_Cg"),
+                                        )
+                                    )
+                            self.assertTrue(
+                                np.array_equal(
+                                    wing.angles_Gs_to_Wn_ixyz,
+                                    expected_wing.angles_Gs_to_Wn_ixyz,
+                                )
+                            )
+                            self.assertEqual(
+                                wing.symmetry_type, expected_wing.symmetry_type
+                            )
+
+    def test_out_of_range_motion_is_rejected_at_construction(self) -> None:
+        """Test that a movement whose Wing's or tip WingCrossSection's angle leaves
+        [-90.0, 90.0] degrees at a later time step is rejected when it is created, with
+        the error building that time step's Airplane raises, as when the movement built
+        every Airplane up front, and that the same motion within range is accepted."""
+        cases = (
+            (dict(ampAngleY_Gs_to_Wn=100.0), True),
+            (dict(ampTipAngleY_Wcsp_to_Wcs=100.0), True),
+            (dict(ampAngleY_Gs_to_Wn=80.0), False),
+        )
+        for amplitudes, should_raise in cases:
+            with self.subTest(amplitudes=amplitudes):
+
+                def make() -> None:
+                    ps.movements.free_flight_movement.FreeFlightMovement(
+                        airplane_movements=[
+                            airplane_movement_fixtures.make_out_of_range_airplane_movement_fixture(
+                                **amplitudes
+                            )
+                        ],
+                        operating_point_movement=free_flight_operating_point_movement_fixtures.make_basic_free_flight_operating_point_movement_fixture(),
+                        delta_time=0.1,
+                        prescribed_num_steps=3,
+                        free_num_steps=2,
+                    )
+
+                if not should_raise:
+                    make()
+                    continue
+
+                # The angle is out of range at time step 1 (a quarter period).
+                airplane_movement = airplane_movement_fixtures.make_out_of_range_airplane_movement_fixture(
+                    **amplitudes
+                )
+                with self.assertRaises(ValueError) as expected:
+                    airplane_movement.generate_airplane_at_time_step(1, 0.1)
+                with self.assertRaises(ValueError) as context:
+                    make()
+                self.assertEqual(str(context.exception), str(expected.exception))
+
+
 class TestFreeFlightAeroelasticMovementStepParameters(unittest.TestCase):
     """This is a class with functions to test the per time step parameters of
     FreeFlightAeroelasticMovements."""

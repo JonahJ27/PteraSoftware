@@ -155,6 +155,9 @@ class AeroelasticWingCrossSectionMovement(_core.CoreWingCrossSectionMovement):
         """Evaluates the WingCrossSection's motion at a single time step, optionally
         adding structural deformation.
 
+        It exists so the structural deformation is applied to the values, which both
+        paths use, instead of to a built WingCrossSection.
+
         This is the first of the two halves of generate_wing_cross_section_at_time_step.
         It evaluates the prescribed motion with the parent class's version of this
         method, adds the deformation, and returns the resulting values, without building
