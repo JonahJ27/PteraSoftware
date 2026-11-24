@@ -247,7 +247,9 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         omegas_GP1__E = next_operating_point.omegas_BP1__E * _BP1_TO_GP1_FLIP
         return cast(np.ndarray, np.deg2rad(omegas_GP1__E))
 
-    def freeze_substep(self, next_steady_problem: problems.SteadyProblem) -> None:
+    def freeze_substep(
+        self, next_steady_problem: problems.SteadyProblem | None
+    ) -> None:
         """Freezes the data the sub-iteration reuses across its trials.
 
         Called once at the start of a strongly coupled free-flight step solve, before
@@ -273,7 +275,8 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         :param next_steady_problem: The transient SteadyProblem for the next step, built
             over a scratch copy of the prescribed next-step Airplane. Its OperatingPoint
             is a placeholder; the trial OperatingPoint is supplied per trial to
-            evaluate_trial_aero_loads.
+            evaluate_trial_aero_loads. On the array path it is None: the trials mesh the
+            next time step's recorded step parameters, so no Airplane is copied.
         :return: None
         """
         self._substep_next_step = self._current_step + 1
@@ -327,7 +330,7 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         self,
         trial_operating_point: operating_point.OperatingPoint,
         step: int,
-    ) -> geometry.airplane.Airplane:
+    ) -> geometry.airplane.Airplane | None:
         """Evaluates the aerodynamic loads at a trial body state for the next time step.
 
         Called once per sub-iteration with the trial OperatingPoint for the next step.
@@ -351,7 +354,9 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         :param step: The current time step index (zero indexed). The trial body state is
             the next step's.
         :return: The scratch copy of the next-step Airplane, carrying the trial
-            aerodynamic forces and moments the solver calculated at the next step.
+            aerodynamic forces and moments the solver calculated at the next step, or
+            None on the array path, which keeps the trial loads in the solver's
+            StepLoads instead.
         """
         assert self._substep_gamma_n is not None
 
@@ -367,11 +372,16 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         # current step as the reference step, the next step's trial OperatingPoint for
         # the frame terms, and the snapshot bound strengths for the newly shed row, so
         # set the current step's context and restore the snapshot strengths first. The
-        # induced transport is the frozen precompute from freeze_substep.
-        current_problem = self._get_steady_problem_at(step)
+        # induced transport is the frozen precompute from freeze_substep. Changed for
+        # the arrays rewrite (step 7): the array path reads only the current time step's
+        # OperatingPoint, not its Airplanes.
         self._current_step = step
-        self.current_airplanes = current_problem.airplanes
-        self.current_operating_point = current_problem.operating_point
+        if self._use_arrays:
+            self.current_operating_point = self._operating_point_at(step)
+        else:
+            current_problem = self._get_steady_problem_at(step)
+            self.current_airplanes = current_problem.airplanes
+            self.current_operating_point = current_problem.operating_point
         self._currentVInf_GP1__E = self.current_operating_point.vInf_GP1__E
         self._current_bound_vortex_strengths = self._substep_gamma_n
         self._populate_next_airplanes_wake_vortex_points(
@@ -384,12 +394,17 @@ class FreeFlightUnsteadyRingVortexLatticeMethodSolver(
         # and the current OperatingPoint is the trial. The unsteady load term
         # differences the solved strengths against the snapshot strengths.
         self._current_step = next_step
-        self.current_airplanes = self._get_steady_problem_at(next_step).airplanes
+        # Changed for the arrays rewrite (step 7): the array path doesn't read the
+        # scratch copy, which it doesn't build.
+        if not self._use_arrays:
+            self.current_airplanes = self._get_steady_problem_at(next_step).airplanes
         self.current_operating_point = trial_operating_point
         self._currentVInf_GP1__E = self.current_operating_point.vInf_GP1__E
         self._last_bound_vortex_strengths = self._substep_gamma_n
         self._evaluate_step_aerodynamics()
 
+        if self._use_arrays:
+            return None
         return self.current_airplanes[0]
 
     def keep_final_trial(self) -> None:

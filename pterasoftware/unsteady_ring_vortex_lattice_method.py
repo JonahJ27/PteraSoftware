@@ -28,6 +28,21 @@ from . import (
     problems,
 )
 
+# The StepLoads field each Airplane load attribute is kept in, for the array path's
+# averaged loads (the attributes apply_step_loads_to_objects writes).
+_STEP_LOADS_AIRPLANE_FIELDS: dict[str, str] = {
+    "forces_W": "stackAirplaneForces_W",
+    "forces_G": "stackAirplaneForces_G",
+    "moments_W_CgP1": "stackAirplaneMoments_W_CgP1",
+    "moments_G_Cg": "stackAirplaneMoments_G_Cg",
+    "moments_W_Cg": "stackAirplaneMoments_W_Cg",
+    "forceCoefficients_W": "stackAirplaneForceCoefficients_W",
+    "forceCoefficients_G": "stackAirplaneForceCoefficients_G",
+    "momentCoefficients_W_CgP1": "stackAirplaneMomentCoefficients_W_CgP1",
+    "momentCoefficients_G_Cg": "stackAirplaneMomentCoefficients_G_Cg",
+    "momentCoefficients_W_Cg": "stackAirplaneMomentCoefficients_W_Cg",
+}
+
 _logger = _logging.get_logger("unsteady_ring_vortex_lattice_method")
 
 
@@ -55,6 +70,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_step_geometries",
         "_current_step_loads",
         "_wake_grids",
+        "_first_airplanes",
+        "_step_loads_history",
         "current_airplanes",
         "current_operating_point",
         "num_airplanes",
@@ -195,6 +212,20 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # writes the next one's. Like the plans, they are run scoped: an empty dict
         # during a run with use_arrays=True, and None otherwise.
         self._wake_grids: dict[int, list[np.ndarray]] | None = None
+
+        # The first time step's Airplanes, from which the array path reads what is fixed
+        # for the run (each Airplane's Wings and reference dimensions), so it never
+        # reads a later time step's Airplanes during the run. Like the plans, it is run
+        # scoped: set during a run with use_arrays=True, and None otherwise.
+        self._first_airplanes: tuple[geometry.airplane.Airplane, ...] | None = None
+
+        # The array path's official loads at every time step, keyed by time step (None
+        # at a time step that finds no loads), which it writes onto the objects when the
+        # run ends instead of at every time step. Like the plans, they are run scoped:
+        # an empty dict during a run with use_arrays=True, and None otherwise.
+        self._step_loads_history: dict[int, _loads_arrays.StepLoads | None] | None = (
+            None
+        )
 
         first_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(0)
 
@@ -492,12 +523,13 @@ class UnsteadyRingVortexLatticeMethodSolver:
             Eq. 13.150 and 13.151). The default is "joukowski".
         :param use_arrays: Set this to True to run each time step's geometry, loads, and
             wake on arrays rather than on Airplane, Wing, and Panel objects, which is
-            faster and gives the same results to round off. The objects a user reads
-            after the run are still available. The array path is being built in stages,
-            and the stages not converted yet still run on the objects. It doesn't yet
-            support ground effect or multiple Airplanes, and raises a ValueError for
-            them. It can be a bool or a numpy bool and will be converted internally to a
-            bool. The default is False.
+            faster and gives the same results to round off. It builds no objects during
+            the run. The objects a user reads afterwards are all still available: a
+            plain problem's are written when the run ends, and a coupled problem builds
+            each time step's the first time it is read. It doesn't yet support ground
+            effect or multiple Airplanes, and raises a ValueError for them. It can be a
+            bool or a numpy bool and will be converted internally to a bool. The default
+            is False.
         :return: None
         """
         self._prescribed_wake = _parameter_validation.boolLike_return_bool(
@@ -536,6 +568,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
             self._layout_plan = _step_geometry.build_layout_plan(first_airplanes)
             self._step_geometries = {}
             self._wake_grids = {}
+            self._first_airplanes = first_airplanes
+            self._step_loads_history = {}
             _logger.info(_logging.indent() + "Running with the array path")
 
         # Report the thread dispatch settings this run's kernel launches will operate
@@ -604,11 +638,21 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 # upfront init for all steps on step 0 and is a no-op thereafter.
                 # Coupled subclasses override this hook to init one step at a time.
                 self._initialize_step_vortices(step)
-                current_problem: problems.SteadyProblem = self._get_steady_problem_at(
-                    self._current_step
-                )
-                self.current_airplanes = current_problem.airplanes
-                self.current_operating_point = current_problem.operating_point
+                # Changed for the arrays rewrite: the array path reads only the time
+                # step's OperatingPoint, not its Airplanes, which it never builds or
+                # reads during the run (it reads what is fixed for the run from the
+                # first time step's Airplanes instead). The object path is unchanged.
+                if self._use_arrays:
+                    self.current_operating_point = self._operating_point_at(
+                        self._current_step
+                    )
+                    self._current_step_loads = None
+                else:
+                    current_problem: problems.SteadyProblem = (
+                        self._get_steady_problem_at(self._current_step)
+                    )
+                    self.current_airplanes = current_problem.airplanes
+                    self.current_operating_point = current_problem.operating_point
                 self._currentVInf_GP1__E = self.current_operating_point.vInf_GP1__E
                 _logger.debug(
                     _logging.indent()
@@ -622,6 +666,13 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 # the bound ring vortex circulation, and (past the first results step)
                 # calculate the loads for this time step.
                 self._evaluate_step_aerodynamics()
+
+                # Changed for the arrays rewrite: the array path keeps this time step's
+                # official loads, before a coupled problem's trials overwrite the
+                # solver's, and writes them onto the objects when the run ends.
+                if self._use_arrays:
+                    assert self._step_loads_history is not None
+                    self._step_loads_history[step] = self._current_step_loads
 
                 # Hook: Subclasses may inject work between load calculation and wake
                 # shedding (e.g. coupled problems update the next step's geometry from
@@ -664,15 +715,119 @@ class UnsteadyRingVortexLatticeMethodSolver:
             + _functions.format_duration(time.time() - run_start_time)
         )
 
+        # Changed for the arrays rewrite: the array path writes its kept results onto
+        # the objects now, once, rather than at every time step.
+        if self._use_arrays:
+            self._write_array_results_to_objects()
+
         # The array path's plans are only needed during the run.
         self._mesh_plans = None
         self._layout_plan = None
         self._step_geometries = None
         self._current_step_loads = None
         self._wake_grids = None
+        self._first_airplanes = None
+        self._step_loads_history = None
 
         # Mark that the solver has run.
         self._ran = True
+
+    def _write_array_results_to_objects(self) -> None:
+        """Writes the array path's kept results onto every time step's objects, when the
+        run ends, and points the solver's current Airplanes and Panels at the last time
+        step's, as the object path leaves them.
+
+        It replaces the object path's writes at every time step: process_solver_loads'
+        writes of the loads onto the Panels and Airplanes, and the wake update's setting
+        of each Wing's wake point grid (Wing.gridWrvp_GP1_CgP1).
+
+        It exists because the array path reads and writes no objects during the run, so
+        the results a user reads from the objects are written once, here, with
+        _loads_arrays.apply_step_loads_to_objects and
+        _wake_arrays.wake_grids_from_ring_vortices, which give exactly what the object
+        path writes.
+
+        :return: None
+        """
+        assert self._layout_plan is not None
+        assert self._step_loads_history is not None
+        wing_shapes = self._layout_plan.wing_shapes
+        for step in range(self.num_steps):
+            # The object path sets each time step's wake point grids on its Wings during
+            # the previous time step, so the first time step's are never set. The wake
+            # ring vortex corners are the solver's own per step arrays, which it keeps
+            # after the run, so they are passed, not copied.
+            wake_corners: (
+                tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
+            ) = None
+            num_rows = 0
+            if step > 0:
+                num_rows = step
+                if self._max_wake_rows is not None:
+                    num_rows = min(step, self._max_wake_rows)
+                wake_corners = (
+                    self.listStackFlwrvp_GP1_CgP1[step],
+                    self.listStackFrwrvp_GP1_CgP1[step],
+                    self.listStackBlwrvp_GP1_CgP1[step],
+                    self.listStackBrwrvp_GP1_CgP1[step],
+                )
+            self._store_step_results(
+                step,
+                self._step_loads_history.get(step),
+                wake_corners,
+                num_rows,
+                wing_shapes,
+            )
+
+        last_problem = self._get_steady_problem_at(self.num_steps - 1)
+        self.current_airplanes = last_problem.airplanes
+        self.current_operating_point = last_problem.operating_point
+        self.panels = np.array(
+            [
+                panel
+                for airplane in last_problem.airplanes
+                for wing in airplane.wings
+                for panel in np.ravel(cast(np.ndarray, wing.panels))
+            ],
+            dtype=object,
+        )
+
+    def _store_step_results(
+        self,
+        step: int,
+        loads: _loads_arrays.StepLoads | None,
+        wake_corners: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+        num_wake_rows: int,
+        wing_shapes: tuple[tuple[int, int], ...],
+    ) -> None:
+        """Writes the array path's results at one time step onto that time step's
+        objects, when the run ends.
+
+        It replaces the object path's writes of the loads and wake point grids during
+        the run.
+
+        It exists so the coupled solvers can hand the results to their problems instead,
+        which build each time step's objects only when they are read. The plain solver's
+        objects are built by its movement, so it writes the results onto them here.
+
+        :param step: The time step.
+        :param loads: The time step's official StepLoads, or None if it finds no loads.
+        :param wake_corners: The time step's wake ring vortex corners, or None at the
+            first time step.
+        :param num_wake_rows: The number of chordwise wake rows each Wing has at the
+            time step.
+        :param wing_shapes: Each Wing's (num_chordwise_panels, num_spanwise_panels), in
+            global Wing order.
+        :return: None
+        """
+        # noinspection PyProtectedMember
+        problems._write_step_results(
+            self._get_steady_problem_at(step),
+            loads,
+            wake_corners,
+            num_wake_rows,
+            wing_shapes,
+        )
 
     def _check_array_path_support(self) -> None:
         """Raises a ValueError if this run uses a feature the array path doesn't support
@@ -1164,16 +1319,22 @@ class UnsteadyRingVortexLatticeMethodSolver:
         layout_plan = self._layout_plan
         geometry = self._step_geometries[self._current_step]
 
-        global_panel_position = 0
-        for airplane in self.current_airplanes:
-            for wing in airplane.wings:
-                _panels = wing.panels
-                assert _panels is not None
-                panels = np.ravel(_panels)
-                self.panels[
-                    global_panel_position : global_panel_position + panels.size
-                ] = panels
-                global_panel_position += panels.size
+        # Changed for the arrays rewrite (step 7): the current time step's Panels used
+        # to be gathered into self.panels here, for the loads to be written onto. The
+        # array path no longer reads the time step's Airplanes, and sets self.panels to
+        # the last time step's Panels when the run ends. The old code was:
+        # octowrap: off
+        # global_panel_position = 0
+        # for airplane in self.current_airplanes:
+        #     for wing in airplane.wings:
+        #         _panels = wing.panels
+        #         assert _panels is not None
+        #         panels = np.ravel(_panels)
+        #         self.panels[
+        #             global_panel_position : global_panel_position + panels.size
+        #         ] = panels
+        #         global_panel_position += panels.size
+        # octowrap: on
 
         self.stackUnitNormals_GP1[:] = geometry.stackUnitNormals_GP1
         self.panel_areas[:] = geometry.panel_areas
@@ -2220,24 +2381,25 @@ class UnsteadyRingVortexLatticeMethodSolver:
         :return: None
         """
         # Changed for the arrays rewrite: the array path finds every load as arrays and
-        # keeps them, then writes them onto the Panels and Airplanes, which output and
-        # the coupled problems still read (until step 7 of the arrays rewrite).
+        # keeps them. The run loop keeps each time step's official loads, which are
+        # written onto the Panels and Airplanes when the run ends (step 7 of the arrays
+        # rewrite), so no objects are read or written here. The first Airplane's CG is
+        # its own origin, and the reference dimensions are fixed for the run, so they
+        # are read from the first time step's Airplanes.
         if self._use_arrays:
             assert self._layout_plan is not None
+            assert self._first_airplanes is not None
             self._current_step_loads = _loads_arrays.step_loads(
                 self._layout_plan,
                 forces_GP1,
                 moments_GP1_CgP1,
                 self.current_operating_point.T_pas_GP1_CgP1_to_W_CgP1,
                 self.current_operating_point.qInf__E,
-                [airplane.Cg_GP1_CgP1 for airplane in self.current_airplanes],
+                [airplane.Cg_GP1_CgP1 for airplane in self._first_airplanes],
                 [
                     (airplane.s_ref, airplane.c_ref, airplane.b_ref)
-                    for airplane in self.current_airplanes
+                    for airplane in self._first_airplanes
                 ],
-            )
-            _loads_arrays.apply_step_loads_to_objects(
-                self._current_step_loads, self.panels, self.current_airplanes
             )
             return
 
@@ -2282,9 +2444,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # groups the results by Airplane in the same way.
         if self._use_arrays:
             assert self._wake_grids is not None
+            assert self._first_airplanes is not None
             currentGridsWrvp_GP1_CgP1 = self._wake_grids[self._current_step]
             wing_id = 0
-            for this_airplane in self.current_airplanes:
+            for this_airplane in self._first_airplanes:
                 thisAirplaneStackVIndGridWrvp_GP1__E: list[np.ndarray] = []
                 for _ in this_airplane.wings:
                     thisAirplaneStackVIndGridWrvp_GP1__E.append(
@@ -3023,11 +3186,15 @@ class UnsteadyRingVortexLatticeMethodSolver:
             bound_singularity_counts = np.zeros(3, dtype=np.int64)
             wake_singularity_counts = np.zeros(3, dtype=np.int64)
 
-            # Get the next time step's Airplanes.
-            next_problem: problems.SteadyProblem = self._get_steady_problem_at(
-                self._current_step + 1
-            )
-            next_airplanes = next_problem.airplanes
+            # Get the next time step's Airplanes. Changed for the arrays rewrite (step
+            # 7): the array path doesn't read them, since it keeps the grids itself and
+            # reads the Airplanes' structure from the first time step's.
+            next_airplanes: tuple[geometry.airplane.Airplane, ...] = ()
+            if not self._use_arrays:
+                next_problem: problems.SteadyProblem = self._get_steady_problem_at(
+                    self._current_step + 1
+                )
+                next_airplanes = next_problem.airplanes
 
             # The wake convects over the interval ending at the next time step, so it is
             # transported with the next time step's freestream and body rate (the
@@ -3064,8 +3231,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
             # that, in _populate_next_wake_grids_on_wings, unchanged. The array path
             # builds the same grids with _wake_arrays and keeps them on the solver.
             if self._use_arrays:
+                assert self._first_airplanes is not None
                 self._populate_next_wake_grids_as_arrays(
-                    next_airplanes,
+                    self._first_airplanes,
                     stackVIndGridWrvp_GP1__E,
                     convectionVInf_GP1__E,
                     convectionOmegasRad_GP1__E,
@@ -3382,7 +3550,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
     def _populate_next_wake_grids_as_arrays(
         self,
-        next_airplanes: tuple[geometry.airplane.Airplane, ...],
+        airplanes: tuple[geometry.airplane.Airplane, ...],
         stackVIndGridWrvp_GP1__E: list[list[np.ndarray]] | None,
         convectionVInf_GP1__E: np.ndarray,
         convectionOmegasRad_GP1__E: np.ndarray,
@@ -3397,10 +3565,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
         It exists because the array path keeps each Wing's wake point grid on the
         solver, as an array, instead of on the next time step's Wing.
 
-        Each grid is also set on the next time step's Wing, which is only read outside
-        the solver, until step 7 of the arrays rewrite builds the objects on demand.
+        The grids aren't set on the next time step's Wings: the run writes each time
+        step's grids onto its Wings when it ends.
 
-        :param next_airplanes: The next time step's Airplanes.
+        :param airplanes: The first time step's Airplanes, whose Wings give the grids'
+            order by Airplane. Only their structure is read.
         :param stackVIndGridWrvp_GP1__E: A list, indexed [airplane_id][wing_id], of (N,
             3) ndarrays of floats holding the induced velocity (in the first Airplane's
             geometry axes, observed from the Earth frame) at each Wing's current wake
@@ -3431,8 +3600,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         nextGridsWrvp_GP1_CgP1: list[np.ndarray] = []
         wing_id = 0
-        for airplane_id, next_airplane in enumerate(next_airplanes):
-            for airplane_wing_id, next_wing in enumerate(next_airplane.wings):
+        for airplane_id, airplane in enumerate(airplanes):
+            for airplane_wing_id in range(len(airplane.wings)):
                 newRowWrvp_GP1_CgP1 = newRowsWrvp_GP1_CgP1[wing_id]
                 if self._current_step == 0:
                     # The new row convects with the freestream, plus its induced
@@ -3481,7 +3650,9 @@ class UnsteadyRingVortexLatticeMethodSolver:
                         self._max_wake_rows,
                     )
                 nextGridsWrvp_GP1_CgP1.append(nextGridWrvp_GP1_CgP1)
-                next_wing.gridWrvp_GP1_CgP1 = nextGridWrvp_GP1_CgP1
+                # Changed for the arrays rewrite (step 7): the grid used to also be set
+                # on the next time step's Wing here (next_wing.gridWrvp_GP1_CgP1 =
+                # nextGridWrvp_GP1_CgP1). The run now writes it when it ends.
                 wing_id += 1
 
         self._wake_grids[next_step] = nextGridsWrvp_GP1_CgP1
@@ -3775,6 +3946,18 @@ class UnsteadyRingVortexLatticeMethodSolver:
         for results_step, step in enumerate(
             range(self._first_averaging_step, self.num_steps)
         ):
+            # Changed for the arrays rewrite (step 7): the array path reads each time
+            # step's loads from the ones it kept, rather than from the time step's
+            # Airplanes, with the names apply_step_loads_to_objects writes them under.
+            if self._use_arrays:
+                assert self._step_loads_history is not None
+                step_loads = self._step_loads_history[step]
+                assert step_loads is not None
+                for name, _, _, _ in load_names:
+                    load_histories[name][:, :, results_step] = getattr(
+                        step_loads, _STEP_LOADS_AIRPLANE_FIELDS[name]
+                    )
+                continue
             this_steady_problem: problems.SteadyProblem = self._get_steady_problem_at(
                 step
             )

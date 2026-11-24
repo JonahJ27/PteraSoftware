@@ -2,7 +2,7 @@
 
 The unsteady solvers have two paths through each time step. With `run(use_arrays=False)` (the default), each time step builds `Airplane`, `Wing`, `WingCrossSection`, and `Panel` objects and the solver reads its geometry from them. With `run(use_arrays=True)`, each time step's geometry, loads, and wake are computed as arrays, and the objects a user reads are built from those arrays only when something reads them. This document describes how the array path lays out its data. Read [Axes, Points, and Frames](AXES_POINTS_AND_FRAMES.md) first: every array's name follows its conventions.
 
-The array path is being built in stages. Every stage inside the time step loop now reads arrays, but until step 7 of the arrays rewrite, `use_arrays=True` also builds each time step's objects (and writes the loads and wake onto them) for output to read, so it isn't faster yet.
+Every stage inside the time step loop reads arrays, and the array path builds, copies, and writes no `Airplane`, `Wing`, `WingCrossSection`, `Panel`, or `SteadyProblem` during the run (a test counts them). The objects a user reads are written or built after the run, as the section [Objects after the run](#objects-after-the-run) describes. On the FAAV example it runs about 1.85 times faster than the object path, and holds about 3.6 times less memory per time step.
 
 ## What runs inside the time step loop, and what doesn't
 
@@ -40,7 +40,7 @@ The coupled problems (aeroelastic, flap driven, free flight, and their combinati
 | `AeroelasticUnsteadyProblem` (and the flap driven ones) | time step 0 when it is created, then each later time step in `_build_recorded_airplane`, which builds the deformed Airplane from the same parameters |
 | `FreeFlightUnsteadyProblem` | time step 0 when it is created, then, on the array path, each next time step's prescribed parameters in `initialize_next_problem` (a coupling trial changes only the `OperatingPoint`, so it meshes the same parameters) |
 
-The record is run scoped like the plans: it isn't saved in a `.psz` file, and a loaded problem has `None` in its place. Until step 7 of the arrays rewrite, the coupled problems also build each time step's Airplane from the same parameters, which output still reads.
+On the array path, the coupled problems record each time step's parameters without building its Airplane, and build the time step from them when it is first read (see [Objects after the run](#objects-after-the-run)). The record isn't saved in a `.psz` file (saving builds every time step first), and a loaded problem has `None` in its place.
 
 ## The global Panel order
 
@@ -119,11 +119,13 @@ The solver keeps the current evaluation's `StepLoads` (run scoped, like the plan
 - the free flight problems' `_assemble_interval_loads` (for the snapshot, each coupling trial, and the prescribed phase) reads the first Airplane's total force and moment from `stackAirplaneForces_W` and `stackAirplaneMoments_W_CgP1`;
 - the flap driven problems' `_calculate_flap_fluid_torque` reads each Wing's total force and moment from `stackWingForces_GP1` and `stackWingMoments_GP1_CgP1` (summed over the Wing's Panels in the same order as the object path's Panel loop), and the Wing's transformation from its recorded step parameters with `_mesh_arrays._T_pas_G_Cg_to_Wn_Ler`.
 
-Both give exactly the object path's values on the same time step. Until step 7 of the arrays rewrite, `apply_step_loads_to_objects` also writes the loads onto the Panels and Airplanes, which output still reads.
+Both give exactly the object path's values on the same time step. On the array path, `external_loads_fn` gets an `Airplane` built from the time step's parameters with the loads written onto it (`_build_loaded_airplane`), only when a function is given.
+
+The run loop keeps each time step's official `StepLoads` (`_step_loads_history`), taken right after the time step's solve, before a coupled problem's trials overwrite the solver's. `_finalize_loads` averages them, and they are written onto the objects after the run.
 
 ## Wake
 
-Each Wing's wake is a grid of wake ring vortex points, (R + 1, N + 1, 3) for R wake rows and N spanwise Panels, whose cells are its wake ring vortices. On the object path each grid is stored on the next time step's Wing (`gridWrvp_GP1_CgP1`). On the array path the solver keeps them itself, run scoped and keyed by time step (only the current and next time steps'), and until step 7 also sets each grid on the next time step's Wing.
+Each Wing's wake is a grid of wake ring vortex points, (R + 1, N + 1, 3) for R wake rows and N spanwise Panels, whose cells are its wake ring vortices. On the object path each grid is stored on the next time step's Wing (`gridWrvp_GP1_CgP1`). On the array path the solver keeps them itself, run scoped and keyed by time step (only the current and next time steps'), and doesn't set them on any Wing during the run. After the run, each time step's grids are rebuilt from the solver's per time step wake ring vortex corners with `wake_grids_from_ring_vortices` (the corners are four shifted slices of the grid, so the grid is put back bit for bit, with no extra storage).
 
 `_wake_arrays.py` replaces the two Python loops of the wake update, with the same operations in the same order, so the results are bit for bit the object path's:
 
@@ -134,6 +136,19 @@ Each Wing's wake is a grid of wake ring vortex points, (R + 1, N + 1, 3) for R w
 | `wake_ring_vortices` | `_populate_next_airplanes_wake_vortices`' loop over every Wing's wake rows: the next time step's wake ring vortex corners, strengths, and initial core radii |
 
 The velocities that convect the grids (the kernels' induced velocities, the freestream, and the body rate) stay in the solver, unchanged.
+
+## Objects after the run
+
+The array path writes the objects a user reads once, after the run, in `_write_array_results_to_objects`, which hands each time step's kept loads and wake ring vortex corners to `_store_step_results`:
+
+| Solver | After the run |
+|---|---|
+| The plain solver | Its movement built every time step's Airplanes before the run, so `_write_step_results` writes each time step's loads and wake point grids onto them, exactly as the object path writes them during the run. |
+| The coupled solvers | The problem keeps each unbuilt time step as an `_ArrayStep` (its `OperatingPoint`, and after the run its loads and wake corners). `steady_problems` and `get_steady_problem(step)` build a time step the first time it is read, with `_array_step_airplane` (by default the object path's builder, `_airplane_from_parameters`, on the recorded step parameters, and for a `FreeFlightUnsteadyProblem` the movement's own Airplane, as the object path uses), write its loads and wake point grids onto it, and keep it. `get_operating_point(step)` reads a time step's `OperatingPoint` without building it. |
+
+Either way, the solver's `panels`, `current_airplanes`, and `current_operating_point` are the last time step's afterwards, as on the object path. Saving builds every time step first, so a `.psz` file holds exactly what an object path run's does. A test compares everything a user can read (every public attribute and property reachable from the solver, across every time step's objects) on both paths.
+
+Reading every time step of a coupled array path run builds about what the object path holds anyway (about 1,600 kB per time step on the FAAV), so a run that is never read pays nothing for it.
 
 ## Springs
 

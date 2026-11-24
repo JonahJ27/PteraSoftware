@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -492,6 +492,7 @@ class TestFreeFlightUnsteadyProblemInitializeNextProblem(unittest.TestCase):
         self.current_operating_point = self.problem.steady_problems[0].operating_point
 
         self.solver = MagicMock()
+        self.solver.use_arrays = False
         self.solver.current_airplanes = [self.current_airplane]
         self.solver.current_operating_point = self.current_operating_point
 
@@ -541,6 +542,7 @@ class TestFreeFlightUnsteadyProblemInitializeNextProblem(unittest.TestCase):
         airplane.momentCoefficients_W_CgP1 = np.array([0.4, 0.5, 0.6], dtype=float)
 
         solver = MagicMock()
+        solver.use_arrays = False
         solver.current_airplanes = [airplane]
         solver.current_operating_point = problem.steady_problems[0].operating_point
 
@@ -901,10 +903,22 @@ class TestFreeFlightUnsteadyProblemArrayPath(unittest.TestCase):
             airplane: Any,
             step: int,
             loads: Any = None,
+            airplane_step: Any = None,
         ) -> Any:
             self.assertIsNotNone(loads)
-            from_loads = original(problem, operating_point, airplane, step, loads=loads)
-            from_airplane = original(problem, operating_point, airplane, step)
+            from_loads = original(
+                problem,
+                operating_point,
+                airplane,
+                step,
+                loads=loads,
+                airplane_step=airplane_step,
+            )
+            # The array path passes no Airplane, so the object branch reads one built
+            # from the same time step's step parameters with the same loads, as the
+            # object path's Airplane carries them.
+            loaded_airplane = problem._build_loaded_airplane(airplane_step, loads)
+            from_airplane = original(problem, operating_point, loaded_airplane, step)
             results.append((from_loads, from_airplane))
             return from_loads
 
@@ -945,3 +959,77 @@ class TestFreeFlightUnsteadyProblemStepParameters(unittest.TestCase):
             problem.movement.airplane_movements[0],
             range(problem.num_steps),
         )
+
+
+class TestFreeFlightUnsteadyProblemExternalLoadsOnTheArrayPath(unittest.TestCase):
+    """This is a class with functions to test that the external_loads_fn gets the same
+    Airplanes on both paths."""
+
+    def test_external_loads_fn_gets_the_object_paths_airplanes(self) -> None:
+        """Test that, on the array path, which builds no Airplanes during the run, the
+        external_loads_fn is called as often as on the object path, with the same
+        OperatingPoints and Airplanes carrying the same loads and Panel corners, to
+        round off, and that its loads change the run the same way."""
+        records: dict[bool, list[dict[str, Any]]] = {}
+        for use_arrays in (False, True):
+            calls: list[dict[str, Any]] = []
+
+            def external_loads_fn(
+                operating_point: ps.operating_point.OperatingPoint,
+                airplane: ps.geometry.airplane.Airplane,
+            ) -> tuple[np.ndarray, np.ndarray]:
+                panels = [
+                    panel
+                    for wing in airplane.wings
+                    for panel in np.ravel(cast(np.ndarray, wing.panels))
+                ]
+                calls.append(
+                    {
+                        "vCg__E": operating_point.vCg__E,
+                        "forces_W": (
+                            None
+                            if airplane.forces_W is None
+                            else np.copy(airplane.forces_W)
+                        ),
+                        "Frpp_G_Cg": np.array([panel.Frpp_G_Cg for panel in panels]),
+                    }
+                )
+                return np.array([0.1, 0.0, -0.2]), np.array([0.0, 0.01, 0.0])
+
+            problem = problem_fixtures.make_basic_free_flight_unsteady_problem_fixture(
+                external_loads_fn=external_loads_fn
+            )
+            solver = ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver(
+                problem
+            )
+            solver.run(show_progress=False, use_arrays=use_arrays)
+            records[use_arrays] = calls
+
+        self.assertGreater(len(records[False]), 1)
+        self.assertEqual(len(records[True]), len(records[False]))
+        for call_id, (array_call, object_call) in enumerate(
+            zip(records[True], records[False])
+        ):
+            with self.subTest(call=call_id):
+                self.assertAlmostEqual(
+                    array_call["vCg__E"], object_call["vCg__E"], places=9
+                )
+                # The two runs' loads differ by up to about 6e-9 relative in the free
+                # flight steps: this problem's own sensitivity, since the object path
+                # alone moves them by up to about 8e-8 when its strengths are nudged by
+                # 1e-15 at time step 1. The tolerance is about ten times that.
+                if object_call["forces_W"] is None:
+                    self.assertIsNone(array_call["forces_W"])
+                else:
+                    np.testing.assert_allclose(
+                        array_call["forces_W"],
+                        object_call["forces_W"],
+                        rtol=1.0e-6,
+                        atol=1.0e-6 * float(np.max(np.abs(object_call["forces_W"]))),
+                    )
+                np.testing.assert_allclose(
+                    array_call["Frpp_G_Cg"],
+                    object_call["Frpp_G_Cg"],
+                    rtol=0,
+                    atol=1e-12,
+                )

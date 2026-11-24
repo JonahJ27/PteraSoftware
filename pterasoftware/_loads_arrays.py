@@ -503,11 +503,10 @@ def apply_step_loads_to_objects(
     path computes them as arrays, so this writes them onto the objects, which keeps
     every quantity the object path gives available.
 
-    This is temporary. Output, plotting, and the coupled problems still read the loads
-    from the objects, so the array path writes them there until step 7 of the arrays
-    rewrite builds the objects on demand from the stored loads. As in
-    process_solver_loads, each Panel gets rows of writeable stacks, and each Airplane
-    gets its own writeable arrays.
+    The array path calls it after the run, for each time step's objects (a plain
+    problem's when the run ends, a coupled problem's when they are first read), and for
+    the Airplane an external_loads_fn gets. As in process_solver_loads, each Panel gets
+    rows of writeable stacks, and each Airplane gets its own writeable arrays.
 
     :param loads: The StepLoads.
     :param panels: A (num_panels,) ndarray of the Panels, in global Panel order.

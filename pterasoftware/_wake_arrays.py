@@ -274,3 +274,65 @@ def wake_ring_vortices(
             for name in ("Fl", "Fr", "Bl", "Br", "strengths", "r_c0s")
         )
     )
+
+
+def wake_grids_from_ring_vortices(
+    wing_shapes: Sequence[tuple[int, int]],
+    stackFlwrvp_GP1_CgP1: np.ndarray,
+    stackFrwrvp_GP1_CgP1: np.ndarray,
+    stackBlwrvp_GP1_CgP1: np.ndarray,
+    stackBrwrvp_GP1_CgP1: np.ndarray,
+    num_rows: int,
+) -> list[np.ndarray]:
+    """Returns each Wing's wake point grid at a time step, rebuilt from that time step's
+    wake ring vortex corners.
+
+    It replaces keeping each time step's wake point grids, which the object path keeps
+    on each time step's Wings (Wing.gridWrvp_GP1_CgP1).
+
+    It exists because the array path builds no Wings during the run, so a Wing built
+    later, when a user reads it, needs the grid it would have carried. The solver keeps
+    every time step's wake ring vortex corners anyway, and wake_ring_vortices takes them
+    as four shifted slices of the grid, so the grid is those corners put back, bit for
+    bit, with no extra storage.
+
+    :param wing_shapes: Each Wing's (num_chordwise_panels, num_spanwise_panels), in
+        global Wing order (the LayoutPlan's wing_shapes).
+    :param stackFlwrvp_GP1_CgP1: A (num_wake_vortices, 3) ndarray of floats representing
+        the time step's wake ring vortices' front left corners (in the first Airplane's
+        geometry axes, relative to the first Airplane's CG), in the solvers' wake order.
+        The units are in meters.
+    :param stackFrwrvp_GP1_CgP1: The same for their front right corners.
+    :param stackBlwrvp_GP1_CgP1: The same for their back left corners.
+    :param stackBrwrvp_GP1_CgP1: The same for their back right corners.
+    :param num_rows: The number of chordwise wake rows each Wing has at the time step.
+        It must be positive.
+    :return: For each Wing, in global Wing order, a (num_rows + 1, num_spanwise_panels +
+        1, 3) ndarray of floats representing its wake point grid (in the first
+        Airplane's geometry axes, relative to the first Airplane's CG). The units are in
+        meters.
+    """
+    grids: list[np.ndarray] = []
+    wing_base = 0
+    for _, num_spanwise_panels in wing_shapes:
+        num_cells = num_rows * num_spanwise_panels
+        cell_slice = slice(wing_base, wing_base + num_cells)
+        shape = (num_rows, num_spanwise_panels, 3)
+        gridFl = stackFlwrvp_GP1_CgP1[cell_slice].reshape(shape)
+        gridFr = stackFrwrvp_GP1_CgP1[cell_slice].reshape(shape)
+        gridBl = stackBlwrvp_GP1_CgP1[cell_slice].reshape(shape)
+        gridBr = stackBrwrvp_GP1_CgP1[cell_slice].reshape(shape)
+
+        gridWrvp_GP1_CgP1 = np.empty(
+            (num_rows + 1, num_spanwise_panels + 1, 3), dtype=float
+        )
+        # Every row but the last is the cells' front left corners, plus the last
+        # column's front right corners. The last row is the last row of cells' back left
+        # corners, plus the last cell's back right corner.
+        gridWrvp_GP1_CgP1[:-1, :-1] = gridFl
+        gridWrvp_GP1_CgP1[:-1, -1] = gridFr[:, -1]
+        gridWrvp_GP1_CgP1[-1, :-1] = gridBl[-1]
+        gridWrvp_GP1_CgP1[-1, -1] = gridBr[-1, -1]
+        grids.append(gridWrvp_GP1_CgP1)
+        wing_base += num_cells
+    return grids

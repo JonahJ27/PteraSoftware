@@ -466,8 +466,8 @@ class _FlapDriveCoupling(_FlapDriveCouplingBase):
         # The parent's __init__ has built the first time step, so its Airplane (whose
         # Wings give the inertia estimate) and its OperatingPoint (for an aerodynamic
         # model given as feedforward_aerodynamic) are available now.
-        initial_airplane = self._steady_problems[0].airplanes[0]
-        initial_operating_point = self._steady_problems[0].operating_point
+        initial_airplane = self.get_steady_problem(0).airplanes[0]
+        initial_operating_point = self.get_steady_problem(0).operating_point
         wing_flap_inertias: list[float] = []
 
         # Each history is a list with one inner list per FlapDrive, in the order of

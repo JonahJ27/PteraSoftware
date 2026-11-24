@@ -179,3 +179,226 @@ def assert_airplane_loads_match(
                         rtol=relative_tolerance,
                         atol=relative_tolerance * float(np.max(np.abs(object_value))),
                     )
+
+
+# The public names whose values legitimately differ between the paths: which path ran.
+_PATH_DEPENDENT_NAMES = frozenset({"use_arrays"})
+
+
+def _public_names(obj: object) -> list[str]:
+    """Returns the names of an object's public attributes and properties (not methods).
+
+    :param obj: The object.
+    :return: The names, sorted.
+    """
+    names = []
+    for name in dir(type(obj)):
+        if name.startswith("_") or name in _PATH_DEPENDENT_NAMES:
+            continue
+        class_attribute = getattr(type(obj), name, None)
+        if callable(class_attribute) and not isinstance(class_attribute, property):
+            continue
+        names.append(name)
+    return names
+
+
+def _read(obj: object, name: str) -> object:
+    """Returns an attribute's value, or the exception reading it raises.
+
+    :param obj: The object.
+    :param name: The attribute's name.
+    :return: The value, or the exception.
+    """
+    try:
+        return getattr(obj, name)
+    except Exception as exception:  # noqa: BLE001
+        return exception
+
+
+def _is_number(value: object) -> bool:
+    """Returns whether a value is a real number (not a bool).
+
+    :param value: The value.
+    :return: Whether it is a number.
+    """
+    return isinstance(value, (int, float, np.number)) and not isinstance(
+        value, (bool, np.bool_)
+    )
+
+
+def _magnitude(value: object) -> float:
+    """Returns the largest magnitude of a number, a numeric ndarray, or a list of them,
+    or 0.0 for anything else.
+
+    :param value: The value.
+    :return: The largest magnitude.
+    """
+    if _is_number(value):
+        return abs(float(value))  # type: ignore[arg-type]
+    if isinstance(value, np.ndarray) and value.dtype.kind == "f" and value.size:
+        return float(np.max(np.abs(value)))
+    if isinstance(value, (list, tuple)):
+        return max((_magnitude(item) for item in value), default=0.0)
+    return 0.0
+
+
+def _attribute_scales(root: object) -> dict[tuple[str, str], float]:
+    """Returns, for each class and public attribute name, the largest magnitude that
+    attribute has on any object of that class reachable from a root object.
+
+    :param root: The object to start from.
+    :return: The largest magnitudes, keyed by (class name, attribute name).
+    """
+    scales: dict[tuple[str, str], float] = {}
+    visited: set[int] = set()
+    stack: list[object] = [root]
+    while stack:
+        obj = stack.pop()
+        if id(obj) in visited:
+            continue
+        visited.add(id(obj))
+        for name in _public_names(obj):
+            value = _read(obj, name)
+            key = (type(obj).__name__, name)
+            scales[key] = max(scales.get(key, 0.0), _magnitude(value))
+            children: list[object] = [value]
+            if isinstance(value, (list, tuple)):
+                children = list(value)
+            elif isinstance(value, np.ndarray) and value.dtype == object:
+                children = list(value.ravel())
+            for child in children:
+                if type(child).__module__.startswith("pterasoftware"):
+                    stack.append(child)
+    return scales
+
+
+def assert_public_results_match(
+    test_case: unittest.TestCase,
+    object_solver: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    array_solver: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver,
+    relative_tolerance: float = DEFAULT_RELATIVE_TOLERANCE,
+) -> int:
+    """Asserts that everything a user can read from two runs of the same problem, one on
+    each path, is the same, and returns how many values it compared.
+
+    Starting from each solver, it follows every public attribute and property (names
+    without a leading underscore) into every Ptera Software object they reach: the
+    problem, its movement, every time step's SteadyProblem, OperatingPoint, Airplanes,
+    Wings, WingCrossSections, and Panels, and their results. Objects that aren't Ptera
+    Software's (such as MuJoCo's) and methods aren't followed. Only use_arrays may
+    differ.
+
+    Numbers and numeric ndarrays are compared to the given relative tolerance, relative
+    to the largest of their own magnitude, their object's largest number, and the
+    largest magnitude that attribute has anywhere in the object path's run (for example,
+    every Panel's forces_GP1 at every time step). So a value that is round off, such as
+    a symmetric problem's crosswind force coefficient, or the loads on a Panel that
+    carries almost none, is compared on the scale of its kind. Everything else is
+    compared exactly.
+
+    :param test_case: The TestCase making the assertions.
+    :param object_solver: The solver run with use_arrays=False.
+    :param array_solver: The solver run with use_arrays=True.
+    :param relative_tolerance: The largest relative difference allowed. The default is
+        DEFAULT_RELATIVE_TOLERANCE.
+    :return: The number of values compared.
+    """
+    scales = _attribute_scales(object_solver)
+    visited: set[tuple[int, int]] = set()
+    counter = {"values": 0}
+
+    def compare(
+        object_value: object, array_value: object, path: str, scale: float
+    ) -> None:
+        if object_value is None or array_value is None:
+            test_case.assertIs(array_value is None, object_value is None, msg=path)
+            return
+        if isinstance(object_value, np.ndarray):
+            test_case.assertIsInstance(array_value, np.ndarray, msg=path)
+            assert isinstance(array_value, np.ndarray)
+            test_case.assertEqual(array_value.shape, object_value.shape, msg=path)
+            if object_value.dtype == object:
+                for index, (object_item, array_item) in enumerate(
+                    zip(object_value.ravel(), array_value.ravel())
+                ):
+                    compare(object_item, array_item, f"{path}[{index}]", scale)
+                return
+            counter["values"] += 1
+            if object_value.dtype.kind in "biu" or object_value.size == 0:
+                np.testing.assert_array_equal(array_value, object_value, err_msg=path)
+                return
+            np.testing.assert_allclose(
+                array_value,
+                object_value,
+                rtol=relative_tolerance,
+                atol=relative_tolerance * max(_magnitude(object_value), scale),
+                err_msg=path,
+            )
+            return
+        if isinstance(object_value, (bool, str, np.bool_)):
+            counter["values"] += 1
+            test_case.assertEqual(array_value, object_value, msg=path)
+            return
+        if _is_number(object_value):
+            counter["values"] += 1
+            test_case.assertTrue(
+                np.isclose(
+                    float(array_value),  # type: ignore[arg-type]
+                    float(object_value),  # type: ignore[arg-type]
+                    rtol=relative_tolerance,
+                    atol=relative_tolerance * max(_magnitude(object_value), scale),
+                ),
+                msg=f"{path}: {array_value} != {object_value}",
+            )
+            return
+        if isinstance(object_value, (list, tuple)):
+            test_case.assertIsInstance(array_value, (list, tuple), msg=path)
+            assert isinstance(array_value, (list, tuple))
+            test_case.assertEqual(len(array_value), len(object_value), msg=path)
+            for index, (object_item, array_item) in enumerate(
+                zip(object_value, array_value)
+            ):
+                compare(object_item, array_item, f"{path}[{index}]", scale)
+            return
+        if isinstance(object_value, dict):
+            test_case.assertIsInstance(array_value, dict, msg=path)
+            assert isinstance(array_value, dict)
+            test_case.assertEqual(set(array_value), set(object_value), msg=path)
+            for key in object_value:
+                compare(object_value[key], array_value[key], f"{path}[{key!r}]", scale)
+            return
+        if not type(object_value).__module__.startswith("pterasoftware"):
+            return
+        test_case.assertIs(type(array_value), type(object_value), msg=path)
+        key = (id(object_value), id(array_value))
+        if key in visited:
+            return
+        visited.add(key)
+        outcomes = {
+            name: (_read(object_value, name), _read(array_value, name))
+            for name in _public_names(object_value)
+        }
+        object_scale = max(
+            (
+                _magnitude(object_outcome)
+                for object_outcome, _ in outcomes.values()
+                if _is_number(object_outcome)
+            ),
+            default=0.0,
+        )
+        class_name = type(object_value).__name__
+        for name, (object_outcome, array_outcome) in outcomes.items():
+            if isinstance(object_outcome, BaseException):
+                test_case.assertIs(
+                    type(array_outcome), type(object_outcome), msg=f"{path}.{name}"
+                )
+                continue
+            compare(
+                object_outcome,
+                array_outcome,
+                f"{path}.{name}",
+                max(object_scale, scales.get((class_name, name), 0.0)),
+            )
+
+    compare(object_solver, array_solver, "solver", 0.0)
+    return counter["values"]

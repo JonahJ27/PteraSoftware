@@ -607,3 +607,31 @@ class TestAeroelasticUnsteadySolverArrayPath(unittest.TestCase):
                 array_path_fixtures.assert_loads_match(
                     self, object_solver, array_solver, relative_tolerance
                 )
+
+
+class TestAeroelasticArrayPathErrors(unittest.TestCase):
+    """Verifies that the array path raises the object path's errors for invalid deformed
+    geometry, at the same time step."""
+
+    def test_deformation_past_the_angle_limit_raises_the_same_error(self) -> None:
+        """A light Wing with the Katz force method and a prescribed wake deforms until a
+        WingCrossSection's angle passes -90.0 degrees. The object path raises when it
+        builds that time step's Airplane, and the array path, which builds no Airplanes
+        during the run, raises the same ValueError, with the same message, when it
+        checks the recorded step parameters before meshing them, at the same time step.
+
+        :return: None
+        """
+        outcomes = []
+        for use_arrays in (False, True):
+            solver = _make_aeroelastic_solver(wing_density=0.01)
+            with self.assertRaises(ValueError) as context:
+                solver.run(
+                    prescribed_wake=True,
+                    show_progress=False,
+                    force_method="katz",
+                    use_arrays=use_arrays,
+                )
+            outcomes.append((str(context.exception), solver._current_step))
+        self.assertIn("must be greater than or equal to -90.0", outcomes[0][0])
+        self.assertEqual(outcomes[1], outcomes[0])

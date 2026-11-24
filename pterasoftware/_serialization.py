@@ -422,6 +422,13 @@ def save(path: str | Path, obj: object) -> None:
 
     _logger.info(_logging.indent() + "Saving %s to %s", class_name, path)
 
+    # Changed for the arrays rewrite (step 7): a coupled problem run on the array path
+    # builds its time steps' SteadyProblems only when they are read, so they are all
+    # built here first, and the file holds exactly what an object path run's does.
+    problem = getattr(obj, "unsteady_problem", obj)
+    if isinstance(problem, _CoupledUnsteadyProblem):
+        _ = problem.steady_problems
+
     num_chunks = max(
         (
             len(getattr(owner, slot_name))

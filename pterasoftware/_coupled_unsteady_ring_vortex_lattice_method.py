@@ -6,7 +6,7 @@ from typing import cast
 
 import numpy as np
 
-from . import _logging, _mesh_arrays, problems
+from . import _loads_arrays, _logging, _mesh_arrays, operating_point, problems
 from .unsteady_ring_vortex_lattice_method import UnsteadyRingVortexLatticeMethodSolver
 
 _logger = _logging.get_logger("_coupled_unsteady_ring_vortex_lattice_method")
@@ -74,6 +74,51 @@ class CoupledUnsteadyRingVortexLatticeMethodSolver(
 
     def _get_steady_problem_at(self, step: int) -> problems.SteadyProblem:
         return self._coupled_unsteady_problem.get_steady_problem(step)
+
+    def _operating_point_at(self, step: int) -> operating_point.OperatingPoint:
+        """Gets the OperatingPoint to use for a given time step's geometry and wake.
+
+        It replaces reading it from the time step's SteadyProblem, as the parent does.
+
+        It exists because an array path run's time steps aren't built until they are
+        read, so the OperatingPoint is read from the problem without building the time
+        step. It is the same OperatingPoint.
+
+        :param step: The time step.
+        :return: The OperatingPoint at the time step.
+        """
+        return self._coupled_unsteady_problem.get_operating_point(step)
+
+    def _store_step_results(
+        self,
+        step: int,
+        loads: _loads_arrays.StepLoads | None,
+        wake_corners: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+        num_wake_rows: int,
+        wing_shapes: tuple[tuple[int, int], ...],
+    ) -> None:
+        """Hands the array path's results at one time step to the problem, when the run
+        ends.
+
+        It replaces the parent's writes onto the time step's objects.
+
+        It exists because a coupled problem builds an array path run's time steps only
+        when they are read, so it keeps their results until then.
+
+        :param step: The time step.
+        :param loads: The time step's official StepLoads, or None if it finds no loads.
+        :param wake_corners: The time step's wake ring vortex corners, or None at the
+            first time step.
+        :param num_wake_rows: The number of chordwise wake rows each Wing has at the
+            time step.
+        :param wing_shapes: Each Wing's (num_chordwise_panels, num_spanwise_panels), in
+            global Wing order.
+        :return: None
+        """
+        # noinspection PyProtectedMember
+        self._coupled_unsteady_problem._store_array_results(
+            step, loads, wake_corners, num_wake_rows, wing_shapes
+        )
 
     def _wing_meshes_at(
         self, step: int

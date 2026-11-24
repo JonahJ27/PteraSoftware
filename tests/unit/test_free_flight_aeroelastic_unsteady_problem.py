@@ -201,10 +201,22 @@ class TestFreeFlightAeroelasticUnsteadyProblemArrayPath(unittest.TestCase):
             airplane: Any,
             step: int,
             loads: Any = None,
+            airplane_step: Any = None,
         ) -> Any:
             self.assertIsNotNone(loads)
-            from_loads = original(problem, operating_point, airplane, step, loads=loads)
-            from_airplane = original(problem, operating_point, airplane, step)
+            from_loads = original(
+                problem,
+                operating_point,
+                airplane,
+                step,
+                loads=loads,
+                airplane_step=airplane_step,
+            )
+            # The array path passes no Airplane, so the object branch reads one built
+            # from the same time step's step parameters with the same loads, as the
+            # object path's Airplane carries them.
+            loaded_airplane = problem._build_loaded_airplane(airplane_step, loads)
+            from_airplane = original(problem, operating_point, loaded_airplane, step)
             results.append((from_loads, from_airplane))
             return from_loads
 

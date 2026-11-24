@@ -734,13 +734,20 @@ class TestFlapDrivenAeroelasticUnsteadyProblem(unittest.TestCase):
             wing_index: int,
         ) -> float:
             array_torque = original(problem, solver, wing_index)
-            # The array path also writes the loads onto the Panels, so switching the
-            # solver to the object path reads the same time step from them.
+            # The array path builds no Airplanes during the run, so the object branch
+            # reads one built from the same time step's step parameters, with the same
+            # loads written onto it, as the object path's Airplane carries them.
+            loaded_airplane = problem._build_loaded_airplane(
+                solver._current_step, solver._current_step_loads
+            )
+            current_airplanes = solver.current_airplanes
+            solver.current_airplanes = (loaded_airplane,)
             solver._use_arrays = False
             try:
                 object_torque = original(problem, solver, wing_index)
             finally:
                 solver._use_arrays = True
+                solver.current_airplanes = current_airplanes
             torques.append((wing_index, array_torque, object_torque))
             return array_torque
 

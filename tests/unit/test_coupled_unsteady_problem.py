@@ -38,6 +38,7 @@ class TestCoupledUnsteadyProblem(unittest.TestCase):
         initial_airplanes and initial_operating_point."""
         self.assertEqual(len(self.problem._steady_problems), 1)
         seed = self.problem._steady_problems[0]
+        assert isinstance(seed, ps.problems.SteadyProblem)
         self.assertIsInstance(seed, ps.problems.SteadyProblem)
         self.assertEqual(seed.airplanes, (self.initial_airplane,))
         self.assertIs(seed.operating_point, self.initial_operating_point)

@@ -1,7 +1,7 @@
 """This module contains classes to test UnsteadyRingVortexLatticeMethodSolvers."""
 
 import unittest
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -12,6 +12,7 @@ import pterasoftware as ps
 from pterasoftware import _mesh_arrays
 from tests.unit.fixtures import (
     airplane_movement_fixtures,
+    flap_drive_fixtures,
     operating_point_fixtures,
     problem_fixtures,
     solver_fixtures,
@@ -232,10 +233,11 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                             )
 
     def test_array_path_loads_match_the_object_path(self) -> None:
-        """Test that, at every time step and for both force methods, the array path's
-        loads on the Airplanes and Panels match the object path's to round off, that
-        they are the loads the array path keeps, and that the kept loads are cleared
-        when the run ends."""
+        """Test that, at every time step and for both force methods, the loads the array
+        path keeps match the loads the object path writes onto the Airplanes and Panels
+        at that time step, to round off, that after the run every time step's Airplanes
+        and Panels carry the same loads on both paths, and that the kept loads are
+        cleared when the run ends."""
         makers = (
             solver_fixtures.make_unsteady_ring_solver_fixture,
             lambda: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
@@ -249,37 +251,45 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         for maker_index, make in enumerate(makers):
             for force_method in ("joukowski", "katz"):
                 records: dict[bool, list[dict[str, Any]]] = {}
+                solvers: dict[bool, Any] = {}
                 for use_arrays in (False, True):
                     solver = make()
                     steps: list[dict[str, Any]] = []
 
                     def recording_calculate_loads(self: Any) -> None:
                         calculate_loads(self)
-                        airplane = self.current_airplanes[0]
-                        record: dict[str, Any] = {
-                            "forces_W": np.copy(airplane.forces_W),
-                            "moments_W_CgP1": np.copy(airplane.moments_W_CgP1),
-                            "momentCoefficients_W_Cg": np.copy(
-                                airplane.momentCoefficients_W_Cg
-                            ),
-                            "panel_forces_GP1": np.array(
-                                [panel.forces_GP1 for panel in self.panels]
-                            ),
-                            "panel_moments_W_CgP1": np.array(
-                                [panel.moments_W_CgP1 for panel in self.panels]
-                            ),
-                        }
-                        loads = self._current_step_loads
-                        if loads is not None:
-                            record["kept_match"] = bool(
-                                np.array_equal(
-                                    loads.stackAirplaneForces_W[0], airplane.forces_W
-                                )
-                                and np.array_equal(
-                                    loads.stackPanelForces_GP1,
-                                    record["panel_forces_GP1"],
-                                )
-                            )
+                        # The array path keeps the loads and writes no objects during
+                        # the run, and the object path writes them onto the objects.
+                        if self._use_arrays:
+                            loads = self._current_step_loads
+                            record: dict[str, Any] = {
+                                "forces_W": np.copy(loads.stackAirplaneForces_W[0]),
+                                "moments_W_CgP1": np.copy(
+                                    loads.stackAirplaneMoments_W_CgP1[0]
+                                ),
+                                "momentCoefficients_W_Cg": np.copy(
+                                    loads.stackAirplaneMomentCoefficients_W_Cg[0]
+                                ),
+                                "panel_forces_GP1": np.copy(loads.stackPanelForces_GP1),
+                                "panel_moments_W_CgP1": np.copy(
+                                    loads.stackPanelMoments_W_CgP1
+                                ),
+                            }
+                        else:
+                            airplane = self.current_airplanes[0]
+                            record = {
+                                "forces_W": np.copy(airplane.forces_W),
+                                "moments_W_CgP1": np.copy(airplane.moments_W_CgP1),
+                                "momentCoefficients_W_Cg": np.copy(
+                                    airplane.momentCoefficients_W_Cg
+                                ),
+                                "panel_forces_GP1": np.array(
+                                    [panel.forces_GP1 for panel in self.panels]
+                                ),
+                                "panel_moments_W_CgP1": np.array(
+                                    [panel.moments_W_CgP1 for panel in self.panels]
+                                ),
+                            }
                         steps.append(record)
 
                     with patch.object(
@@ -291,13 +301,86 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                             force_method=force_method,
                         )
                     records[use_arrays] = steps
+                    solvers[use_arrays] = solver
                     self.assertIsNone(solver._current_step_loads)
+
+                # After the run, every time step's Airplanes and Panels carry the same
+                # loads on both paths.
+                for step in range(solvers[False].num_steps):
+                    object_problem = solvers[False].steady_problems[step]
+                    array_problem = solvers[True].steady_problems[step]
+                    object_airplane = object_problem.airplanes[0]
+                    array_airplane = array_problem.airplanes[0]
+                    for name in (
+                        "forces_W",
+                        "moments_W_CgP1",
+                        "forces_G",
+                        "moments_G_Cg",
+                        "moments_W_Cg",
+                        "forceCoefficients_W",
+                        "forceCoefficients_G",
+                        "momentCoefficients_W_CgP1",
+                        "momentCoefficients_G_Cg",
+                        "momentCoefficients_W_Cg",
+                    ):
+                        object_value = getattr(object_airplane, name)
+                        array_value = getattr(array_airplane, name)
+                        with self.subTest(
+                            maker=maker_index,
+                            force_method=force_method,
+                            step=step,
+                            name=name,
+                            after_run=True,
+                        ):
+                            if object_value is None:
+                                self.assertIsNone(array_value)
+                                continue
+                            np.testing.assert_allclose(
+                                array_value,
+                                object_value,
+                                rtol=1.0e-10,
+                                atol=1.0e-10 * float(np.max(np.abs(object_value))),
+                            )
+                    object_panels = [
+                        panel
+                        for wing in object_airplane.wings
+                        for panel in np.ravel(wing.panels)
+                    ]
+                    array_panels = [
+                        panel
+                        for wing in array_airplane.wings
+                        for panel in np.ravel(wing.panels)
+                    ]
+                    for name in (
+                        "forces_GP1",
+                        "moments_GP1_CgP1",
+                        "forces_W",
+                        "moments_W_CgP1",
+                    ):
+                        object_values = [getattr(pn, name) for pn in object_panels]
+                        array_values = [getattr(pn, name) for pn in array_panels]
+                        with self.subTest(
+                            maker=maker_index,
+                            force_method=force_method,
+                            step=step,
+                            name="panel " + name,
+                            after_run=True,
+                        ):
+                            if object_values[0] is None:
+                                self.assertTrue(all(v is None for v in array_values))
+                                continue
+                            object_stack = np.array(object_values)
+                            np.testing.assert_allclose(
+                                np.array(array_values),
+                                object_stack,
+                                rtol=1.0e-10,
+                                atol=1.0e-10 * float(np.max(np.abs(object_stack))),
+                            )
 
                 self.assertEqual(len(records[True]), len(records[False]))
                 for step, (array_record, object_record) in enumerate(
                     zip(records[True], records[False])
                 ):
-                    self.assertTrue(array_record["kept_match"])
                     for name, object_value in object_record.items():
                         with self.subTest(
                             maker=maker_index,
@@ -314,9 +397,11 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
 
     def test_array_path_wake_matches_the_object_path(self) -> None:
         """Test that, at every time step, for prescribed and free wakes, the array
-        path's next wake ring vortices and wake point grids match the object path's to
-        round off, that it keeps at most two time steps' grids, and that it clears them
-        when the run ends."""
+        path's next wake ring vortices and the wake point grids it keeps match the
+        object path's (which it sets on the next time step's Wings) to round off, that
+        it keeps at most two time steps' grids and clears them when the run ends, and
+        that after the run every time step's Wings carry the same wake point grids on
+        both paths."""
         populate = (
             ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver._populate_next_airplanes_wake
         )
@@ -331,6 +416,7 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         ):
             for prescribed_wake in (True, False):
                 records: dict[bool, list[dict[str, Any]]] = {}
+                solvers: dict[bool, Any] = {}
                 for use_arrays in (False, True):
                     solver = make()
                     steps: list[dict[str, Any]] = []
@@ -340,7 +426,15 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                         next_step = self._current_step + 1
                         if next_step >= self.num_steps:
                             return
-                        next_problem = self._get_steady_problem_at(next_step)
+                        if self._use_arrays:
+                            next_grids = self._wake_grids[next_step]
+                        else:
+                            next_problem = self._get_steady_problem_at(next_step)
+                            next_grids = [
+                                wing.gridWrvp_GP1_CgP1
+                                for airplane in next_problem.airplanes
+                                for wing in airplane.wings
+                            ]
                         steps.append(
                             {
                                 "Fl": self.listStackFlwrvp_GP1_CgP1[next_step].copy(),
@@ -350,11 +444,7 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                                 ].copy(),
                                 "r_c0s": self._list_wake_r_c0s[next_step].copy(),
                                 "grids": np.concatenate(
-                                    [
-                                        wing.gridWrvp_GP1_CgP1.ravel()
-                                        for airplane in next_problem.airplanes
-                                        for wing in airplane.wings
-                                    ]
+                                    [grid.ravel() for grid in next_grids]
                                 ),
                                 "num_kept_grids": (
                                     len(self._wake_grids)
@@ -375,7 +465,44 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                             prescribed_wake=prescribed_wake,
                         )
                     records[use_arrays] = steps
+                    solvers[use_arrays] = solver
                     self.assertIsNone(solver._wake_grids)
+
+                # After the run, every time step's Wings carry the same wake point grids
+                # on both paths (the first time step's carry none).
+                for step in range(1, solvers[False].num_steps):
+                    object_wings = [
+                        wing
+                        for airplane in solvers[False].steady_problems[step].airplanes
+                        for wing in airplane.wings
+                    ]
+                    array_wings = [
+                        wing
+                        for airplane in solvers[True].steady_problems[step].airplanes
+                        for wing in airplane.wings
+                    ]
+                    for wing_id, (object_wing, array_wing) in enumerate(
+                        zip(object_wings, array_wings)
+                    ):
+                        with self.subTest(
+                            maker=maker_index,
+                            prescribed_wake=prescribed_wake,
+                            step=step,
+                            wing_id=wing_id,
+                            after_run=True,
+                        ):
+                            np.testing.assert_allclose(
+                                array_wing.gridWrvp_GP1_CgP1,
+                                object_wing.gridWrvp_GP1_CgP1,
+                                rtol=1.0e-10,
+                                atol=1.0e-10
+                                * max(
+                                    float(
+                                        np.max(np.abs(object_wing.gridWrvp_GP1_CgP1))
+                                    ),
+                                    1.0,
+                                ),
+                            )
 
                 self.assertEqual(len(records[True]), len(records[False]))
                 for step, (array_record, object_record) in enumerate(
@@ -405,8 +532,9 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         """Test that, at every time step, the array path writes the object path's
         collapsed geometry into the solver's arrays (to round off), for plain solvers
         (whose meshes come from the movement's WingStepParameters) and an aeroelastic
-        solver (whose meshes come from its built Wings), and that the array path keeps
-        at most three time steps' geometry."""
+        solver (whose meshes come from its recorded step parameters), that the array
+        path keeps at most three time steps' geometry, and that after the run both paths
+        leave the solver's Panels as the last time step's."""
         makers = (
             solver_fixtures.make_unsteady_ring_solver_fixture,
             lambda: ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
@@ -459,9 +587,6 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                     record: dict[str, Any] = {
                         name: np.copy(getattr(self, name)) for name in names
                     }
-                    record["panels_filled"] = all(
-                        panel is not None for panel in self.panels
-                    )
                     record["num_step_geometries"] = (
                         len(self._step_geometries)
                         if self._step_geometries is not None
@@ -474,12 +599,20 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                 ):
                     solver.run(show_progress=False, use_arrays=use_arrays)
                 records[use_arrays] = steps
+                last_panels = [
+                    panel
+                    for airplane in solver.steady_problems[-1].airplanes
+                    for wing in airplane.wings
+                    for panel in np.ravel(cast(np.ndarray, wing.panels))
+                ]
+                self.assertEqual(len(solver.panels), len(last_panels))
+                for panel, last_panel in zip(solver.panels, last_panels):
+                    self.assertIs(panel, last_panel)
 
             self.assertEqual(len(records[True]), len(records[False]))
             for step, (array_record, object_record) in enumerate(
                 zip(records[True], records[False])
             ):
-                self.assertTrue(array_record["panels_filled"])
                 self.assertLessEqual(array_record["num_step_geometries"], 3)
                 for name in names:
                     with self.subTest(maker=maker_index, step=step, name=name):
@@ -489,6 +622,88 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                             rtol=0.0,
                             atol=1.0e-12,
                         )
+
+
+class TestUnsteadyRingVortexLatticeMethodSolverArrayPathBuildsNoObjects(
+    unittest.TestCase
+):
+    """This is a class with functions to test that the array path builds and copies no
+    geometry objects during the run."""
+
+    def test_no_objects_are_built_during_the_run(self) -> None:
+        """Test that, for a plain, an aeroelastic, a free flight, and a free flight flap
+        driven solver, an array path run builds no Airplane, SteadyProblem, Wing,
+        WingCrossSection, or Panel, and deep copies none, before it writes its results
+        when the run ends, and that an object path run does (so the count works)."""
+        classes = (
+            ps.geometry.airplane.Airplane,
+            ps.geometry.wing.Wing,
+            ps.geometry.wing_cross_section.WingCrossSection,
+            ps.problems.SteadyProblem,
+            ps._panel.Panel,
+        )
+        makers = {
+            "plain": solver_fixtures.make_unsteady_ring_solver_fixture,
+            "aeroelastic": solver_fixtures.make_aeroelastic_unsteady_ring_solver_fixture,
+            "free flight": lambda: ps.free_flight_unsteady_ring_vortex_lattice_method.FreeFlightUnsteadyRingVortexLatticeMethodSolver(
+                problem_fixtures.make_basic_free_flight_unsteady_problem_fixture()
+            ),
+            "free flight flap driven": lambda: ps.free_flight_aeroelastic_unsteady_ring_vortex_lattice_method.FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
+                flap_drive_fixtures.make_free_flight_flap_driven_aeroelastic_problem_fixture()
+            ),
+        }
+        solver_class = (
+            ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver
+        )
+        write_results = solver_class._write_array_results_to_objects
+        for name, make in makers.items():
+            for use_arrays in (False, True):
+                with self.subTest(solver=name, use_arrays=use_arrays):
+                    solver = make()
+                    counts = {"built": 0}
+                    in_loop = {"value": True}
+                    patches = []
+                    for cls in classes:
+                        for method in ("__init__", "__deepcopy__"):
+                            if method not in vars(cls):
+                                continue
+                            original = getattr(cls, method)
+
+                            def counting(
+                                self_: Any,
+                                *args: Any,
+                                _original: Any = original,
+                                **kwargs: Any,
+                            ) -> Any:
+                                if in_loop["value"]:
+                                    counts["built"] += 1
+                                return _original(self_, *args, **kwargs)
+
+                            patches.append(patch.object(cls, method, counting))
+
+                    def stop_counting(self_: Any) -> None:
+                        in_loop["value"] = False
+                        write_results(self_)
+
+                    stop_patch: Any = patch.object(
+                        solver_class,
+                        "_write_array_results_to_objects",
+                        stop_counting,
+                    )
+                    patches.append(stop_patch)
+                    for active in patches:
+                        active.start()
+                    try:
+                        solver.run(show_progress=False, use_arrays=use_arrays)
+                    finally:
+                        for active in patches:
+                            active.stop()
+                    if use_arrays:
+                        self.assertEqual(counts["built"], 0)
+                    elif name != "plain":
+                        # A plain problem's objects are all built by its movement,
+                        # before the run, on both paths.
+                        self.assertGreater(counts["built"], 0)
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWingMeshesFromParameters(
