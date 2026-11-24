@@ -839,7 +839,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         :return: None
         """
-        unsupported = []
+        # Changed for M2 of the arrays rewrite: every feature this checked is now
+        # supported, so nothing is added to this list. The check stays for features
+        # added later that the array path doesn't support yet.
+        unsupported: list[str] = []
         # Changed for the arrays rewrite: the array path now supports the "katz" force
         # method (step 4), so it is no longer rejected. The old check was:
         # octowrap: off
@@ -850,8 +853,13 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # old check was:
         # if self.num_airplanes > 1:
         #     unsupported.append("multiple Airplanes")
-        if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
-            unsupported.append("ground effect")
+        # Changed for M2 of the arrays rewrite: ground effect is supported. Both paths
+        # add the image surface's contribution inside the influence and velocity
+        # functions they share, which read the current OperatingPoint (including each
+        # free flight coupling trial's), so the array path needed no new code. The old
+        # check was:
+        # if self._get_steady_problem_at(0).operating_point.surfaceNormal_E is not None:
+        #     unsupported.append("ground effect")
         if unsupported:
             raise ValueError(
                 f"use_arrays=True doesn't support {' or '.join(unsupported)} yet. Use "

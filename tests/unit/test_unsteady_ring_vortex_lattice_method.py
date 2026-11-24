@@ -169,12 +169,15 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
                 with self.assertRaises(TypeError):
                     solver.run(use_arrays=invalid, show_progress=False)
 
-    def test_array_path_rejects_unsupported_features(self) -> None:
-        """Test that use_arrays=True raises a ValueError naming the feature for ground
-        effect, before solving, and accepts the "katz" force method and multiple
-        Airplanes (supported since M2 of the arrays rewrite; the multiple Airplane
-        fixture is numerically singular, so only its support check runs here, and the
-        formation integration module runs formations)."""
+    def test_array_path_accepts_every_feature(self) -> None:
+        """Test that use_arrays=True accepts the "katz" force method, multiple
+        Airplanes, and ground effect (the last two supported since M2 of the arrays
+        rewrite).
+
+        The multiple Airplane fixture is numerically singular, so only its support check
+        runs here; the formation and surface effect integration modules run formations
+        and ground effect on both paths.
+        """
         solver_fixtures.make_unsteady_ring_solver_fixture().run(
             use_arrays=True, force_method="katz", show_progress=False
         )
@@ -197,8 +200,10 @@ class TestUnsteadyRingVortexLatticeMethodSolverUseArrays(unittest.TestCase):
         ground_solver = ps.unsteady_ring_vortex_lattice_method.UnsteadyRingVortexLatticeMethodSolver(
             ps.problems.UnsteadyProblem(movement=ground_movement)
         )
-        with self.assertRaisesRegex(ValueError, "ground effect"):
-            ground_solver.run(use_arrays=True, show_progress=False)
+        self.assertIsNotNone(
+            ground_solver._get_steady_problem_at(0).operating_point.surfaceNormal_E
+        )
+        ground_solver._check_array_path_support()
 
     def test_array_path_run_matches_the_object_path(self) -> None:
         """Test that a run with use_arrays=True records the choice, clears its per run

@@ -77,6 +77,15 @@ class TestArrayPathPublicResults(unittest.TestCase):
             prescribed_wake=False,
         )
 
+    def test_plain_surface_effect(self) -> None:
+        """A plain solver with an image surface and a free wake, so the bound and wake
+        ring vortices are reflected across it."""
+        self._assert_match(
+            solver_fixtures.make_unsteady_ring_vortex_lattice_method_surface_effect_solver,
+            array_path_fixtures.DEFAULT_RELATIVE_TOLERANCE,
+            prescribed_wake=False,
+        )
+
     def test_plain_wake_truncation(self) -> None:
         """A plain solver whose wake is truncated to 3 chord lengths, with a free wake,
         so the wake point grids written onto the Wings after the run are truncated."""
@@ -142,6 +151,18 @@ class TestArrayPathPublicResults(unittest.TestCase):
         """A free flight solver with a prescribed wake."""
         self._assert_match(
             solver_fixtures.make_simple_glider_free_flight_solver,
+            array_path_fixtures.FREE_FLIGHT_GLIDER_RELATIVE_TOLERANCE,
+            prescribed_wake=True,
+        )
+
+    def test_free_flight_glider_near_the_ground(self) -> None:
+        """A free flight solver with a prescribed wake, flying 1 m above the ground, so
+        every coupling trial reflects the vortices across the ground at its own height
+        (see FREE_FLIGHT_GLIDER_RELATIVE_TOLERANCE)."""
+        self._assert_match(
+            lambda: solver_fixtures.make_simple_glider_free_flight_solver(
+                ground_height=1.0
+            ),
             array_path_fixtures.FREE_FLIGHT_GLIDER_RELATIVE_TOLERANCE,
             prescribed_wake=True,
         )

@@ -10,7 +10,7 @@ images implementation produces these physically correct trends.
 import unittest
 
 import pterasoftware as ps
-from tests.integration.fixtures import solver_fixtures
+from tests.integration.fixtures import array_path_fixtures, solver_fixtures
 
 
 class TestUnsteadyRingVortexLatticeMethodSurfaceEffect(unittest.TestCase):
@@ -87,3 +87,27 @@ class TestUnsteadyRingVortexLatticeMethodSurfaceEffect(unittest.TestCase):
         c_di_free_air = -free_air_airplane.forceCoefficients_W[0]
 
         self.assertLess(c_di_surface_effect, c_di_free_air)
+
+
+class TestUnsteadySurfaceEffectArrayPath(unittest.TestCase):
+    """Verifies that the array path gives the object path's results with an image
+    surface (supported since M2 of the arrays rewrite)."""
+
+    def test_matches_the_object_path(self) -> None:
+        """Running the surface effect problem with use_arrays=True gives the object
+        path's loads at every time step, to round off, with a prescribed and a free
+        wake.
+
+        :return: None
+        """
+        for prescribed_wake in (True, False):
+            with self.subTest(prescribed_wake=prescribed_wake):
+                object_solver, array_solver = (
+                    array_path_fixtures.make_solvers_run_on_both_paths(
+                        solver_fixtures.make_unsteady_ring_vortex_lattice_method_surface_effect_solver,
+                        prescribed_wake=prescribed_wake,
+                    )
+                )
+                array_path_fixtures.assert_loads_match(
+                    self, object_solver, array_solver
+                )
