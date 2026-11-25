@@ -2093,3 +2093,331 @@ class TestSingleWingDynamicsMatchesMatlab(unittest.TestCase):
                     self.assertAlmostEqual(
                         actual, expected, delta=1e-10 * abs(expected)
                     )
+
+
+def _assert_same_floats(
+    test_case: unittest.TestCase,
+    actual: tuple[float, ...],
+    expected: tuple[float, ...],
+) -> None:
+    """Asserts that two tuples of floats are bit for bit equal, with nan equal to nan.
+
+    :param test_case: The TestCase making the assertion.
+    :param actual: The values to check.
+    :param expected: The values they must equal.
+    :return: None
+    """
+    test_case.assertEqual(len(actual), len(expected))
+    for actual_value, expected_value in zip(actual, expected):
+        if np.isnan(expected_value):
+            test_case.assertTrue(np.isnan(actual_value))
+        else:
+            test_case.assertEqual(
+                np.float64(actual_value).tobytes(),
+                np.float64(expected_value).tobytes(),
+                f"{actual_value!r} != {expected_value!r}",
+            )
+
+
+class TestReferenceLookupsMatchNumpy(unittest.TestCase):
+    """This is a class with functions to test that a FlapReference's table lookups give
+    bit for bit the values of the np.interp and np.argmin code they replace."""
+
+    def setUp(self) -> None:
+        """Set up a random table with uneven time steps, and the times to look up."""
+        rng = np.random.default_rng(2)
+        steps = rng.uniform(1e-6, 1e-3, size=4000)
+        steps[::97] = 1e-12
+        self.times = np.concatenate([[0.25], 0.25 + np.cumsum(steps)])
+        size = self.times.size
+        self.columns = (
+            rng.normal(scale=1e3, size=size),
+            rng.normal(size=size),
+            np.repeat(rng.normal(size=size // 4 + 1), 4)[:size],
+        )
+        self.lookup_times = np.concatenate(
+            [
+                rng.uniform(self.times[0] - 0.1, self.times[-1] + 0.1, size=5000),
+                self.times[::7],
+                (self.times[:-1] + self.times[1:])[::7] / 2.0,
+                np.nextafter(self.times[::11], np.inf),
+                np.nextafter(self.times[::11], -np.inf),
+                (self.times[0], self.times[-1], -1e300, 1e300),
+            ]
+        )
+
+    def test_interpolate_columns_matches_np_interp(self) -> None:
+        """Test _interpolate_columns against one np.interp call per column, inside the
+        table, at its entries, just beside its entries, at its ends, and outside it."""
+        for time in self.lookup_times:
+            with self.subTest(time=time):
+                _assert_same_floats(
+                    self,
+                    flap_drive._interpolate_columns(
+                        float(time), self.times, self.columns
+                    ),
+                    tuple(
+                        float(np.interp(time, self.times, column))
+                        for column in self.columns
+                    ),
+                )
+
+    def test_evaluate_matches_np_interp(self) -> None:
+        """Test FlapReference.evaluate against the np.interp code it replaces, including
+        int times."""
+        reference = flap_drive.FlapReference(self.times, *self.columns, period=None)
+        for time in list(self.lookup_times) + [0, 1]:
+            with self.subTest(time=time):
+                _assert_same_floats(
+                    self,
+                    reference.evaluate(time),
+                    tuple(
+                        float(np.interp(time, self.times, column))
+                        for column in self.columns
+                    ),
+                )
+
+    def test_nearest_index_matches_argmin(self) -> None:
+        """Test _nearest_index against argmin on tables with repeated entries, a
+        constant table, and values so far from the table that their distances round to
+        equal values, so that the first of equally near entries is checked, each in
+        increasing and in decreasing order (a motor turning forward and backward)."""
+        rng = np.random.default_rng(3)
+        increasing_tables = (
+            np.sort(rng.uniform(-50.0, 50.0, size=3000)),
+            np.repeat(np.sort(rng.uniform(-5.0, 5.0, size=300)), 3),
+            np.full(10, 2.5),
+            np.arange(0.0, 100.0, 1.0),
+            np.array([7.0]),
+        )
+        tables = [
+            ordered
+            for table in increasing_tables
+            for ordered in (table, table[::-1].copy())
+        ]
+        for table in tables:
+            values = np.concatenate(
+                [
+                    rng.uniform(table.min() - 10.0, table.max() + 10.0, size=2000),
+                    table[::3],
+                    (table[:-1] + table[1:])[::3] / 2.0,
+                    (1e17, -1e17, table[0], table[-1]),
+                ]
+            )
+            for value in values:
+                with self.subTest(size=table.size, value=value):
+                    self.assertEqual(
+                        flap_drive._nearest_index(table, float(value)),
+                        int(np.argmin(np.abs(table - value))),
+                    )
+
+    def test_evaluate_at_position_matches_argmin(self) -> None:
+        """Test FlapReference.evaluate_at_position against the argmin code it replaces,
+        for positions that increase and positions that decrease, and int positions."""
+        rng = np.random.default_rng(4)
+        positions = np.sort(rng.uniform(0.0, 300.0, size=2000))
+        for table in (positions, positions[::-1].copy()):
+            reference = flap_drive.FlapReference(
+                self.times[: table.size],
+                table,
+                self.columns[1][: table.size],
+                self.columns[2][: table.size],
+                period=None,
+            )
+            velocities = reference.velocities
+            accelerations = reference.accelerations
+            for position in list(rng.uniform(-20.0, 320.0, size=1000)) + [0, 150]:
+                with self.subTest(increasing=table[0] < table[-1], position=position):
+                    index = int(np.argmin(np.abs(table - position)))
+                    _assert_same_floats(
+                        self,
+                        reference.evaluate_at_position(position),
+                        (float(velocities[index]), float(accelerations[index])),
+                    )
+
+    def test_rejects_invalid_values(self) -> None:
+        """Test that evaluate and evaluate_at_position raise a TypeError for a value
+        that isn't an int or a float and a ValueError for nan, inf, or -inf, with the
+        messages of _parameter_validation.number_in_range_return_float, and accept ints,
+        bools, and np.float64s."""
+        positions = np.sort(np.random.default_rng(6).uniform(0.0, 300.0, size=50))
+        reference = flap_drive.FlapReference(
+            self.times[: positions.size],
+            positions,
+            self.columns[1][: positions.size],
+            self.columns[2][: positions.size],
+            period=None,
+        )
+        for name, lookup in (
+            ("time", reference.evaluate),
+            ("position", reference.evaluate_at_position),
+        ):
+            invalid_types: tuple[Any, ...] = (
+                "0.3",
+                None,
+                [0.3],
+                np.array([0.26]),
+                np.bool_(True),
+                0.26 + 0.0j,
+                np.float32(0.2625),
+                np.int64(0),
+            )
+            for value in invalid_types:
+                with self.subTest(name=name, value=repr(value)):
+                    with self.assertRaisesRegex(
+                        TypeError, f"^{name} must be an int or a float.$"
+                    ):
+                        lookup(value)
+            for value in (np.nan, np.inf, -np.inf):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(
+                        ValueError, f"^{name} can't be nan, inf, or -inf.$"
+                    ):
+                        lookup(value)
+            for value in (0, True, np.float64(0.2625), 10**20):
+                with self.subTest(name=name, value=repr(value)):
+                    self.assertEqual(len(lookup(value)), 3 if name == "time" else 2)
+
+
+class _SeparateCallsTransmission:
+    """A Transmission that delegates to a CrankLinkage but has only the three separate
+    forward kinematics methods, so a FlapDrive must call them one by one."""
+
+    def __init__(self, linkage: crank_linkage.CrankLinkage) -> None:
+        """The initialization method.
+
+        :param linkage: The CrankLinkage to delegate to.
+        :return: None
+        """
+        self.linkage = linkage
+
+    def evaluate_angle(self, actuator_position: float | int) -> float:
+        return self.linkage.evaluate_angle(actuator_position)
+
+    def evaluate_jacobian(self, actuator_position: float | int) -> float:
+        return self.linkage.evaluate_jacobian(actuator_position)
+
+    def evaluate_hessian(self, actuator_position: float | int) -> float:
+        return self.linkage.evaluate_hessian(actuator_position)
+
+    def convert_trajectory(
+        self,
+        times: np.ndarray,
+        flap_angles_rad: np.ndarray,
+        flap_angle_derivatives_rad: np.ndarray,
+        flap_angle_second_derivatives_rad: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return self.linkage.convert_trajectory(
+            times,
+            flap_angles_rad,
+            flap_angle_derivatives_rad,
+            flap_angle_second_derivatives_rad,
+        )
+
+
+class TestControllerUsesTheCombinedTransmissionMethod(unittest.TestCase):
+    """This is a class with functions to test that a FlapDrive's controller finds the
+    flap angle, Jacobian, and Hessian with a transmission's
+    evaluate_angle_jacobian_hessian when it has one, with the same results as the three
+    separate calls it replaces."""
+
+    def setUp(self) -> None:
+        """Set up a geared crank linkage and a motor reference turning at a constant
+        speed."""
+        self.linkage = crank_linkage.CrankLinkage(
+            0.11, -0.05, 0.065, np.pi / 2, 0.032, 0.11, gear_ratio=15.0
+        )
+        self.reference = flap_drive.FlapReference.constant_velocity(
+            start_position=15.0 * np.pi / 2.0,
+            velocity=15.0 * 2.0 * np.pi * 5.0,
+            duration=1.0,
+            period=0.2,
+        )
+
+    def _make_drive(
+        self, transmission: Any, use_position_lookup: bool
+    ) -> flap_drive.FlapDrive:
+        """Builds a FlapDrive with the given transmission.
+
+        :param transmission: The transmission.
+        :param use_position_lookup: Whether the feedforward reads the reference by
+            position.
+        :return: The FlapDrive.
+        """
+        return flap_drive.FlapDrive(
+            wing_indices=(0, 1),
+            transmission=transmission,
+            actuator=lambda inputs: 0.0,
+            actuator_inertia=2e-6,
+            actuator_damping=1e-6,
+            wing_flap_inertia=1e-4,
+            reference=self.reference,
+            use_position_lookup=use_position_lookup,
+        )
+
+    def test_same_inputs_as_the_separate_calls(self) -> None:
+        """Test that the controller's FlapDriveInputs are bit for bit the same with the
+        combined method as with the three separate calls, with and without the position
+        lookup."""
+        rng = np.random.default_rng(5)
+        for use_position_lookup in (False, True):
+            combined = self._make_drive(self.linkage, use_position_lookup)
+            separate = self._make_drive(
+                _SeparateCallsTransmission(self.linkage), use_position_lookup
+            )
+            for _ in range(300):
+                time = float(rng.uniform(0.0, 1.0))
+                position = float(rng.uniform(20.0, 500.0))
+                velocity = float(rng.uniform(-50.0, 500.0))
+                torque = float(rng.normal())
+                with self.subTest(
+                    use_position_lookup=use_position_lookup, position=position
+                ):
+                    self.assertEqual(
+                        combined.inverse_dynamics_controller(
+                            time, position, velocity, torque
+                        ),
+                        separate.inverse_dynamics_controller(
+                            time, position, velocity, torque
+                        ),
+                    )
+
+    def test_calls_the_combined_method_when_present(self) -> None:
+        """Test that the controller calls evaluate_angle_jacobian_hessian once, and none
+        of the separate methods, when the transmission has it, and the three separate
+        methods when it doesn't."""
+        calls: list[str] = []
+        linkage = self.linkage
+
+        class CountingTransmission(_SeparateCallsTransmission):
+            """A transmission that records which of its methods are called."""
+
+            def evaluate_angle(self, actuator_position: float | int) -> float:
+                calls.append("angle")
+                return super().evaluate_angle(actuator_position)
+
+            def evaluate_jacobian(self, actuator_position: float | int) -> float:
+                calls.append("jacobian")
+                return super().evaluate_jacobian(actuator_position)
+
+            def evaluate_hessian(self, actuator_position: float | int) -> float:
+                calls.append("hessian")
+                return super().evaluate_hessian(actuator_position)
+
+        class CountingCombinedTransmission(CountingTransmission):
+            """The same, with the combined method too."""
+
+            def evaluate_angle_jacobian_hessian(
+                self, actuator_position: float | int
+            ) -> tuple[float, float, float]:
+                calls.append("combined")
+                return linkage.evaluate_angle_jacobian_hessian(actuator_position)
+
+        drive = self._make_drive(CountingCombinedTransmission(linkage), False)
+        drive.inverse_dynamics_controller(0.1, 30.0, 400.0, 0.5)
+        self.assertEqual(calls, ["combined"])
+
+        calls.clear()
+        drive = self._make_drive(CountingTransmission(linkage), False)
+        drive.inverse_dynamics_controller(0.1, 30.0, 400.0, 0.5)
+        self.assertEqual(sorted(calls), ["angle", "hessian", "jacobian"])

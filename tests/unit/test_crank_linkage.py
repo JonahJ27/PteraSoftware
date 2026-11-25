@@ -191,6 +191,30 @@ class TestCrankLinkageTransmission(unittest.TestCase):
         )
         self.assertIs(drive.transmission, self.transmission)
 
+    def test_evaluate_angle_jacobian_hessian_matches_the_separate_calls(self) -> None:
+        """Test that evaluate_angle_jacobian_hessian returns bit for bit what
+        evaluate_angle, evaluate_jacobian, and evaluate_hessian return, which it
+        replaces in a FlapDrive, over several turns of the crank, for a positive and a
+        negative gear ratio and at int motor angles."""
+        reversed_transmission = crank_linkage.CrankLinkage(
+            *GEOMETRY, gear_ratio=-self.ratio
+        )
+        motor_angles = list(np.linspace(-4.0 * np.pi, 4.0 * np.pi, 2001) * self.ratio)
+        motor_angles += [0, 7, -12, 0.0, -0.0]
+        for transmission in (self.transmission, reversed_transmission, self.linkage):
+            for motor_angle in motor_angles:
+                with self.subTest(
+                    gear_ratio=transmission.gear_ratio, motor_angle=motor_angle
+                ):
+                    self.assertEqual(
+                        transmission.evaluate_angle_jacobian_hessian(motor_angle),
+                        (
+                            transmission.evaluate_angle(motor_angle),
+                            transmission.evaluate_jacobian(motor_angle),
+                            transmission.evaluate_hessian(motor_angle),
+                        ),
+                    )
+
     def test_angle_range(self) -> None:
         """Test the sampled stroke against a finer sampling of the forward
         kinematics."""

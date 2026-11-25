@@ -13,6 +13,7 @@ crank_linkage.CrankLinkage, or a class of your own.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
@@ -37,6 +38,135 @@ _DEFAULT_ANGLE_RANGE_SAMPLES = 10000
 
 # These are the flap trajectory styles that generate_flap_trajectory supports.
 _FLAP_TRAJECTORY_STYLES = ("sine", "square")
+
+
+def _interpolate_columns(
+    time: float, times: np.ndarray, columns: tuple[np.ndarray, ...]
+) -> tuple[float, ...]:
+    """Interpolates several columns of a table linearly at one time.
+
+    It replaces one np.interp(time, times, column) call per column, and returns bit for
+    bit their values: it finds the same table interval and applies numpy's formula and
+    its guards (an exact match returns the entry, and a time outside the table holds the
+    end value). It exists because np.interp converts its arguments and searches the
+    table on every call, which costs about 4.4 microseconds per column on a reference
+    table of 22,001 entries, while a FlapDrive reads its reference at every evaluation,
+    tens of thousands of times per run. This searches once for all of the columns.
+
+    It doesn't check its arguments, because it is only called on checked ones: the table
+    is validated by the FlapReference's initialization method (at least two finite,
+    strictly increasing times, and columns of the same length), and
+    FlapReference.evaluate checks that the time is a finite int or float, and converts
+    it to a float, before calling it.
+
+    :param time: The time at which to interpolate. It must be finite.
+    :param times: A (N,) ndarray of floats holding the table's times. They must be
+        strictly increasing, and there must be at least two.
+    :param columns: A tuple of (N,) ndarrays of floats, each holding one column of the
+        table.
+    :return: A tuple of floats holding each column's value at the time, in the order of
+        columns.
+    """
+    last = times.shape[0] - 1
+    # Find the left end of the interval, the j with times[j] <= time < times[j + 1],
+    # which is the index numpy's binary search finds.
+    j = int(np.searchsorted(times, time, side="right")) - 1
+    if j < 0:
+        return tuple(float(column[0]) for column in columns)
+    if j >= last:
+        return tuple(float(column[last]) for column in columns)
+    time_j = float(times[j])
+    if time_j == time:
+        return tuple(float(column[j]) for column in columns)
+    time_next = float(times[j + 1])
+    values = []
+    for column in columns:
+        value_j = float(column[j])
+        value_next = float(column[j + 1])
+        slope = (value_next - value_j) / (time_next - time_j)
+        value = slope * (time - time_j) + value_j
+        # numpy retries from the right end of the interval if the result is nan, and
+        # uses the left entry if the two entries are equal.
+        if value != value:
+            value = slope * (time - time_next) + value_next
+            if value != value and value_j == value_next:
+                value = value_j
+        values.append(value)
+    return tuple(values)
+
+
+def _nearest_index(values: np.ndarray, value: float) -> int:
+    """Returns the index of the table entry nearest a value, in a monotonic table.
+
+    It replaces int(np.argmin(np.abs(values - value))) for such a table, and returns the
+    same index, including the first of several equally near entries. It exists because
+    that expression subtracts from every entry, which costs about 6.5 microseconds on a
+    reference table of 22,001 entries, while a FlapDrive with a position lookup reads
+    its reference at every evaluation, tens of thousands of times per run. This searches
+    the sorted table instead. A table that never increases (a motor turning backward) is
+    searched through a reversed view, without a copy.
+
+    It doesn't check its arguments, because it is only called on checked ones: the
+    FlapReference's initialization method validates the table (finite, and at least two
+    entries), and FlapReference.evaluate_at_position only calls it once it has checked
+    that the table is monotonic, and that the value is a finite int or float, which it
+    converts to a float.
+
+    :param values: A (N,) ndarray of floats that never decreases or never increases.
+        There must be at least one.
+    :param value: The value to find the nearest entry to. It must be finite.
+    :return: The index of the nearest entry.
+    """
+    count = int(values.shape[0])
+    if values[0] <= values[count - 1]:
+        return _nearest_index_in_sorted(values, value, take_last=False)
+    # In the reversed view the table never decreases, and argmin's first entry of the
+    # original order is the last one of the view.
+    reversed_index = _nearest_index_in_sorted(values[::-1], value, take_last=True)
+    return count - 1 - reversed_index
+
+
+def _nearest_index_in_sorted(values: np.ndarray, value: float, take_last: bool) -> int:
+    """Returns the index of the table entry nearest a value, in a table that never
+    decreases, taking the first or the last of several equally near entries.
+
+    It exists for _nearest_index, which uses it on the table as it is (taking the first,
+    as argmin does) or on a reversed view of it (taking the last, which is argmin's
+    first in the original order). Its arguments are checked by _nearest_index's caller.
+
+    :param values: A (N,) ndarray of floats that never decreases. There must be at least
+        one.
+    :param value: The value to find the nearest entry to. It must be finite.
+    :param take_last: Whether to take the last of several equally near entries, rather
+        than the first.
+    :return: The index of the nearest entry.
+    """
+    count = int(values.shape[0])
+    # Find the first entry at or above the value. The nearest entry is either it or the
+    # entry just below it.
+    above_index = int(np.searchsorted(values, value, side="left"))
+    if above_index == 0:
+        nearest_index = 0
+    elif above_index == count:
+        nearest_index = count - 1
+    else:
+        below_distance = abs(float(values[above_index - 1]) - value)
+        above_distance = abs(float(values[above_index]) - value)
+        if above_distance < below_distance:
+            nearest_index = above_index
+        else:
+            nearest_index = above_index - 1
+    # Step over any further entries at the same distance (repeated entries, or ones
+    # whose distances round to the same value, including the entry above when it ties
+    # with the one below): back to the first, or forward to the last.
+    nearest_distance = abs(float(values[nearest_index]) - value)
+    step = 1 if take_last else -1
+    while (
+        0 <= nearest_index + step < count
+        and abs(float(values[nearest_index + step]) - value) == nearest_distance
+    ):
+        nearest_index += step
+    return nearest_index
 
 
 def _make_sample_times(duration: float | int, time_step: float | int) -> np.ndarray:
@@ -395,6 +525,12 @@ class Transmission(Protocol):
     trajectory, whatever the powertrain.
 
     FlapTransmission and crank_linkage.CrankLinkage both satisfy this interface.
+
+    A transmission may also have evaluate_angle_jacobian_hessian(q), which returns the
+    tuple (phi, J, H) with bit for bit the values of the three methods above, found
+    together. It isn't part of the interface, so a transmission without it still
+    conforms. A FlapDrive uses it when it is there, because finding the three together
+    can share work, as crank_linkage.CrankLinkage's does.
     """
 
     def evaluate_angle(self, actuator_position: float | int) -> float: ...
@@ -1081,11 +1217,31 @@ class FlapReference:
         # Interpolate each column linearly in time, like the blade element theory code's
         # griddedInterpolant objects motor_pos_interp, motor_velo_interp, and
         # motor_acc_interp.
-        return (
-            float(np.interp(time, self._times, self._positions)),
-            float(np.interp(time, self._times, self._velocities)),
-            float(np.interp(time, self._times, self._accelerations)),
+
+        # Changed for speed: _interpolate_columns gives bit for bit np.interp's values,
+        # with one search of the table for all three columns. The old code didn't check
+        # the time: np.interp returned nan for a nan time, held the end values for an
+        # infinite one, and raised its own errors for anything else. The time is now
+        # checked as _parameter_validation.number_in_range_return_float checks a number,
+        # with the same messages, but inline, because this runs tens of thousands of
+        # times per run. The old code was:
+        # octowrap: off
+        # return (
+        #     float(np.interp(time, self._times, self._positions)),
+        #     float(np.interp(time, self._times, self._velocities)),
+        #     float(np.interp(time, self._times, self._accelerations)),
+        # )
+        # octowrap: on
+        if not isinstance(time, (int, float)):
+            raise TypeError("time must be an int or a float.")
+        if not math.isfinite(time):
+            raise ValueError("time can't be nan, inf, or -inf.")
+        position, velocity, acceleration = _interpolate_columns(
+            float(time),
+            self._times,
+            (self._positions, self._velocities, self._accelerations),
         )
+        return position, velocity, acceleration
 
     def evaluate_at_position(self, position: float | int) -> tuple[float, float]:
         """Returns the desired actuator velocity and acceleration at the table entry
@@ -1105,7 +1261,22 @@ class FlapReference:
         # Take the entry whose position is nearest the actuator's, like the blade
         # element theory code's [~, idx_closest] = min(abs(motor_pos_vec_des -
         # motor_pos)) when use_closest_pos is true.
-        index = int(np.argmin(np.abs(self._positions - position)))
+
+        # Changed for speed: _nearest_index searches the table, whichever way the motor
+        # turns, and returns argmin's index. The old code didn't check the position:
+        # argmin returned the first entry for a nan one and raised numpy's errors for
+        # anything else. The position is now checked as
+        # _parameter_validation.number_in_range_return_float checks a number, with the
+        # same messages, but inline, because this runs tens of thousands of times per
+        # run. The old code was:
+        # octowrap: off
+        # index = int(np.argmin(np.abs(self._positions - position)))
+        # octowrap: on
+        if not isinstance(position, (int, float)):
+            raise TypeError("position must be an int or a float.")
+        if not math.isfinite(position):
+            raise ValueError("position can't be nan, inf, or -inf.")
+        index = _nearest_index(self._positions, float(position))
         return float(self._velocities[index]), float(self._accelerations[index])
 
     @classmethod
@@ -1965,9 +2136,19 @@ class FlapDrive:
 
         # Evaluate the transmission at the actuator's position: the flap angle, J, and H
         # (wing_angle_curr, J_motor, and H_motor in the blade element theory code).
-        jacobian = self._transmission.evaluate_jacobian(position)
-        hessian = self._transmission.evaluate_hessian(position)
-        angle_rad = self._transmission.evaluate_angle(position)
+
+        # Changed for speed: a transmission that can find all three together, such as a
+        # crank_linkage.CrankLinkage, does so, with bit for bit the same values (see
+        # Transmission). The old code always made the three calls below.
+        evaluate_angle_jacobian_hessian = getattr(
+            self._transmission, "evaluate_angle_jacobian_hessian", None
+        )
+        if evaluate_angle_jacobian_hessian is not None:
+            angle_rad, jacobian, hessian = evaluate_angle_jacobian_hessian(position)
+        else:
+            jacobian = self._transmission.evaluate_jacobian(position)
+            hessian = self._transmission.evaluate_hessian(position)
+            angle_rad = self._transmission.evaluate_angle(position)
 
         feedforward_inertial_force = 0.0
         feedforward_damping_force = 0.0

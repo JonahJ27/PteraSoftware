@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 import pterasoftware as ps
+from pterasoftware import motor_saturation
 
 # These are the MAD M13 EEE KV90 (motor 9) lines at 48 V, built the same way as in the
 # blade element theory motor limit simulation.
@@ -196,6 +197,178 @@ class TestMotorSaturationController(unittest.TestCase):
         self.assertFalse(hasattr(self.controller, "__dict__"))
         with self.assertRaises(AttributeError):
             setattr(self.controller, "new_attribute", 1.0)
+
+
+def _assert_same_float(
+    test_case: unittest.TestCase, actual: float, expected: float
+) -> None:
+    """Asserts that two floats are bit for bit equal, or are both nan.
+
+    :param test_case: The TestCase making the assertion.
+    :param actual: The value to check.
+    :param expected: The value it must equal.
+    :return: None
+    """
+    if np.isnan(expected):
+        test_case.assertTrue(np.isnan(actual))
+        return
+    test_case.assertEqual(
+        np.float64(actual).tobytes(),
+        np.float64(expected).tobytes(),
+        f"{actual!r} != {expected!r}",
+    )
+
+
+class TestMotorSaturationControllerMatchesNpPolyval(unittest.TestCase):
+    """This is a class with functions to test that _polyval and the limits found once in
+    the initialization method give bit for bit the values of the np.polyval code they
+    replace."""
+
+    def test_polyval_matches_np_polyval(self) -> None:
+        """Test _polyval against np.polyval for polynomials of several degrees, at
+        random values, ints, signed zeros, huge values, and infinities."""
+        rng = np.random.default_rng(0)
+        values = np.concatenate(
+            [
+                rng.normal(scale=1000.0, size=2000),
+                rng.normal(scale=1e-3, size=200),
+                (0.0, -0.0, 1.0, -1.0, 1e300, -1e300, np.inf, -np.inf),
+            ]
+        )
+        for degree in (0, 1, 2, 5):
+            coefficients = rng.normal(scale=10.0, size=degree + 1)
+            coefficient_values = tuple(float(value) for value in coefficients)
+            for value in values:
+                with self.subTest(degree=degree, value=value):
+                    with np.errstate(all="ignore"):
+                        expected = float(np.polyval(coefficients, value))
+                    _assert_same_float(
+                        self,
+                        motor_saturation._polyval(coefficient_values, float(value)),
+                        expected,
+                    )
+
+    def test_limits_match_np_polyval(self) -> None:
+        """Test every limit against the np.polyval formula it replaces, with and without
+        a brake current limit, at float and int velocities and currents."""
+        rng = np.random.default_rng(1)
+        velocities = list(rng.uniform(-600.0, 600.0, size=500)) + [0, 3, -450, 0.0]
+        currents = list(rng.uniform(-200.0, 2000.0, size=200)) + [0, 30, 150]
+        for brake in (1000.0, np.inf):
+            controller = _make_controller(esc_max_brake_current=brake)
+            speed = controller.speed_torque_coefficients
+            current = controller.torque_current_coefficients
+            for velocity in velocities:
+                with self.subTest(brake=brake, velocity=velocity):
+                    old_speed_limit = max(0.0, float(np.polyval(speed, abs(velocity))))
+                    _assert_same_float(
+                        self,
+                        controller.max_torque_from_speed(velocity),
+                        old_speed_limit,
+                    )
+                    for motor_locked in (False, True):
+                        for esc_locked in (False, True):
+                            esc_current = (
+                                controller.esc_continuous_current
+                                if esc_locked
+                                else controller.esc_peak_current
+                            )
+                            _assert_same_float(
+                                self,
+                                controller.max_torque_possible(
+                                    velocity, motor_locked, esc_locked
+                                ),
+                                min(
+                                    old_speed_limit,
+                                    (
+                                        controller.motor_continuous_torque
+                                        if motor_locked
+                                        else float(np.inf)
+                                    ),
+                                    float(np.polyval(current, esc_current)),
+                                    controller.gearbox_torque_limit(),
+                                ),
+                            )
+                    _assert_same_float(
+                        self,
+                        controller.max_torque_continuous(velocity),
+                        min(
+                            old_speed_limit,
+                            controller.motor_continuous_torque,
+                            float(
+                                np.polyval(current, controller.esc_continuous_current)
+                            ),
+                            controller.gearbox_torque_limit(),
+                        ),
+                    )
+            for value in currents:
+                with self.subTest(brake=brake, current=value):
+                    _assert_same_float(
+                        self,
+                        controller.torque_at_current(value),
+                        float(np.polyval(current, value)),
+                    )
+            expected_brake = (
+                float(np.inf) if np.isinf(brake) else float(np.polyval(current, brake))
+            )
+            _assert_same_float(self, controller.max_brake_torque(), expected_brake)
+
+    def test_rejects_invalid_values(self) -> None:
+        """Test that torque_at_current and max_torque_from_speed raise a TypeError for a
+        value that isn't an int or a float and a ValueError for nan, inf, or -inf, with
+        the messages of _parameter_validation.number_in_range_return_float, and accept
+        ints, bools, and np.float64s."""
+        controller = _make_controller()
+        for name, limit in (
+            ("current", controller.torque_at_current),
+            ("motor_velocity", controller.max_torque_from_speed),
+        ):
+            invalid_types: tuple[Any, ...] = (
+                "1.5",
+                None,
+                [2.0],
+                np.array([3.0]),
+                np.bool_(True),
+                2.0 + 0.0j,
+                np.float32(3.5),
+                np.int64(7),
+            )
+            for value in invalid_types:
+                with self.subTest(name=name, value=repr(value)):
+                    with self.assertRaisesRegex(
+                        TypeError, f"^{name} must be an int or a float.$"
+                    ):
+                        limit(value)
+            for value in (np.nan, np.inf, -np.inf):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(
+                        ValueError, f"^{name} can't be nan, inf, or -inf.$"
+                    ):
+                        limit(value)
+            for value in (0, True, np.float64(3.5), 10**20):
+                with self.subTest(name=name, value=repr(value)):
+                    self.assertIsInstance(limit(value), float)
+
+    def test_clip_torque_applies_the_same_current_limits(self) -> None:
+        """Test that clip_torque clips to bit for bit the np.polyval torques at the
+        motor controller's peak current and at the brake current when they bind."""
+        controller = _make_controller(gearbox_max_torque=1e6)
+        current = controller.torque_current_coefficients
+        torque, info = controller.clip_torque(1000.0, 0.0, 0.0)
+        # The torque-speed curve cuts the command first, and the current limit last.
+        self.assertEqual(info.saturation_active[-1], "esc_peak_current")
+        _assert_same_float(
+            self, torque, float(np.polyval(current, controller.esc_peak_current))
+        )
+
+        controller = _make_controller(gearbox_max_torque=1e6, esc_peak_current=2000.0)
+        torque, info = controller.clip_torque(-1000.0, 1.0, 0.0)
+        self.assertEqual(info.saturation_active, ("max_brake_current",))
+        _assert_same_float(
+            self,
+            torque,
+            -float(np.polyval(current, controller.esc_max_brake_current)),
+        )
 
 
 if __name__ == "__main__":

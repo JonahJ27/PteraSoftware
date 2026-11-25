@@ -391,6 +391,37 @@ class CrankLinkage:
             / self._gear_ratio**2
         )
 
+    def evaluate_angle_jacobian_hessian(
+        self, actuator_position: float | int
+    ) -> tuple[float, float, float]:
+        """Returns the flap angle and its first and second derivatives with respect to
+        the motor angle, at a motor angle.
+
+        It replaces calling evaluate_angle, evaluate_jacobian, and evaluate_hessian at
+        the same motor angle, and returns bit for bit their values. It exists because a
+        FlapDrive needs all three at every evaluation, tens of thousands of times per
+        run, and each of the three finds the same forward kinematics terms
+        (_forward_terms), so finding them once saves two thirds of that work. It isn't a
+        member of the flap_drive.Transmission protocol: a FlapDrive uses it when its
+        transmission has it, and calls the three protocol members otherwise.
+
+        :param actuator_position: The motor angle, in radians.
+        :return: A tuple of the flap angle (the x component of the Wing's
+            angles_Gs_to_Wn_ixyz), in radians, the Jacobian, which is unitless, and the
+            Hessian, in per radian.
+        """
+        # These are the same steps as evaluate_angle, evaluate_jacobian, and
+        # evaluate_hessian, which go through wing_angle, wing_angle_jacobian, and
+        # wing_angle_hessian, with the shared terms found once.
+        crank_angle = float(actuator_position) / self._gear_ratio
+        with np.errstate(invalid="ignore", divide="ignore"):
+            terms = self._forward_terms(crank_angle)
+        return (
+            float(self._wing_angle_from_terms(terms)),
+            float(self._wing_angle_jacobian_from_terms(terms)) / self._gear_ratio,
+            float(self._wing_angle_hessian_from_terms(terms)) / self._gear_ratio**2,
+        )
+
     def convert_trajectory(
         self,
         times: np.ndarray,
@@ -582,9 +613,24 @@ class CrankLinkage:
             where the linkage can't assemble.
         """
         with np.errstate(invalid="ignore", divide="ignore"):
-            _, _, _, ang_GcSo_B_y_axis_rad, ang_GcSoVec_wing_crank_rad, _, _ = (
-                self._forward_terms(crank_angle)
-            )
+            terms = self._forward_terms(crank_angle)
+        # Changed for speed: the rest of this method moved, unchanged, into
+        # _wing_angle_from_terms, so that evaluate_angle_jacobian_hessian can share one
+        # _forward_terms evaluation between the angle, the Jacobian, and the Hessian.
+        return self._wing_angle_from_terms(terms)
+
+    def _wing_angle_from_terms(self, terms: tuple[np.ndarray, ...]) -> np.ndarray:
+        """Returns the wing angle from the forward kinematics' shared terms.
+
+        It is the second half of wing_angle, moved here unchanged. It exists so that
+        evaluate_angle_jacobian_hessian can find the angle, the Jacobian, and the
+        Hessian from one _forward_terms evaluation instead of three.
+
+        :param terms: The tuple that _forward_terms returns.
+        :return: The wing angle, in radians, with the shape of the crank angle the terms
+            were found at. It is nan where the linkage can't assemble.
+        """
+        _, _, _, ang_GcSo_B_y_axis_rad, ang_GcSoVec_wing_crank_rad, _, _ = terms
 
         # The angle of the wing crank with respect to the y axis is pi -
         # (ang_GcSoVec_wing_crank - ang_GcSo_B_y_axis).
@@ -607,17 +653,36 @@ class CrankLinkage:
         :param crank_angle: The crank angle, in radians. Can be a float or a ndarray.
         :return: The derivative, with the shape of crank_angle. It is unitless.
         """
-        gearbox_crank_length = self._gearbox_crank_length
         with np.errstate(invalid="ignore", divide="ignore"):
-            (
-                GcSoDist_squared,
-                p_GoSo_along_crank,
-                p_GoSo_across_crank,
-                _,
-                _,
-                h,
-                _,
-            ) = self._forward_terms(crank_angle)
+            terms = self._forward_terms(crank_angle)
+        # Changed for speed: the rest of this method moved, unchanged, into
+        # _wing_angle_jacobian_from_terms (see wing_angle).
+        return self._wing_angle_jacobian_from_terms(terms)
+
+    def _wing_angle_jacobian_from_terms(
+        self, terms: tuple[np.ndarray, ...]
+    ) -> np.ndarray:
+        """Returns the derivative of the wing angle with respect to the crank angle,
+        from the forward kinematics' shared terms.
+
+        It is the second half of wing_angle_jacobian, moved here unchanged. It exists so
+        that evaluate_angle_jacobian_hessian can find the angle, the Jacobian, and the
+        Hessian from one _forward_terms evaluation instead of three.
+
+        :param terms: The tuple that _forward_terms returns.
+        :return: The derivative, with the shape of the crank angle the terms were found
+            at. It is unitless.
+        """
+        gearbox_crank_length = self._gearbox_crank_length
+        (
+            GcSoDist_squared,
+            p_GoSo_along_crank,
+            p_GoSo_across_crank,
+            _,
+            _,
+            h,
+            _,
+        ) = terms
 
         # The wing angle is pi - ang_GcSoVec_wing_crank + ang_GcSo_B_y_axis minus a
         # constant, so its derivative is the difference of the two angles' derivatives.
@@ -646,17 +711,36 @@ class CrankLinkage:
         :param crank_angle: The crank angle, in radians. Can be a float or a ndarray.
         :return: The second derivative, with the shape of crank_angle. It is unitless.
         """
-        gearbox_crank_length = self._gearbox_crank_length
         with np.errstate(invalid="ignore", divide="ignore"):
-            (
-                GcSoDist_squared,
-                p_GoSo_along_crank,
-                p_GoSo_across_crank,
-                _,
-                _,
-                h,
-                h_derivative,
-            ) = self._forward_terms(crank_angle)
+            terms = self._forward_terms(crank_angle)
+        # Changed for speed: the rest of this method moved, unchanged, into
+        # _wing_angle_hessian_from_terms (see wing_angle).
+        return self._wing_angle_hessian_from_terms(terms)
+
+    def _wing_angle_hessian_from_terms(
+        self, terms: tuple[np.ndarray, ...]
+    ) -> np.ndarray:
+        """Returns the second derivative of the wing angle with respect to the crank
+        angle, from the forward kinematics' shared terms.
+
+        It is the second half of wing_angle_hessian, moved here unchanged. It exists so
+        that evaluate_angle_jacobian_hessian can find the angle, the Jacobian, and the
+        Hessian from one _forward_terms evaluation instead of three.
+
+        :param terms: The tuple that _forward_terms returns.
+        :return: The second derivative, with the shape of the crank angle the terms were
+            found at. It is unitless.
+        """
+        gearbox_crank_length = self._gearbox_crank_length
+        (
+            GcSoDist_squared,
+            p_GoSo_along_crank,
+            p_GoSo_across_crank,
+            _,
+            _,
+            h,
+            h_derivative,
+        ) = terms
 
         # The second derivative is the difference of the two angles' second derivatives.
         # This matches the blade element theory code's calcCrankshaftHessFK, which

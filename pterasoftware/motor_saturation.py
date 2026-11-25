@@ -6,11 +6,38 @@ SCRIPT VALIDATED CORRECT
 
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 import numpy as np
 
 from . import _parameter_validation
+
+
+def _polyval(coefficients: tuple[float, ...], x: float) -> float:
+    """Evaluates a polynomial at one value by Horner's method.
+
+    It replaces np.polyval for a single value. It exists because np.polyval converts its
+    input to an array and runs its loop on numpy scalars, which costs about 3.4
+    microseconds per call, while a FlapDrive's actuator evaluates the motor's limits
+    several times per drive evaluation, tens of thousands of times per run. This loop
+    does the same multiplications and additions in the same order, on floats, so it
+    gives bit for bit np.polyval's result.
+
+    It doesn't check its arguments, because it is only called on checked ones: the
+    coefficients are validated by the MotorSaturationController's initialization method
+    (a non empty 1D array of finite floats), and the callers check that the value is a
+    finite int or float, and convert it to a float, before calling it.
+
+    :param coefficients: A tuple of floats holding the polynomial coefficients, highest
+        power first. It must have at least one value.
+    :param x: The value at which to evaluate the polynomial. It must be finite.
+    :return: The polynomial's value.
+    """
+    result = 0.0
+    for coefficient in coefficients:
+        result = result * x + coefficient
+    return result
 
 
 class SaturationInfo(NamedTuple):
@@ -123,6 +150,11 @@ class MotorSaturationController:
         "_motor_bucket",
         "_esc_bucket",
         "_last_info",
+        "_speed_torque_coefficient_values",
+        "_torque_current_coefficient_values",
+        "_esc_peak_current_torque",
+        "_esc_continuous_current_torque",
+        "_max_brake_torque",
     )
 
     def __init__(
@@ -139,7 +171,6 @@ class MotorSaturationController:
         esc_max_brake_current: float | int = np.inf,
     ) -> None:
         """The initialization method.
-        
 
         :param speed_torque_coefficients: An array-like object of numbers (int or float)
             holding the polynomial coefficients, highest power first, of the motor's
@@ -226,6 +257,26 @@ class MotorSaturationController:
         self._esc_bucket = _LeakyBucket()
         self._last_info: SaturationInfo | None = None
 
+        # Changed for speed: keep each polynomial's coefficients as a tuple of floats
+        # for _polyval, and find the torques at the three fixed currents (the motor
+        # controller's peak and continuous currents and the brake current) once here,
+        # rather than at every call to clip_torque. Each is the value torque_at_current
+        # returns, computed the same way, so the limits are bit for bit the same.
+        self._speed_torque_coefficient_values = tuple(
+            float(coefficient) for coefficient in self._speed_torque_coefficients
+        )
+        self._torque_current_coefficient_values = tuple(
+            float(coefficient) for coefficient in self._torque_current_coefficients
+        )
+        self._esc_peak_current_torque = self.torque_at_current(self._esc_peak_current)
+        self._esc_continuous_current_torque = self.torque_at_current(
+            self._esc_continuous_current
+        )
+        if np.isinf(self._esc_max_brake_current):
+            self._max_brake_torque = float(np.inf)
+        else:
+            self._max_brake_torque = self.torque_at_current(self._esc_max_brake_current)
+
     @staticmethod
     def _validate_coefficients(
         value: np.ndarray | list[float] | tuple[float, ...], name: str
@@ -306,9 +357,26 @@ class MotorSaturationController:
         :param motor_velocity: The motor's velocity (rad/s). Its sign is ignored.
         :return: The largest driving torque (N*m), which is never below 0.0.
         """
+        # Changed for speed: _polyval gives bit for bit np.polyval's value at a fraction
+        # of its cost. The old code didn't check the velocity: a nan one gave a limit of
+        # 0.0, and np.polyval raised its own errors for anything that isn't a number.
+        # The velocity is now checked as
+        # _parameter_validation.number_in_range_return_float checks a number, with the
+        # same messages, but inline, because a FlapDrive's actuator calls this tens of
+        # thousands of times per run. The old code was:
+        # octowrap: off
+        # return max(
+        #     0.0,
+        #     float(np.polyval(self._speed_torque_coefficients, abs(motor_velocity))),
+        # )
+        # octowrap: on
+        if not isinstance(motor_velocity, (int, float)):
+            raise TypeError("motor_velocity must be an int or a float.")
+        if not math.isfinite(motor_velocity):
+            raise ValueError("motor_velocity can't be nan, inf, or -inf.")
         return max(
             0.0,
-            float(np.polyval(self._speed_torque_coefficients, abs(motor_velocity))),
+            _polyval(self._speed_torque_coefficient_values, float(abs(motor_velocity))),
         )
 
     def torque_at_current(self, current: float | int) -> float:
@@ -319,7 +387,20 @@ class MotorSaturationController:
         :param current: The current (A).
         :return: The torque (N*m).
         """
-        return float(np.polyval(self._torque_current_coefficients, current))
+        # Changed for speed: _polyval gives bit for bit np.polyval's value at a fraction
+        # of its cost. The old code didn't check the current: np.polyval returned nan
+        # for a nan one and raised its own errors for anything that isn't a number. The
+        # current is now checked as _parameter_validation.number_in_range_return_float
+        # checks a number, with the same messages, but inline, because a FlapDrive's
+        # actuator can call this tens of thousands of times per run. The old code was:
+        # octowrap: off
+        # return float(np.polyval(self._torque_current_coefficients, current))
+        # octowrap: on
+        if not isinstance(current, (int, float)):
+            raise TypeError("current must be an int or a float.")
+        if not math.isfinite(current):
+            raise ValueError("current can't be nan, inf, or -inf.")
+        return _polyval(self._torque_current_coefficient_values, float(current))
 
     def max_brake_torque(self) -> float:
         """Returns the largest braking torque that the brake current allows.
@@ -328,9 +409,14 @@ class MotorSaturationController:
 
         :return: The torque (N*m), or np.inf when there is no brake current limit.
         """
-        if np.isinf(self._esc_max_brake_current):
-            return float(np.inf)
-        return self.torque_at_current(self._esc_max_brake_current)
+        # Changed for speed: the brake current is fixed, so the initialization method
+        # finds its torque once, the same way. The old code was:
+        # octowrap: off
+        # if np.isinf(self._esc_max_brake_current):
+        #     return float(np.inf)
+        # return self.torque_at_current(self._esc_max_brake_current)
+        # octowrap: on
+        return self._max_brake_torque
 
     def gearbox_torque_limit(self) -> float:
         """Returns the gearbox's torque limit at the motor.
@@ -356,13 +442,28 @@ class MotorSaturationController:
         :return: The smallest of the active limits (N*m).
         """
         motor_limit = self._motor_continuous_torque if motor_locked else float(np.inf)
-        esc_current = (
-            self._esc_continuous_current if esc_locked else self._esc_peak_current
+        # Changed for speed: the torques at the motor controller's two currents are
+        # found once, in the initialization method. The old code was:
+        # octowrap: off
+        # esc_current = (
+        #     self._esc_continuous_current if esc_locked else self._esc_peak_current
+        # )
+        # return min(
+        #     self.max_torque_from_speed(motor_velocity),
+        #     motor_limit,
+        #     self.torque_at_current(esc_current),
+        #     self.gearbox_torque_limit(),
+        # )
+        # octowrap: on
+        esc_torque = (
+            self._esc_continuous_current_torque
+            if esc_locked
+            else self._esc_peak_current_torque
         )
         return min(
             self.max_torque_from_speed(motor_velocity),
             motor_limit,
-            self.torque_at_current(esc_current),
+            esc_torque,
             self.gearbox_torque_limit(),
         )
 
@@ -374,10 +475,13 @@ class MotorSaturationController:
         :param motor_velocity: The motor's velocity (rad/s).
         :return: The smallest of the continuous limits (N*m).
         """
+        # Changed for speed: the torque at the continuous current is found once, in the
+        # initialization method. The old code passed
+        # self.torque_at_current(self._esc_continuous_current) in its place.
         return min(
             self.max_torque_from_speed(motor_velocity),
             self._motor_continuous_torque,
-            self.torque_at_current(self._esc_continuous_current),
+            self._esc_continuous_current_torque,
             self.gearbox_torque_limit(),
         )
 
@@ -553,7 +657,9 @@ class MotorSaturationController:
         # much regenerated current the drive can absorb. With no brake current limit,
         # max_brake_torque returns inf and this never binds.
         if is_braking:
-            brake_limit = self.max_brake_torque()
+            # Changed for speed: the brake torque is found once, in the initialization
+            # method. The old code called self.max_brake_torque().
+            brake_limit = self._max_brake_torque
             if abs(torque) > brake_limit:
                 active.append("max_brake_current")
                 limits.append(brake_limit)
@@ -580,8 +686,18 @@ class MotorSaturationController:
         # allowance runs out, and to its peak current otherwise. The current is
         # converted to a torque through the motor's torque-current polynomial. This
         # applies to driving and braking torque alike.
-        esc_limit = self.torque_at_current(
-            self._esc_continuous_current if esc_locked else self._esc_peak_current
+
+        # Changed for speed: the torques at the two currents are found once, in the
+        # initialization method. The old code was:
+        # octowrap: off
+        # esc_limit = self.torque_at_current(
+        #     self._esc_continuous_current if esc_locked else self._esc_peak_current
+        # )
+        # octowrap: on
+        esc_limit = (
+            self._esc_continuous_current_torque
+            if esc_locked
+            else self._esc_peak_current_torque
         )
         if abs(torque) > esc_limit:
             # Name the current that actually bound, so a peak limit and a locked
@@ -605,9 +721,12 @@ class MotorSaturationController:
             motor_level,
             motor_time,
         )
+        # Changed for speed: the torque at the continuous current is found once, in the
+        # initialization method. The old code compared abs(torque) with
+        # self.torque_at_current(self._esc_continuous_current).
         self._set_regime(
             self._esc_bucket,
-            abs(torque) > self.torque_at_current(self._esc_continuous_current),
+            abs(torque) > self._esc_continuous_current_torque,
             esc_level,
             esc_time,
         )
