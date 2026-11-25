@@ -263,5 +263,104 @@ class TestValidateAirplaneStepParameters(unittest.TestCase):
                 self.assertEqual(str(context.exception), str(expected))
 
 
+class TestWingStepParametersKey(unittest.TestCase):
+    """This is a class with functions to test wing_step_parameters_key, the exact key of
+    the array path's mesh cache."""
+
+    def setUp(self) -> None:
+        """Set up a WingStepParameters with a zero in each of its arrays."""
+        self.parameters = _step_parameters.WingStepParameters(
+            Ler_Gs_Cgs=np.array([0.0, 0.5, -0.1]),
+            angles_Gs_to_Wn_ixyz=np.array([12.5, 0.0, 3.0]),
+            stackLp_Wcsp_Lpp=np.array([[0.0, 0.0, 0.0], [0.1, 0.4, 0.02]]),
+            stackAngles_Wcsp_to_Wcs_ixyz=np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]]),
+        )
+
+    def _changed(self, field: str, value: np.ndarray) -> Any:
+        """Returns the WingStepParameters with one field replaced.
+
+        :param field: The field's name.
+        :param value: Its new value.
+        :return: The WingStepParameters.
+        """
+        return self.parameters._replace(**{field: value})
+
+    def test_equal_values_give_equal_keys(self) -> None:
+        """Test that copies of the same values give the same key, and that the key is
+        hashable."""
+        copied = _step_parameters.WingStepParameters(
+            *(np.array(value, copy=True) for value in self.parameters)
+        )
+        key = _step_parameters.wing_step_parameters_key(self.parameters)
+        self.assertEqual(_step_parameters.wing_step_parameters_key(copied), key)
+        self.assertEqual(hash(key), hash(key))
+
+    def test_any_change_gives_a_different_key(self) -> None:
+        """Test that one unit in the last place in any element, the sign of a zero, a
+        nan, and a different shape each change the key."""
+        key = _step_parameters.wing_step_parameters_key(self.parameters)
+        for field in self.parameters._fields:
+            value = getattr(self.parameters, field)
+            for index in range(value.size):
+                for label, new_element in (
+                    ("nudged", np.nextafter(value.flat[index], np.inf)),
+                    ("negated", -value.flat[index]),
+                ):
+                    if label == "negated" and value.flat[index] != 0.0:
+                        continue
+                    changed = np.array(value, copy=True)
+                    changed.flat[index] = new_element
+                    with self.subTest(field=field, index=index, change=label):
+                        self.assertNotEqual(
+                            _step_parameters.wing_step_parameters_key(
+                                self._changed(field, changed)
+                            ),
+                            key,
+                        )
+            with self.subTest(field=field, change="shape"):
+                self.assertNotEqual(
+                    _step_parameters.wing_step_parameters_key(
+                        self._changed(field, value.reshape(1, -1))
+                    ),
+                    key,
+                )
+
+    def test_nan_matches_only_the_same_nan(self) -> None:
+        """Test that a nan gives the same key as the same nan (which == wouldn't), and
+        a different key from a nan with another payload."""
+        with_nan = np.array(self.parameters.Ler_Gs_Cgs, copy=True)
+        with_nan[0] = np.nan
+        other_nan = np.array(with_nan, copy=True)
+        other_nan.view(np.uint64)[0] ^= 1
+        self.assertTrue(np.isnan(other_nan[0]))
+        key = _step_parameters.wing_step_parameters_key(
+            self._changed("Ler_Gs_Cgs", with_nan)
+        )
+        self.assertEqual(
+            _step_parameters.wing_step_parameters_key(
+                self._changed("Ler_Gs_Cgs", np.array(with_nan, copy=True))
+            ),
+            key,
+        )
+        self.assertNotEqual(
+            _step_parameters.wing_step_parameters_key(
+                self._changed("Ler_Gs_Cgs", other_nan)
+            ),
+            key,
+        )
+
+    def test_changing_an_array_later_does_not_change_the_key(self) -> None:
+        """Test that the key copies the values, so writing into an array after the key
+        is made doesn't change it."""
+        writable = np.array(self.parameters.angles_Gs_to_Wn_ixyz, copy=True)
+        parameters = self._changed("angles_Gs_to_Wn_ixyz", writable)
+        key = _step_parameters.wing_step_parameters_key(parameters)
+        writable[0] += 1.0
+        self.assertNotEqual(_step_parameters.wing_step_parameters_key(parameters), key)
+        self.assertEqual(
+            key, _step_parameters.wing_step_parameters_key(self.parameters)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

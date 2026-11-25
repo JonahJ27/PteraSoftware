@@ -66,6 +66,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_force_method",
         "_use_arrays",
         "_mesh_plans",
+        "_wing_mesh_cache",
         "_layout_plan",
         "_step_geometries",
         "_current_step_loads",
@@ -192,6 +193,23 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # they are needed.
         self._mesh_plans: tuple[_mesh_arrays.MeshPlan, ...] | None = None
         self._layout_plan: _step_geometry.LayoutPlan | None = None
+
+        # Changed for speed: the array path's mesh cache, which holds each Wing's last
+        # step parameters' key (_step_parameters.wing_step_parameters_key) and WingMesh,
+        # in global Wing order, so that a Wing meshed again with bit for bit the same
+        # parameters reuses its WingMesh (see _wing_meshes_from_parameters). Like the
+        # plans, it is run scoped: a list with one None per Wing at the start of a run
+        # with use_arrays=True, and None otherwise.
+        self._wing_mesh_cache: (
+            list[
+                tuple[
+                    tuple[tuple[tuple[int, ...], str, bytes], ...],
+                    _mesh_arrays.WingMesh,
+                ]
+                | None
+            ]
+            | None
+        ) = None
 
         # The array path's step geometries, keyed by time step. Only the most recent
         # three are kept (the previous, current, and next time steps'), since a time
@@ -565,6 +583,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 for airplane in first_airplanes
                 for wing in airplane.wings
             )
+            self._wing_mesh_cache = [None] * len(self._mesh_plans)
             self._layout_plan = _step_geometry.build_layout_plan(first_airplanes)
             self._step_geometries = {}
             self._wake_grids = {}
@@ -722,6 +741,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         # The array path's plans are only needed during the run.
         self._mesh_plans = None
+        self._wing_mesh_cache = None
         self._layout_plan = None
         self._step_geometries = None
         self._current_step_loads = None
@@ -4052,16 +4072,42 @@ class UnsteadyRingVortexLatticeMethodSolver:
             units are in meters.
         """
         assert self._mesh_plans is not None
+        assert self._wing_mesh_cache is not None
         wing_meshes: list[_mesh_arrays.WingMesh] = []
         wingsCg_GP1_CgP1: list[np.ndarray] = []
         for airplane_parameters in airplanes_parameters:
             _step_parameters.validate_airplane_step_parameters(airplane_parameters)
             for wing_parameters in airplane_parameters.wings:
-                wing_meshes.append(
-                    _mesh_arrays.mesh_wing_arrays(
-                        self._mesh_plans[len(wing_meshes)], wing_parameters
+                wing_index = len(wing_meshes)
+                # Changed for speed: a Wing whose step parameters are bit for bit the
+                # same as at its last meshing reuses that WingMesh, which is read only
+                # and is exactly what meshing them again would give. Within a free
+                # flight time step, the coupling trials mesh every Wing again with the
+                # same parameters (its deformation and flap angle advance once per time
+                # step, before the trials, and its mesh is in the first Airplane's
+                # geometry axes, so the trial's body state doesn't change it), which was
+                # about 85% of the meshings on the FAAV example. The parameters were
+                # validated just above, as before. Only mesh_wing_arrays' own checks are
+                # skipped, which values that already passed them can't fail. With
+                # strongly coupled wings, whose angles change within the trials, every
+                # meshing would be new and this saves nothing. The old code was:
+                # octowrap: off
+                # wing_meshes.append(
+                #     _mesh_arrays.mesh_wing_arrays(
+                #         self._mesh_plans[len(wing_meshes)], wing_parameters
+                #     )
+                # )
+                # octowrap: on
+                key = _step_parameters.wing_step_parameters_key(wing_parameters)
+                cached = self._wing_mesh_cache[wing_index]
+                if cached is not None and cached[0] == key:
+                    wing_mesh = cached[1]
+                else:
+                    wing_mesh = _mesh_arrays.mesh_wing_arrays(
+                        self._mesh_plans[wing_index], wing_parameters
                     )
-                )
+                    self._wing_mesh_cache[wing_index] = (key, wing_mesh)
+                wing_meshes.append(wing_mesh)
                 wingsCg_GP1_CgP1.append(airplane_parameters.Cg_GP1_CgP1)
         return wing_meshes, wingsCg_GP1_CgP1
 

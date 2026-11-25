@@ -155,6 +155,26 @@ def make_read_only(array: np.ndarray) -> np.ndarray:
     return array
 
 
+def wing_step_parameters_key(
+    parameters: WingStepParameters,
+) -> tuple[tuple[tuple[int, ...], str, bytes], ...]:
+    """Returns a key that two WingStepParameters share only if their values are bit for
+    bit the same.
+
+    It exists for the array path's mesh cache, which reuses a Wing's last mesh when its
+    step parameters haven't changed, as they don't across the coupling trials within a
+    free flight time step. Comparing each array's shape, dtype, and bytes is exact:
+    unlike ==, it tells -0.0 from 0.0, and nan only matches the same nan, so a reused
+    mesh is always the one these values would give. The key holds a copy of the bytes,
+    so changing an array afterwards can't change the key.
+
+    :param parameters: The WingStepParameters.
+    :return: A tuple with, for each of its arrays in order, a tuple of the array's
+        shape, its dtype's string, and its bytes.
+    """
+    return tuple((value.shape, value.dtype.str, value.tobytes()) for value in parameters)
+
+
 def validate_wing_step_parameters(parameters: WingStepParameters) -> None:
     """Checks a Wing's values at one time step the way building its WingCrossSections
     and Wing on the object path checks them, and raises the same error, with the same

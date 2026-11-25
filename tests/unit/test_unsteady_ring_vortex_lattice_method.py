@@ -730,13 +730,14 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingMeshesFromParameters(
         before it is meshed), so it is tested directly.
         """
         solver = solver_fixtures.make_unsteady_ring_solver_fixture()
-        # The run builds the mesh plans from the first time step's Wings and clears them
-        # when it ends, so they are built here the same way.
+        # The run builds the mesh plans from the first time step's Wings and an empty
+        # mesh cache, and clears them when it ends, so they are built here the same way.
         solver._mesh_plans = tuple(
             _mesh_arrays.build_mesh_plan(wing)
             for airplane in solver.steady_problems[0].airplanes
             for wing in airplane.wings
         )
+        solver._wing_mesh_cache = [None] * len(solver._mesh_plans)
         airplane_movement: Any = solver.unsteady_problem.movement.airplane_movements[0]
         parameters = airplane_movement._generate_airplane_parameters_at_time_step(
             0, solver.delta_time
@@ -762,6 +763,109 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingMeshesFromParameters(
                 with self.assertRaises(ValueError) as context:
                     solver._wing_meshes_from_parameters([bad_parameters])
                 self.assertEqual(str(context.exception), str(expected.exception))
+
+
+class TestUnsteadyRingVortexLatticeMethodSolverWingMeshCache(unittest.TestCase):
+    """This is a class with functions to test the array path's mesh cache: a Wing
+    meshed again with bit for bit the same step parameters reuses its WingMesh, and any
+    change meshes it again."""
+
+    def setUp(self) -> None:
+        """Set up a solver with its run scoped mesh plans and an empty mesh cache, as a
+        run with use_arrays=True builds them, and its first time step's parameters."""
+        self.solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        self.solver._mesh_plans = tuple(
+            _mesh_arrays.build_mesh_plan(wing)
+            for airplane in self.solver.steady_problems[0].airplanes
+            for wing in airplane.wings
+        )
+        self.solver._wing_mesh_cache = [None] * len(self.solver._mesh_plans)
+        airplane_movement: Any = (
+            self.solver.unsteady_problem.movement.airplane_movements[0]
+        )
+        self.parameters = airplane_movement._generate_airplane_parameters_at_time_step(
+            0, self.solver.delta_time
+        )
+
+    def _assert_same_mesh(
+        self, actual: _mesh_arrays.WingMesh, expected: _mesh_arrays.WingMesh
+    ) -> None:
+        """Asserts that two WingMeshes hold bit for bit the same values.
+
+        :param actual: The WingMesh to check.
+        :param expected: The WingMesh it must equal.
+        :return: None
+        """
+        for name, actual_value, expected_value in zip(
+            expected._fields, actual, expected
+        ):
+            with self.subTest(field=name):
+                self.assertEqual(
+                    np.asarray(actual_value).tobytes(),
+                    np.asarray(expected_value).tobytes(),
+                )
+
+    def test_same_parameters_reuse_each_wing_mesh(self) -> None:
+        """Test that meshing the same parameters again returns each Wing's same
+        WingMesh, which equals meshing them anew, and that each Wing keeps its own
+        entry."""
+        first_meshes, _ = self.solver._wing_meshes_from_parameters([self.parameters])
+        assert self.solver._wing_mesh_cache is not None
+        self.assertEqual(len(self.solver._wing_mesh_cache), len(first_meshes))
+        for wing_index, wing_mesh in enumerate(first_meshes):
+            entry = self.solver._wing_mesh_cache[wing_index]
+            assert entry is not None
+            self.assertIs(entry[1], wing_mesh)
+
+        second_meshes, _ = self.solver._wing_meshes_from_parameters([self.parameters])
+        for wing_index, (first, second) in enumerate(zip(first_meshes, second_meshes)):
+            self.assertIs(second, first)
+            self._assert_same_mesh(
+                second,
+                _mesh_arrays.mesh_wing_arrays(
+                    self.solver._mesh_plans[wing_index],  # type: ignore[index]
+                    self.parameters.wings[wing_index],
+                ),
+            )
+
+    def test_changed_parameters_mesh_again(self) -> None:
+        """Test that a change to any of a Wing's step parameters, as small as one unit
+        in the last place or the sign of a zero, meshes the Wing again, giving what
+        meshing the changed parameters anew gives."""
+        self.solver._wing_meshes_from_parameters([self.parameters])
+        wing_parameters = self.parameters.wings[0]
+        changes = []
+        for field in wing_parameters._fields:
+            value = getattr(wing_parameters, field)
+            nudged = np.array(value, dtype=float)
+            nudged.flat[-1] = np.nextafter(nudged.flat[-1], np.inf)
+            changes.append((f"{field} nudged", field, nudged))
+            zeros = np.flatnonzero(np.asarray(value) == 0.0)
+            if zeros.size:
+                # Negating a zero flips its sign (0.0 to -0.0, or back), which == can't
+                # see but the mesh cache must.
+                signed = np.array(value, dtype=float)
+                signed.flat[zeros[0]] = -signed.flat[zeros[0]]
+                changes.append((f"{field} zero's sign", field, signed))
+        self.assertGreater(len(changes), len(wing_parameters._fields))
+        for label, field, new_value in changes:
+            with self.subTest(change=label):
+                cached = self.solver._wing_meshes_from_parameters([self.parameters])[
+                    0
+                ][0]
+                changed_wing = wing_parameters._replace(**{field: new_value})
+                changed = self.parameters._replace(
+                    wings=(changed_wing, *self.parameters.wings[1:])
+                )
+                remeshed = self.solver._wing_meshes_from_parameters([changed])[0][0]
+                self.assertIsNot(remeshed, cached)
+                self._assert_same_mesh(
+                    remeshed,
+                    _mesh_arrays.mesh_wing_arrays(
+                        self.solver._mesh_plans[0],  # type: ignore[index]
+                        changed_wing,
+                    ),
+                )
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):
