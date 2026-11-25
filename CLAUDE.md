@@ -88,6 +88,7 @@ Requires Python 3.11, but active development is done in 3.14
     - `_coupled_unsteady_ring_vortex_lattice_method.py`: Coupled unsteady UVLM solver subclass with step-by-step geometry
     - `_fixed_point_relaxation.py`: Pure fixed-point relaxation helpers (weighted norm, convergence test, Aitken relaxation factor) for the strong-coupling sub-iteration
     - `_functions.py`: Shared utility functions
+    - `_gpu.py`: Finds and prepares the optional GPU libraries (CuPy and numba-cuda, from `requirements_gpu.txt`), which are imported only when GPU support is used
     - `_loads_arrays.py`: The unsteady solvers' array path's loads: the parts of both force methods that used to walk the Panels, each Airplane's and Wing's totals and coefficients (`StepLoads`), and the aeroelastic strip leading edge moments
     - `_logging.py`: Contains the function for setting up logging
     - `_mesh_arrays.py`: Array meshing for the unsteady solvers' array path: each Wing's per run `MeshPlan` and `mesh_wing_arrays`, which meshes a Wing from its `WingStepParameters` into a `WingMesh` (its Panel corners, span, and z axis) without building any objects
@@ -145,6 +146,7 @@ Requires Python 3.11, but active development is done in 3.14
 - `README.md`: Project overview and installation instructions for developers
 - `requirements.txt`: Full list of runtime dependencies with version constraints
 - `requirements_dev.txt`: Full list of development dependencies with version constraints
+- `requirements_gpu.txt`: The optional GPU libraries (CuPy and numba-cuda for CUDA 12), installed into the same environment
 - `requirements_min.txt`: Minimum-version runtime dependencies
 - `setup.cfg`: Setup configuration file
 

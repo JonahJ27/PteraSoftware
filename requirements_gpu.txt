@@ -1,0 +1,7 @@
+# Optional GPU support, for an NVIDIA GPU with CUDA 12 drivers. Install these into the
+# project's environment, after requirements.txt and requirements_dev.txt, with:
+# pip install -r requirements_gpu.txt
+# They add only new packages (the CUDA bindings, CuPy, numba-cuda, and NVIDIA's CUDA 12.9
+# wheels) and change none of the pinned ones. Ptera Software runs without them.
+cupy-cuda12x[ctk] == 14.2.0
+numba-cuda[cu12] == 0.30.4
