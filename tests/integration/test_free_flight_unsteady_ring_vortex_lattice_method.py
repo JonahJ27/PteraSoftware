@@ -677,11 +677,19 @@ def _assert_restore_matches_resolve(
     """
     solver_class = type(solver)
     original_restore_substep = solver_class.restore_substep
+    # The run scoped caches record the last calculation made, not the time step's
+    # state, so a fresh solve leaves different (equally valid) entries in them. Each
+    # entry is checked against its inputs before it is used, so they aren't compared.
+    caches = {
+        "_wing_mesh_cache",
+        "_last_step_geometry_build",
+        "_wing_wing_influence_cache",
+    }
     slot_names = [
         name
         for cls in solver_class.__mro__
         for name in getattr(cls, "__slots__", ())
-        if not name.startswith("_substep")
+        if not name.startswith("_substep") and name not in caches
     ]
     checked_steps: list[int] = []
 

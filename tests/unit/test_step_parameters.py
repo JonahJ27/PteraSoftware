@@ -326,8 +326,8 @@ class TestWingStepParametersKey(unittest.TestCase):
                 )
 
     def test_nan_matches_only_the_same_nan(self) -> None:
-        """Test that a nan gives the same key as the same nan (which == wouldn't), and
-        a different key from a nan with another payload."""
+        """Test that a nan gives the same key as the same nan (which == wouldn't), and a
+        different key from a nan with another payload."""
         with_nan = np.array(self.parameters.Ler_Gs_Cgs, copy=True)
         with_nan[0] = np.nan
         other_nan = np.array(with_nan, copy=True)

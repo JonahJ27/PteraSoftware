@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Sequence
-from typing import cast
+from typing import NamedTuple, cast
 
 import numpy as np
 from tqdm import tqdm
@@ -46,6 +46,31 @@ _STEP_LOADS_AIRPLANE_FIELDS: dict[str, str] = {
 _logger = _logging.get_logger("unsteady_ring_vortex_lattice_method")
 
 
+class _WingWingInfluenceCache(NamedTuple):
+    """The inputs and result of the last Wing Wing influence calculation without an
+    image surface, kept so that the next one only recomputes the columns that changed.
+
+    It exists because the coupling trials within a free flight time step all calculate
+    the Wing Wing influences with the same collocation points, unit normals, strengths,
+    and nu, and with the same bound ring vortices except those whose back corners follow
+    the trial's freestream (the trailing edge rings). Each column of the influences
+    comes from one bound ring vortex alone, so recomputing only the changed columns
+    gives bit for bit the full calculation's result.
+    """
+
+    # The bytes of the collocation points, the unit normals, the strengths, and nu.
+    key: tuple[bytes, ...]
+    # Copies of the bound ring vortices' back right, front right, front left, and back
+    # left corners, each a (N,3) ndarray of floats, in the kernel's argument order.
+    corners: tuple[np.ndarray, ...]
+    # A copy of the bound ring vortices' initial core radii.
+    r_c0s: np.ndarray
+    # The (N,N) read only ndarray of floats of Wing Wing influence coefficients.
+    influences: np.ndarray
+    # A copy of the calculation's (3,) ndarray of ints of singularity counts.
+    singularity_counts: np.ndarray
+
+
 # TODO: Add unit tests for trapezoid-rule-based averages for the mean and RMS loads and
 #  load coefficients.
 # TEST: Assess how comprehensive this function's integration tests are and update or
@@ -67,6 +92,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_use_arrays",
         "_mesh_plans",
         "_wing_mesh_cache",
+        "_last_step_geometry_build",
+        "_wing_wing_influence_cache",
         "_layout_plan",
         "_step_geometries",
         "_current_step_loads",
@@ -210,6 +237,31 @@ class UnsteadyRingVortexLatticeMethodSolver:
             ]
             | None
         ) = None
+
+        # Changed for speed: the array path's last full geometry build, so that a
+        # coupling trial building the same time step's geometry from the same WingMeshes
+        # and CGs only finds its freestream dependent corners again (see
+        # _build_step_geometry_at). It holds the time step, the WingMeshes, the CGs'
+        # bytes, the previous time step's StepGeometry, and the StepGeometry built. Run
+        # scoped: None at the start and end of a run.
+        self._last_step_geometry_build: (
+            tuple[
+                int,
+                tuple[_mesh_arrays.WingMesh, ...],
+                bytes,
+                _step_geometry.StepGeometry | None,
+                _step_geometry.StepGeometry,
+            ]
+            | None
+        ) = None
+
+        # Changed for speed: the last Wing Wing influence calculation's inputs and
+        # result, so that a calculation with the same collocation points, unit normals,
+        # strengths, and nu (which a time step's coupling trials share) only recomputes
+        # the columns of the bound ring vortices whose corners or core radii changed
+        # (see _calculate_wing_wing_influences). Run scoped: None at the start and end
+        # of a run, on both paths.
+        self._wing_wing_influence_cache: _WingWingInfluenceCache | None = None
 
         # The array path's step geometries, keyed by time step. Only the most recent
         # three are kept (the previous, current, and next time steps'), since a time
@@ -573,6 +625,11 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         run_start_time = time.time()
 
+        # The Wing Wing influence cache is run scoped on both paths, and the last
+        # geometry build on the array path, so start each run without them.
+        self._wing_wing_influence_cache = None
+        self._last_step_geometry_build = None
+
         # Set up the array path: reject what it doesn't support yet, then build its per
         # run plans.
         if self._use_arrays:
@@ -742,6 +799,8 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # The array path's plans are only needed during the run.
         self._mesh_plans = None
         self._wing_mesh_cache = None
+        self._last_step_geometry_build = None
+        self._wing_wing_influence_cache = None
         self._layout_plan = None
         self._step_geometries = None
         self._current_step_loads = None
@@ -1484,12 +1543,178 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         :return: None
         """
+        singularity_counts = np.zeros(3, dtype=np.int64)
+        surfaceReflect_T_act_GP1_CgP1 = (
+            self.current_operating_point.surfaceReflect_T_act_GP1_CgP1
+        )
+
+        # Changed for speed: within a free flight time step, the coupling trials
+        # calculate these influences with the same collocation points, unit normals,
+        # strengths, and nu, and with the same bound ring vortices except those whose
+        # back corners follow the trial's freestream (the trailing edge rings, 58 of 324
+        # on the FAAV example). Each column of the influences comes from one bound ring
+        # vortex alone, so when the inputs match the last calculation's, only the
+        # columns of the rings whose corners or core radii changed are recomputed, and
+        # the rest are copied, which gives bit for bit the full calculation's result. It
+        # is skipped with an image surface (whose reflection follows the trial's body
+        # state), and when the last calculation counted any unexpected singularities, so
+        # that the counts logged below are always the full calculation's.
+        stackCorners_GP1_CgP1 = (
+            self.stackBrbrvp_GP1_CgP1,
+            self.stackFrbrvp_GP1_CgP1,
+            self.stackFlbrvp_GP1_CgP1,
+            self.stackBlbrvp_GP1_CgP1,
+        )
+        r_c0s = np.asarray(self._current_bound_r_c0s)
+        key = (
+            np.ascontiguousarray(self.stackCpp_GP1_CgP1).tobytes(),
+            np.ascontiguousarray(self.stackUnitNormals_GP1).tobytes(),
+            np.ascontiguousarray(self._current_bound_vortex_strengths).tobytes(),
+            np.float64(self.current_operating_point.nu).tobytes(),
+        )
+        cache = self._wing_wing_influence_cache
+
+        # changed_columns stays None unless the last calculation can be reused, in which
+        # case it holds the indices of the bound ring vortices to recompute.
+        changed_columns: np.ndarray | None = None
+
+        # The last calculation can be reused only if all of these hold:
+        # - There is no image surface. With one, the reflected collocation points depend
+        #   on the trial's body state, so every column changes.
+        # - There is a last calculation, and its collocation points, unit normals,
+        #   strengths, and nu (the key) are bit for bit this calculation's. Those set
+        #   every element of every column, so a column can only change through its own
+        #   ring's corners or core radii, which are compared next.
+        # - It counted no unexpected singularities, so the unchanged columns contribute
+        #   none and the counts logged below are exactly the full calculation's.
+        # - The rings' corner and core radius arrays have the same shapes, so they can
+        #   be compared ring by ring.
+        if (
+            surfaceReflect_T_act_GP1_CgP1 is None
+            and cache is not None
+            and cache.key == key
+            and not np.any(cache.singularity_counts)
+            and cache.r_c0s.shape == r_c0s.shape
+            and all(
+                old.shape == new.shape
+                for old, new in zip(cache.corners, stackCorners_GP1_CgP1)
+            )
+        ):
+            # Find each ring whose core radii or any corner differ from the last
+            # calculation's in any bit. Viewing the floats as unsigned integers makes
+            # the comparison exact: unlike !=, it tells -0.0 from 0.0, and a nan only
+            # matches the same nan. A ring's core radii are one row of r_c0s (one per
+            # leg), and its corners one row of each of the four corner stacks.
+            changed = np.any(
+                (cache.r_c0s.view(np.uint64) != r_c0s.view(np.uint64)).reshape(
+                    self.num_panels, -1
+                ),
+                axis=1,
+            )
+            for old, new in zip(cache.corners, stackCorners_GP1_CgP1):
+                changed |= np.any(
+                    old.view(np.uint64) != np.asarray(new).view(np.uint64), axis=1
+                )
+            changed_columns = np.flatnonzero(changed)
+
+        if changed_columns is not None:
+            # Start from a writable copy of the last calculation's influences (the
+            # cached array is read only, and the final coupling trial record may hold
+            # it), then overwrite only the changed rings' columns.
+            assert cache is not None
+            influences = np.array(cache.influences)
+            if changed_columns.size:
+                # Find the normalized velocities induced at every collocation point by
+                # only the changed rings, then take their dot products with the unit
+                # normals, exactly as the full calculation does for every ring. The
+                # kernel computes each ring's column from that ring alone, so these
+                # columns are bit for bit the full calculation's (checked on every such
+                # calculation of a FAAV run, experimental/m4/check_column_subset.py).
+                gridChangedNormVIndCpp_GP1_E = (
+                    _aerodynamics_functions.expanded_velocities_from_ring_vortices(
+                        stackP_GP1_CgP1=self.stackCpp_GP1_CgP1,
+                        stackBrrvp_GP1_CgP1=self.stackBrbrvp_GP1_CgP1[changed_columns],
+                        stackFrrvp_GP1_CgP1=self.stackFrbrvp_GP1_CgP1[changed_columns],
+                        stackFlrvp_GP1_CgP1=self.stackFlbrvp_GP1_CgP1[changed_columns],
+                        stackBlrvp_GP1_CgP1=self.stackBlbrvp_GP1_CgP1[changed_columns],
+                        strengths=self._current_bound_vortex_strengths[changed_columns],
+                        r_c0s=r_c0s[changed_columns],
+                        singularity_counts=singularity_counts,
+                        ages=None,
+                        nu=self.current_operating_point.nu,
+                    )
+                )
+                influences[:, changed_columns] = np.einsum(
+                    "...k,...k->...",
+                    gridChangedNormVIndCpp_GP1_E,
+                    np.expand_dims(self.stackUnitNormals_GP1, axis=1),
+                )
+        else:
+            # The last calculation can't be reused (the first calculation of a run or of
+            # a time step, an image surface, or any changed point, normal, strength, or
+            # nu), so calculate every column, as before.
+            influences = self._full_wing_wing_influences(
+                singularity_counts, surfaceReflect_T_act_GP1_CgP1
+            )
+
+        # Log any unexpected singularities, as before. Whichever branch ran, these are
+        # the counts the full calculation would have made.
+        unexpected_singularity_counts = np.copy(singularity_counts)
+
+        _functions.log_unexpected_singularity_counts(
+            _logger,
+            logging.ERROR,
+            "_calculate_wing_wing_influences",
+            unexpected_singularity_counts,
+        )
+
+        # Make the influences read only before storing them: the cache below keeps the
+        # same array, so any later write to it would silently corrupt the next
+        # calculation's unchanged columns. Nothing writes to it today (the solve and the
+        # final coupling trial record only read it), so this only guards against a
+        # future change.
+        influences.flags.writeable = False
+        self._currentGridWingWingInfluences__E = influences
+
+        # Keep this calculation for the next one. Copies of the corners and core radii
+        # are kept (the solver's own arrays may change in place), along with the key and
+        # the counts. With an image surface nothing is kept, since the next calculation
+        # can't reuse it.
+        self._wing_wing_influence_cache = None
+        if surfaceReflect_T_act_GP1_CgP1 is None:
+            self._wing_wing_influence_cache = _WingWingInfluenceCache(
+                key=key,
+                corners=tuple(
+                    np.array(corners, dtype=float) for corners in stackCorners_GP1_CgP1
+                ),
+                r_c0s=np.array(r_c0s, dtype=float),
+                influences=influences,
+                singularity_counts=np.copy(singularity_counts),
+            )
+
+    def _full_wing_wing_influences(
+        self,
+        singularity_counts: np.ndarray,
+        surfaceReflect_T_act_GP1_CgP1: np.ndarray | None,
+    ) -> np.ndarray:
+        """Calculates every Wing Wing influence coefficient (observed from the Earth
+        frame) at the current time step, adding to the singularity counts.
+
+        It is the calculation _calculate_wing_wing_influences always made, moved here
+        unchanged. It exists so that _calculate_wing_wing_influences can make it only
+        when it can't reuse the last calculation's unchanged columns.
+
+        :param singularity_counts: A (3,) ndarray of ints that the kernel adds its
+            singularity counts to.
+        :param surfaceReflect_T_act_GP1_CgP1: The current OperatingPoint's
+            surfaceReflect_T_act_GP1_CgP1, or None without an image surface.
+        :return: A (N,N) ndarray of floats of the Wing Wing influence coefficients.
+        """
         # Find the 2D ndarray of normalized velocities (in the first Airplane's geometry
         # axes, observed from the Earth frame) induced at each Panel's collocation point
         # by each bound ring vortex. The answer is normalized because the solver's list
         # of bound ring vortex strengths was initialized to all be 1.0. This will be
         # updated once the correct strengths are calculated.
-        singularity_counts = np.zeros(3, dtype=np.int64)
         gridNormVIndCpp_GP1_E = (
             _aerodynamics_functions.expanded_velocities_from_ring_vortices(
                 stackP_GP1_CgP1=self.stackCpp_GP1_CgP1,
@@ -1506,9 +1731,6 @@ class UnsteadyRingVortexLatticeMethodSolver:
         )
 
         # Add the image contribution if an image surface is defined.
-        surfaceReflect_T_act_GP1_CgP1 = (
-            self.current_operating_point.surfaceReflect_T_act_GP1_CgP1
-        )
         if surfaceReflect_T_act_GP1_CgP1 is not None:
             stackReflectedCpp_GP1_CgP1 = _transformations.apply_T_to_vectors(
                 surfaceReflect_T_act_GP1_CgP1,
@@ -1535,25 +1757,20 @@ class UnsteadyRingVortexLatticeMethodSolver:
                 is_position=False,
             )
 
-        unexpected_singularity_counts = np.copy(singularity_counts)
-
-        _functions.log_unexpected_singularity_counts(
-            _logger,
-            logging.ERROR,
-            "_calculate_wing_wing_influences",
-            unexpected_singularity_counts,
-        )
+        # The unexpected singularity counts are logged by
+        # _calculate_wing_wing_influences after this returns.
 
         # Take the batch dot product of the normalized induced velocities (in the first
         # Airplane's geometry axes, observed from the Earth frame) with each Panel's
         # unit normal direction (in the first Airplane's geometry axes). This is now the
         # 2D ndarray of Wing Wing influence coefficients (observed from the Earth
         # frame).
-        self._currentGridWingWingInfluences__E = np.einsum(
+        gridWingWingInfluences__E: np.ndarray = np.einsum(
             "...k,...k->...",
             gridNormVIndCpp_GP1_E,
             np.expand_dims(self.stackUnitNormals_GP1, axis=1),
         )
+        return gridWingWingInfluences__E
 
     def _currentOmegasRad_GP1__E(self) -> np.ndarray:
         """Finds the current time step's body angular velocity (in the first Airplane's
@@ -4138,14 +4355,55 @@ class UnsteadyRingVortexLatticeMethodSolver:
         last_geometry = None
         if step > 0:
             last_geometry = self._step_geometries[step - 1]
-        geometry = _step_geometry.build_step_geometry(
-            self._layout_plan,
-            wing_meshes,
-            wingsCg_GP1_CgP1,
-            self._operating_point_at(step).vInf_GP1__E,
-            self.delta_time,
-            last_geometry,
+        vInf_GP1__E = self._operating_point_at(step).vInf_GP1__E
+
+        # Changed for speed: a free flight time step's coupling trials each build the
+        # next time step's geometry, from the same WingMeshes (the mesh cache returns
+        # the same objects for unchanged Wings), the same CGs, and the same previous
+        # geometry, so only the trailing edge back corners, which follow the trial's
+        # freestream velocity, differ. When this build's inputs are the last full
+        # build's, rebuild_step_geometry_for_freestream reuses it and finds only those
+        # corners, with build_step_geometry's own formulas, so the result is bit for bit
+        # the same. The old code always called build_step_geometry.
+        wingsCg_bytes = b"".join(
+            np.ascontiguousarray(Cg_GP1_CgP1, dtype=float).tobytes()
+            for Cg_GP1_CgP1 in wingsCg_GP1_CgP1
         )
+        last_build = self._last_step_geometry_build
+        if (
+            last_build is not None
+            and last_build[0] == step
+            and len(last_build[1]) == len(wing_meshes)
+            and all(
+                cached is wing_mesh
+                for cached, wing_mesh in zip(last_build[1], wing_meshes)
+            )
+            and last_build[2] == wingsCg_bytes
+            and last_build[3] is last_geometry
+        ):
+            geometry = _step_geometry.rebuild_step_geometry_for_freestream(
+                self._layout_plan,
+                last_build[4],
+                vInf_GP1__E,
+                self.delta_time,
+                last_geometry,
+            )
+        else:
+            geometry = _step_geometry.build_step_geometry(
+                self._layout_plan,
+                wing_meshes,
+                wingsCg_GP1_CgP1,
+                vInf_GP1__E,
+                self.delta_time,
+                last_geometry,
+            )
+            self._last_step_geometry_build = (
+                step,
+                tuple(wing_meshes),
+                wingsCg_bytes,
+                last_geometry,
+                geometry,
+            )
         self._step_geometries[step] = geometry
         for old_step in [key for key in self._step_geometries if key < step - 2]:
             del self._step_geometries[old_step]

@@ -172,7 +172,9 @@ def wing_step_parameters_key(
     :return: A tuple with, for each of its arrays in order, a tuple of the array's
         shape, its dtype's string, and its bytes.
     """
-    return tuple((value.shape, value.dtype.str, value.tobytes()) for value in parameters)
+    return tuple(
+        (value.shape, value.dtype.str, value.tobytes()) for value in parameters
+    )
 
 
 def validate_wing_step_parameters(parameters: WingStepParameters) -> None:

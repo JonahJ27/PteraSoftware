@@ -9,7 +9,7 @@ import numpy as np
 import pterasoftware as ps
 
 # noinspection PyProtectedMember
-from pterasoftware import _mesh_arrays
+from pterasoftware import _aerodynamics_functions, _mesh_arrays
 from tests.unit.fixtures import (
     airplane_movement_fixtures,
     flap_drive_fixtures,
@@ -766,9 +766,9 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingMeshesFromParameters(
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWingMeshCache(unittest.TestCase):
-    """This is a class with functions to test the array path's mesh cache: a Wing
-    meshed again with bit for bit the same step parameters reuses its WingMesh, and any
-    change meshes it again."""
+    """This is a class with functions to test the array path's mesh cache: a Wing meshed
+    again with bit for bit the same step parameters reuses its WingMesh, and any change
+    meshes it again."""
 
     def setUp(self) -> None:
         """Set up a solver with its run scoped mesh plans and an empty mesh cache, as a
@@ -850,9 +850,9 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingMeshCache(unittest.TestCase):
         self.assertGreater(len(changes), len(wing_parameters._fields))
         for label, field, new_value in changes:
             with self.subTest(change=label):
-                cached = self.solver._wing_meshes_from_parameters([self.parameters])[
+                cached = self.solver._wing_meshes_from_parameters([self.parameters])[0][
                     0
-                ][0]
+                ]
                 changed_wing = wing_parameters._replace(**{field: new_value})
                 changed = self.parameters._replace(
                     wings=(changed_wing, *self.parameters.wings[1:])
@@ -866,6 +866,179 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingMeshCache(unittest.TestCase):
                         changed_wing,
                     ),
                 )
+
+
+class TestUnsteadyRingVortexLatticeMethodSolverWingWingInfluenceCache(
+    unittest.TestCase
+):
+    """This is a class with functions to test that _calculate_wing_wing_influences, when
+    its inputs match the last calculation's, recomputes only the columns of the bound
+    ring vortices that changed, with bit for bit the full calculation's result, and
+    otherwise makes the full calculation."""
+
+    def setUp(self) -> None:
+        """Set up a solved solver and count the rings of each kernel call."""
+        self._reset_solver()
+        self.kernel_rings: list[int] = []
+        original = _aerodynamics_functions.expanded_velocities_from_ring_vortices
+
+        def counting_kernel(**kwargs: Any) -> Any:
+            self.kernel_rings.append(kwargs["stackBrrvp_GP1_CgP1"].shape[0])
+            return original(**kwargs)
+
+        self.patch = patch.object(
+            _aerodynamics_functions,
+            "expanded_velocities_from_ring_vortices",
+            counting_kernel,
+        )
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def _reset_solver(self) -> None:
+        """Run a new solver, so it has a time step's geometry, and set its strengths to
+        ones, as the influence calculation expects.
+
+        :return: None
+        """
+        self.solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        self.solver.run(prescribed_wake=True, show_progress=False)
+        self.solver._current_bound_vortex_strengths = np.ones(
+            self.solver.num_panels, dtype=float
+        )
+
+    def _expected(self) -> np.ndarray:
+        """Returns the full calculation's influences for the solver's current state.
+
+        :return: The (N,N) ndarray of floats.
+        """
+        return self.solver._full_wing_wing_influences(
+            np.zeros(3, dtype=np.int64),
+            self.solver.current_operating_point.surfaceReflect_T_act_GP1_CgP1,
+        )
+
+    def _calculate(self) -> np.ndarray:
+        """Calculates the influences and returns them.
+
+        :return: The (N,N) ndarray of floats.
+        """
+        self.kernel_rings.clear()
+        self.solver._calculate_wing_wing_influences()
+        return self.solver._currentGridWingWingInfluences__E
+
+    def _move_ring(self, ring: int) -> None:
+        """Moves one bound ring vortex's back corners by one unit in the last place.
+
+        :param ring: The ring's index.
+        :return: None
+        """
+        for name in ("stackBlbrvp_GP1_CgP1", "stackBrbrvp_GP1_CgP1"):
+            corners = np.array(getattr(self.solver, name))
+            corners[ring] = np.nextafter(corners[ring], np.inf)
+            setattr(self.solver, name, corners)
+
+    def test_unchanged_inputs_recompute_nothing(self) -> None:
+        """Test that the same inputs again recompute no column and give the same
+        influences."""
+        first = self._calculate()
+        self.assertEqual(self.kernel_rings, [self.solver.num_panels])
+        second = self._calculate()
+        self.assertEqual(self.kernel_rings, [])
+        self.assertEqual(second.tobytes(), first.tobytes())
+        self.assertEqual(second.tobytes(), self._expected().tobytes())
+
+    def test_changed_rings_recompute_only_their_columns(self) -> None:
+        """Test that changing some rings' corners, or one ring's core radii, recomputes
+        only those columns, with bit for bit the full calculation's result."""
+        self._calculate()
+        rings = [0, self.solver.num_panels // 2, self.solver.num_panels - 1]
+        for ring in rings:
+            self._move_ring(ring)
+        influences = self._calculate()
+        self.assertEqual(self.kernel_rings, [len(rings)])
+        self.assertEqual(influences.tobytes(), self._expected().tobytes())
+
+        r_c0s = np.array(self.solver._current_bound_r_c0s)
+        r_c0s[1] = r_c0s[1] + 1.0e-4
+        self.solver._current_bound_r_c0s = r_c0s
+        influences = self._calculate()
+        self.assertEqual(self.kernel_rings, [1])
+        self.assertEqual(influences.tobytes(), self._expected().tobytes())
+
+    def test_other_changes_make_the_full_calculation(self) -> None:
+        """Test that a changed collocation point, unit normal, strength, or nu, an image
+        surface, or a cached calculation with singularities each make the full
+        calculation."""
+
+        def changed_points() -> None:
+            points = np.array(self.solver.stackCpp_GP1_CgP1)
+            points[0, 0] = np.nextafter(points[0, 0], np.inf)
+            self.solver.stackCpp_GP1_CgP1 = points
+
+        def changed_normals() -> None:
+            normals = np.array(self.solver.stackUnitNormals_GP1)
+            normals[0, 2] = np.nextafter(normals[0, 2], np.inf)
+            self.solver.stackUnitNormals_GP1 = normals
+
+        def changed_strengths() -> None:
+            strengths = np.array(self.solver._current_bound_vortex_strengths)
+            strengths[3] = np.nextafter(1.0, 2.0)
+            self.solver._current_bound_vortex_strengths = strengths
+
+        def changed_nu() -> None:
+            operating_point: Any = self.solver.current_operating_point
+            self.solver.current_operating_point = ps.operating_point.OperatingPoint(
+                rho=operating_point.rho,
+                vCg__E=operating_point.vCg__E,
+                alpha=operating_point.alpha,
+                beta=operating_point.beta,
+                nu=operating_point.nu * 2.0,
+            )
+
+        def cached_singularities() -> None:
+            cache = self.solver._wing_wing_influence_cache
+            assert cache is not None
+            self.solver._wing_wing_influence_cache = cache._replace(
+                singularity_counts=np.array([0, 1, 0], dtype=np.int64)
+            )
+
+        for label, change in (
+            ("collocation point", changed_points),
+            ("unit normal", changed_normals),
+            ("strength", changed_strengths),
+            ("nu", changed_nu),
+            ("cached singularities", cached_singularities),
+        ):
+            with self.subTest(change=label):
+                self._reset_solver()
+                self._calculate()
+                change()
+                self._move_ring(0)
+                influences = self._calculate()
+                self.assertEqual(self.kernel_rings, [self.solver.num_panels])
+                self.assertEqual(influences.tobytes(), self._expected().tobytes())
+
+    def test_an_image_surface_makes_the_full_calculation_and_no_cache(self) -> None:
+        """Test that with an image surface, the influences are always the full
+        calculation's (whose reflection follows the body state), and nothing is
+        cached."""
+        self.solver.current_operating_point = (
+            operating_point_fixtures.make_with_ground_surface_operating_point_fixture()
+        )
+        for _ in range(2):
+            influences = self._calculate()
+            # One kernel call for the Wings and one for their images.
+            self.assertEqual(
+                self.kernel_rings, [self.solver.num_panels, self.solver.num_panels]
+            )
+            self.assertIsNone(self.solver._wing_wing_influence_cache)
+            self.kernel_rings.clear()
+            self.assertEqual(influences.tobytes(), self._expected().tobytes())
+
+    def test_the_influences_are_read_only(self) -> None:
+        """Test that the influences can't be written, since the cache keeps them."""
+        influences = self._calculate()
+        with self.assertRaises(ValueError):
+            influences[0, 0] = 1.0
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):

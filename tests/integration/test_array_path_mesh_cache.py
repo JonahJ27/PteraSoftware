@@ -123,8 +123,8 @@ class TestArrayPathMeshCache(unittest.TestCase):
         )
 
     def test_moving_formation(self) -> None:
-        """Two Airplanes, the second moving and pitching, with a free wake, so each
-        Wing has its own cache entry."""
+        """Two Airplanes, the second moving and pitching, with a free wake, so each Wing
+        has its own cache entry."""
         self._assert_unchanged(
             solver_fixtures.make_unsteady_ring_vortex_lattice_method_moving_formation_solver,
             False,

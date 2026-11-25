@@ -343,6 +343,82 @@ class TestBuildStepGeometry(unittest.TestCase):
                         )
 
 
+class TestRebuildStepGeometryForFreestream(unittest.TestCase):
+    """This is a class with functions to test rebuild_step_geometry_for_freestream
+    against build_step_geometry, which it replaces for a build whose WingMeshes and CGs
+    are an earlier build's."""
+
+    def test_matches_a_full_build_bit_for_bit(self) -> None:
+        """Test that rebuilding each time step's geometry for other freestream
+        velocities gives bit for bit what building it from its WingMeshes and CGs gives,
+        at the first time step (no previous geometry) and afterwards, on static,
+        pitching, and several Airplane problems, and that only the back corners are new
+        arrays."""
+        freestreams = (
+            np.array([10.0, 0.0, 0.0]),
+            np.array([9.7, -0.31, 1.05]),
+            np.array([np.nextafter(10.0, np.inf), 0.0, 0.0]),
+            np.array([0.0, 0.0, 0.0]),
+        )
+        for solver in _plain_solvers():
+            layout_plan = _step_geometry.build_layout_plan(
+                solver.steady_problems[0].airplanes
+            )
+            last_geometry = None
+            for step, steady_problem in enumerate(solver.steady_problems):
+                wing_meshes = []
+                wingsCg_GP1_CgP1 = []
+                for airplane in steady_problem.airplanes:
+                    for wing in airplane.wings:
+                        wing_meshes.append(_mesh_arrays.wing_mesh_from_wing(wing))
+                        wingsCg_GP1_CgP1.append(airplane.Cg_GP1_CgP1)
+                base = _step_geometry.build_step_geometry(
+                    layout_plan,
+                    wing_meshes,
+                    wingsCg_GP1_CgP1,
+                    steady_problem.operating_point.vInf_GP1__E,
+                    solver.delta_time,
+                    last_geometry,
+                )
+                for vInf_GP1__E in freestreams:
+                    with self.subTest(
+                        problem=solver.unsteady_problem,
+                        step=step,
+                        vInf=tuple(vInf_GP1__E),
+                    ):
+                        expected = _step_geometry.build_step_geometry(
+                            layout_plan,
+                            wing_meshes,
+                            wingsCg_GP1_CgP1,
+                            vInf_GP1__E,
+                            solver.delta_time,
+                            last_geometry,
+                        )
+                        rebuilt = _step_geometry.rebuild_step_geometry_for_freestream(
+                            layout_plan,
+                            base,
+                            vInf_GP1__E,
+                            solver.delta_time,
+                            last_geometry,
+                        )
+                        for field in expected._fields:
+                            actual_value = getattr(rebuilt, field)
+                            self.assertEqual(
+                                actual_value.tobytes(),
+                                getattr(expected, field).tobytes(),
+                                field,
+                            )
+                            self.assertFalse(actual_value.flags.writeable, field)
+                            if field in (
+                                "stackBlbrvp_GP1_CgP1",
+                                "stackBrbrvp_GP1_CgP1",
+                            ):
+                                self.assertIsNot(actual_value, getattr(base, field))
+                            else:
+                                self.assertIs(actual_value, getattr(base, field))
+                last_geometry = base
+
+
 class TestCollapseFunctions(unittest.TestCase):
     """This is a class with functions to test bound_r_c0s, seed_points,
     wake_vortex_ages, and katz_geometry against what the object path's collapse writes

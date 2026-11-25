@@ -355,27 +355,19 @@ def build_step_geometry(
         stackBlbrvp_GP1_CgP1[body] = stackFlbvp_GP1_CgP1[next_row]
         stackBrbrvp_GP1_CgP1[body] = stackFrbvp_GP1_CgP1[next_row]
 
-    # The trailing edge Panels' ring vortices' back corners are a quarter of the
-    # trailing edge's travel during a time step behind its back corners (pages 37 to 39
-    # of "Modeling of aerodynamic forces in flapping flight with the Unsteady Vortex
-    # Lattice Method" by Thomas Lambert). At the first time step, the trailing edge's
-    # travel is the freestream's. Afterwards, the trailing edge's own motion since the
-    # previous time step is subtracted from it.
-    is_trailing_edge = layout_plan.is_trailing_edge
-    teBl = Bl[is_trailing_edge]
-    teBr = Br[is_trailing_edge]
-    if last_geometry is None:
-        stackBlbrvp_GP1_CgP1[is_trailing_edge] = teBl + vInf_GP1__E * delta_time * 0.25
-        stackBrbrvp_GP1_CgP1[is_trailing_edge] = teBr + vInf_GP1__E * delta_time * 0.25
-    else:
-        lastTeBl = last_geometry.stackBlpp_GP1_CgP1[is_trailing_edge]
-        lastTeBr = last_geometry.stackBrpp_GP1_CgP1[is_trailing_edge]
-        stackBlbrvp_GP1_CgP1[is_trailing_edge] = (
-            teBl + (vInf_GP1__E - (teBl - lastTeBl) / delta_time) * delta_time * 0.25
-        )
-        stackBrbrvp_GP1_CgP1[is_trailing_edge] = (
-            teBr + (vInf_GP1__E - (teBr - lastTeBr) / delta_time) * delta_time * 0.25
-        )
+    # Changed for speed: the trailing edge Panels' ring vortices' back corners are found
+    # by _set_trailing_edge_back_corners, with the formulas that were written here,
+    # unchanged, so rebuild_step_geometry_for_freestream can use them too.
+    _set_trailing_edge_back_corners(
+        layout_plan,
+        Bl,
+        Br,
+        vInf_GP1__E,
+        delta_time,
+        last_geometry,
+        stackBlbrvp_GP1_CgP1,
+        stackBrbrvp_GP1_CgP1,
+    )
 
     # Each Airplane's CG, from its first Wing's (every Wing of an Airplane is given its
     # Airplane's CG). An Airplane's Panels start at its first Wing's offset.
@@ -406,6 +398,117 @@ def build_step_geometry(
                 stackAirplaneCg_GP1_CgP1,
             )
         )
+    )
+
+
+def _set_trailing_edge_back_corners(
+    layout_plan: LayoutPlan,
+    stackBlpp_GP1_CgP1: np.ndarray,
+    stackBrpp_GP1_CgP1: np.ndarray,
+    vInf_GP1__E: np.ndarray,
+    delta_time: float,
+    last_geometry: StepGeometry | None,
+    stackBlbrvp_GP1_CgP1: np.ndarray,
+    stackBrbrvp_GP1_CgP1: np.ndarray,
+) -> None:
+    """Writes the trailing edge Panels' ring vortices' back corners into the bound ring
+    vortex back corner stacks.
+
+    It is the part of build_step_geometry that depends on the freestream velocity, moved
+    out of it unchanged. It exists so that rebuild_step_geometry_for_freestream finds
+    these corners with the same formulas, and so gives bit for bit what
+    build_step_geometry gives.
+
+    :param layout_plan: The run's LayoutPlan.
+    :param stackBlpp_GP1_CgP1: A (N,3) ndarray of floats representing every Panel's back
+        left corner (in the first Airplane's geometry axes, relative to the first
+        Airplane's CG). The units are in meters.
+    :param stackBrpp_GP1_CgP1: A (N,3) ndarray of floats representing every Panel's back
+        right corner, as stackBlpp_GP1_CgP1. The units are in meters.
+    :param vInf_GP1__E: A (3,) ndarray of floats representing the freestream velocity
+        (in the first Airplane's geometry axes, observed from the Earth frame). The
+        units are in meters per second.
+    :param delta_time: The time between time steps. Its units are in seconds.
+    :param last_geometry: The previous time step's StepGeometry, or None at the first
+        time step.
+    :param stackBlbrvp_GP1_CgP1: A (N,3) writable ndarray of floats, the bound ring
+        vortices' back left corners, whose trailing edge rows this writes. The units are
+        in meters.
+    :param stackBrbrvp_GP1_CgP1: A (N,3) writable ndarray of floats, the bound ring
+        vortices' back right corners, as stackBlbrvp_GP1_CgP1. The units are in meters.
+    :return: None
+    """
+    # The trailing edge Panels' ring vortices' back corners are a quarter of the
+    # trailing edge's travel during a time step behind its back corners (pages 37 to 39
+    # of "Modeling of aerodynamic forces in flapping flight with the Unsteady Vortex
+    # Lattice Method" by Thomas Lambert). At the first time step, the trailing edge's
+    # travel is the freestream's. Afterwards, the trailing edge's own motion since the
+    # previous time step is subtracted from it.
+    is_trailing_edge = layout_plan.is_trailing_edge
+    teBl = stackBlpp_GP1_CgP1[is_trailing_edge]
+    teBr = stackBrpp_GP1_CgP1[is_trailing_edge]
+    if last_geometry is None:
+        stackBlbrvp_GP1_CgP1[is_trailing_edge] = teBl + vInf_GP1__E * delta_time * 0.25
+        stackBrbrvp_GP1_CgP1[is_trailing_edge] = teBr + vInf_GP1__E * delta_time * 0.25
+    else:
+        lastTeBl = last_geometry.stackBlpp_GP1_CgP1[is_trailing_edge]
+        lastTeBr = last_geometry.stackBrpp_GP1_CgP1[is_trailing_edge]
+        stackBlbrvp_GP1_CgP1[is_trailing_edge] = (
+            teBl + (vInf_GP1__E - (teBl - lastTeBl) / delta_time) * delta_time * 0.25
+        )
+        stackBrbrvp_GP1_CgP1[is_trailing_edge] = (
+            teBr + (vInf_GP1__E - (teBr - lastTeBr) / delta_time) * delta_time * 0.25
+        )
+
+
+def rebuild_step_geometry_for_freestream(
+    layout_plan: LayoutPlan,
+    geometry: StepGeometry,
+    vInf_GP1__E: np.ndarray,
+    delta_time: float,
+    last_geometry: StepGeometry | None,
+) -> StepGeometry:
+    """Returns a geometry build with its trailing edge Panels' ring vortices' back
+    corners found again for another freestream velocity.
+
+    It replaces build_step_geometry for a build whose WingMeshes and CGs are those of a
+    StepGeometry already built for the same time step.
+
+    It exists because, within a free flight time step, every coupling trial builds the
+    next time step's geometry from the same WingMeshes and CGs (see the solver's mesh
+    cache), so everything build_step_geometry finds is the same from trial to trial
+    except the trailing edge back corners, which follow the trial's freestream velocity.
+    This keeps the rest of geometry and finds those corners with build_step_geometry's
+    formulas (_set_trailing_edge_back_corners), so it gives bit for bit what
+    build_step_geometry would give.
+
+    :param layout_plan: The run's LayoutPlan.
+    :param geometry: A StepGeometry built by build_step_geometry from the same
+        WingMeshes and CGs.
+    :param vInf_GP1__E: A (3,) ndarray of floats representing the freestream velocity
+        (in the first Airplane's geometry axes, observed from the Earth frame) at this
+        geometry build. The units are in meters per second.
+    :param delta_time: The time between time steps. Its units are in seconds.
+    :param last_geometry: The previous time step's StepGeometry, or None at the first
+        time step.
+    :return: The StepGeometry, with read only arrays, sharing every array with geometry
+        except the bound ring vortices' back corners.
+    """
+    stackBlbrvp_GP1_CgP1 = np.array(geometry.stackBlbrvp_GP1_CgP1)
+    stackBrbrvp_GP1_CgP1 = np.array(geometry.stackBrbrvp_GP1_CgP1)
+    _set_trailing_edge_back_corners(
+        layout_plan,
+        geometry.stackBlpp_GP1_CgP1,
+        geometry.stackBrpp_GP1_CgP1,
+        vInf_GP1__E,
+        delta_time,
+        last_geometry,
+        stackBlbrvp_GP1_CgP1,
+        stackBrbrvp_GP1_CgP1,
+    )
+    return geometry._replace(
+        stackBlbrvp_GP1_CgP1=_step_parameters.make_read_only(stackBlbrvp_GP1_CgP1),
+        stackBrbrvp_GP1_CgP1=_step_parameters.make_read_only(stackBrbrvp_GP1_CgP1),
     )
 
 
