@@ -88,7 +88,7 @@ It first calls `_step_parameters.validate_wing_step_parameters`, which raises th
 
 ## Step geometry
 
-`build_step_geometry` turns every Wing's `WingMesh` (and its Airplane's `Cg_GP1_CgP1`) into a `StepGeometry`, every per Panel quantity in global Panel order: the corners and collocation points (in the first Airplane's geometry axes, relative to its CG), unit normals, areas, each Wing's standard mean chord, and the bound ring vortex corners (whose trailing edge back corners need the previous time step's geometry and the freestream velocity). It replaces `SteadyProblem`'s per Panel transformation, `set_derived_GP1_caches`, `Wing.standard_mean_chord`, and `_initialize_panel_vortices_at`. `bound_r_c0s`, `seed_points`, `wake_vortex_ages`, and `katz_geometry` derive the rest of what `_collapse_geometry` and `_collapse_geometry_katz_data` write.
+`build_step_geometry` turns every Wing's `WingMesh` (and its Airplane's `Cg_GP1_CgP1`) into a `StepGeometry`, every per Panel quantity in global Panel order: the corners and collocation points (in the first Airplane's geometry axes, relative to its CG), unit normals, areas, each Wing's standard mean chord, each Airplane's CG at this time step (`stackAirplaneCg_GP1_CgP1`, from its first Wing's, which a formation's moving Airplanes change every time step), and the bound ring vortex corners (whose trailing edge back corners need the previous time step's geometry and the freestream velocity). It replaces `SteadyProblem`'s per Panel transformation, `set_derived_GP1_caches`, `Wing.standard_mean_chord`, and `_initialize_panel_vortices_at`. `bound_r_c0s`, `seed_points`, `wake_vortex_ages`, and `katz_geometry` derive the rest of what `_collapse_geometry` and `_collapse_geometry_katz_data` write.
 
 Everything is bit for bit the object path's except the norms (in the unit normals, areas, projected areas, and Katz lengths), which are vectorized and round about one unit in the last place differently from the object path's one row at a time `np.linalg.norm`. Whole runs agree to about 1e-15 relative. A free wake can amplify that exponentially on a chaotic problem (a flapping Wing's rolled up wake grew it to about 3e-7 over 42 time steps), as any perturbation would.
 
@@ -114,6 +114,8 @@ Both force methods already work on the solver's per Panel arrays, except for the
 | `step_loads` | `process_solver_loads`: each Panel's loads in wind axes, each Airplane's totals and coefficients, plus each Wing's totals (for the flap drives' fluid torque) |
 | `strip_leading_edge_points`, `strip_leading_edge_moments` | the aeroelastic solver's `_populate_slep_positions` and its strip leading edge moments |
 
+`step_loads` takes each Airplane's moments about that Airplane's CG at the current time step, which the solver reads from the current `StepGeometry`'s `stackAirplaneCg_GP1_CgP1`. Each Airplane's reference dimensions are fixed for the run, so they come from the first time step's Airplanes.
+
 The solver keeps the current evaluation's `StepLoads` (run scoped, like the plans), and on the array path the coupled problems read their loads from it:
 
 - the free flight problems' `_assemble_interval_loads` (for the snapshot, each coupling trial, and the prescribed phase) reads the first Airplane's total force and moment from `stackAirplaneForces_W` and `stackAirplaneMoments_W_CgP1`;
@@ -122,6 +124,10 @@ The solver keeps the current evaluation's `StepLoads` (run scoped, like the plan
 Both give exactly the object path's values on the same time step. On the array path, `external_loads_fn` gets an `Airplane` built from the time step's parameters with the loads written onto it (`_build_loaded_airplane`), only when a function is given.
 
 The run loop keeps each time step's official `StepLoads` (`_step_loads_history`), taken right after the time step's solve, before a coupled problem's trials overwrite the solver's. `_finalize_loads` averages them, and they are written onto the objects after the run.
+
+## Ground effect
+
+Ground effect has no array code of its own. Both paths add the image surface's contribution inside the influence and induced velocity functions they share (`_calculate_wing_wing_influences`, `_calculate_wake_wing_influences`, `_calculate_induced_velocity`, and the Katz method's `_calculate_chordwise_induced_velocity` and `_calculate_wake_induced_velocity`): each reflects the solver's bound and wake ring vortex stacks with the current `OperatingPoint`'s `surfaceReflect_T_act_GP1_CgP1` and calls the same kernels. No array function calls a kernel directly. A free flight coupling trial sets the current `OperatingPoint` to its own, so each trial reflects across the ground at its own height. A new function that computes an induced velocity must reflect the same way, or call one of these.
 
 ## Wake
 

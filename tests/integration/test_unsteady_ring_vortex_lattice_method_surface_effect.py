@@ -96,18 +96,23 @@ class TestUnsteadySurfaceEffectArrayPath(unittest.TestCase):
     def test_matches_the_object_path(self) -> None:
         """Running the surface effect problem with use_arrays=True gives the object
         path's loads at every time step, to round off, with a prescribed and a free
-        wake.
+        wake, and with both force methods (the "katz" method reflects its own induced
+        velocities across the surface).
 
         :return: None
         """
         for prescribed_wake in (True, False):
-            with self.subTest(prescribed_wake=prescribed_wake):
-                object_solver, array_solver = (
-                    array_path_fixtures.make_solvers_run_on_both_paths(
-                        solver_fixtures.make_unsteady_ring_vortex_lattice_method_surface_effect_solver,
-                        prescribed_wake=prescribed_wake,
+            for force_method in ("joukowski", "katz"):
+                with self.subTest(
+                    prescribed_wake=prescribed_wake, force_method=force_method
+                ):
+                    object_solver, array_solver = (
+                        array_path_fixtures.make_solvers_run_on_both_paths(
+                            solver_fixtures.make_unsteady_ring_vortex_lattice_method_surface_effect_solver,
+                            prescribed_wake=prescribed_wake,
+                            force_method=force_method,
+                        )
                     )
-                )
-                array_path_fixtures.assert_loads_match(
-                    self, object_solver, array_solver
-                )
+                    array_path_fixtures.assert_loads_match(
+                        self, object_solver, array_solver
+                    )

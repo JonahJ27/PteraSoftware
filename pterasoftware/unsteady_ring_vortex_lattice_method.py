@@ -526,10 +526,10 @@ class UnsteadyRingVortexLatticeMethodSolver:
             faster and gives the same results to round off. It builds no objects during
             the run. The objects a user reads afterwards are all still available: a
             plain problem's are written when the run ends, and a coupled problem builds
-            each time step's the first time it is read. It doesn't yet support ground
-            effect or multiple Airplanes, and raises a ValueError for them. It can be a
-            bool or a numpy bool and will be converted internally to a bool. The default
-            is False.
+            each time step's the first time it is read. It supports every feature the
+            object path does, including ground effect and multiple Airplanes. It can be
+            a bool or a numpy bool and will be converted internally to a bool. The
+            default is False.
         :return: None
         """
         self._prescribed_wake = _parameter_validation.boolLike_return_bool(
