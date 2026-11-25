@@ -5,6 +5,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
+import scipy.linalg
 
 import pterasoftware as ps
 
@@ -1039,6 +1040,226 @@ class TestUnsteadyRingVortexLatticeMethodSolverWingWingInfluenceCache(
         influences = self._calculate()
         with self.assertRaises(ValueError):
             influences[0, 0] = 1.0
+
+
+class TestLuReuseMatchesNpLinalgSolve(unittest.TestCase):
+    """This is a class with functions to test the free flight solvers' LU reuse in
+    _calculate_vortex_strengths against np.linalg.solve, the code it replaces: a fresh
+    solve, refined solves of nearby systems at the same time step, the fallback to a
+    fresh factorization, and the errors."""
+
+    matrix: np.ndarray
+    wake_influences: np.ndarray
+    freestream_influences: np.ndarray
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Solve a plain problem, and keep its last time step's linear system."""
+        plain = solver_fixtures.make_unsteady_ring_solver_fixture()
+        plain.run(prescribed_wake=True, show_progress=False)
+        cls.matrix = np.array(plain._currentGridWingWingInfluences__E)
+        cls.wake_influences = np.array(plain._currentStackWakeWingInfluences__E)
+        cls.freestream_influences = np.array(
+            plain._currentStackFreestreamWingInfluences__E
+        )
+
+    def setUp(self) -> None:
+        """Set up a free flight solver holding the plain problem's system, and count the
+        factorizations."""
+        self.solver = solver_fixtures.make_free_flight_unsteady_ring_solver_fixture()
+        self.solver._current_step = 7
+        self.solver._lu_factors = None
+        self._set_system(self.matrix, self.wake_influences)
+        self.factorizations = 0
+        original = scipy.linalg.lu_factor
+
+        def counting_lu_factor(*args: Any, **kwargs: Any) -> Any:
+            self.factorizations += 1
+            return original(*args, **kwargs)
+
+        lu_patch = patch.object(scipy.linalg, "lu_factor", counting_lu_factor)
+        lu_patch.start()
+        self.addCleanup(lu_patch.stop)
+
+    def _set_system(self, matrix: np.ndarray, wake_influences: np.ndarray) -> None:
+        """Sets the solver's linear system.
+
+        :param matrix: The (N,N) ndarray of floats of Wing Wing influences.
+        :param wake_influences: The (N,) ndarray of floats of wake Wing influences.
+        :return: None
+        """
+        self.solver._currentGridWingWingInfluences__E = matrix
+        self.solver._currentStackWakeWingInfluences__E = wake_influences
+        self.solver._currentStackFreestreamWingInfluences__E = (
+            self.freestream_influences
+        )
+
+    def _assert_matches_np_linalg_solve(self) -> None:
+        """Asserts that the solver's strengths are np.linalg.solve's solution of its
+        system to round off.
+
+        :return: None
+        """
+        expected = np.linalg.solve(
+            self.solver._currentGridWingWingInfluences__E,
+            -self.solver._currentStackWakeWingInfluences__E
+            - self.solver._currentStackFreestreamWingInfluences__E,
+        )
+        np.testing.assert_allclose(
+            self.solver._current_bound_vortex_strengths,
+            expected,
+            rtol=0.0,
+            atol=1e-13 * float(np.max(np.abs(expected))),
+        )
+
+    def _trial_system(self, scale: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+        """Returns a nearby system, as a coupling trial's: the matrix with its last
+        tenth of columns (standing in for the trailing edge rings') and the wake
+        influences changed by a relative amount.
+
+        :param scale: The relative size of the change.
+        :param seed: The random seed.
+        :return: The matrix and the wake influences.
+        """
+        rng = np.random.default_rng(seed)
+        matrix = np.array(self.matrix)
+        columns = slice(matrix.shape[1] - matrix.shape[1] // 10, None)
+        matrix[:, columns] *= 1.0 + scale * rng.standard_normal(
+            matrix[:, columns].shape
+        )
+        wake_influences = self.wake_influences * (
+            1.0 + scale * rng.standard_normal(self.wake_influences.shape)
+        )
+        return matrix, wake_influences
+
+    def test_other_solvers_keep_np_linalg_solve(self) -> None:
+        """Test that a solver that solves each time step once still uses
+        np.linalg.solve, bit for bit, and keeps no factorization."""
+        solver = solver_fixtures.make_unsteady_ring_solver_fixture()
+        self.assertFalse(solver._reuses_lu_within_step)
+        solver._currentGridWingWingInfluences__E = self.matrix
+        solver._currentStackWakeWingInfluences__E = self.wake_influences
+        solver._currentStackFreestreamWingInfluences__E = self.freestream_influences
+        solver._calculate_vortex_strengths()
+        self.assertEqual(
+            solver._current_bound_vortex_strengths.tobytes(),
+            np.linalg.solve(
+                self.matrix, -self.wake_influences - self.freestream_influences
+            ).tobytes(),
+        )
+        self.assertIsNone(solver._lu_factors)
+        self.assertEqual(self.factorizations, 0)
+
+    def test_fresh_solve_matches_np_linalg_solve(self) -> None:
+        """Test that the first solve at a time step factors once, matches
+        np.linalg.solve to round off, and keeps the factorization for its time step."""
+        self.assertTrue(self.solver._reuses_lu_within_step)
+        self.solver._calculate_vortex_strengths()
+        self.assertEqual(self.factorizations, 1)
+        self._assert_matches_np_linalg_solve()
+        assert self.solver._lu_factors is not None
+        self.assertEqual(self.solver._lu_factors[0], 7)
+
+    def test_refined_solves_match_np_linalg_solve(self) -> None:
+        """Test that later solves of nearby systems at the same time step don't factor
+        again, and each matches np.linalg.solve of its own system to round off."""
+        self.solver._calculate_vortex_strengths()
+        for seed in range(5):
+            with self.subTest(trial=seed):
+                self._set_system(*self._trial_system(1e-4, seed))
+                self.solver._calculate_vortex_strengths()
+                self._assert_matches_np_linalg_solve()
+        self.assertEqual(self.factorizations, 1)
+
+    def test_a_new_time_step_factors_afresh(self) -> None:
+        """Test that the first solve at a new time step factors again."""
+        self.solver._calculate_vortex_strengths()
+        self.solver._current_step = 8
+        self._set_system(*self._trial_system(1e-4, 0))
+        self.solver._calculate_vortex_strengths()
+        self.assertEqual(self.factorizations, 2)
+        assert self.solver._lu_factors is not None
+        self.assertEqual(self.solver._lu_factors[0], 8)
+        self._assert_matches_np_linalg_solve()
+
+    def test_a_large_change_falls_back_to_a_fresh_factorization(self) -> None:
+        """Test that a system too different for the refinement to converge is factored
+        afresh, and still matches np.linalg.solve."""
+        self.solver._calculate_vortex_strengths()
+        matrix = np.array(self.matrix)
+        matrix[:, :] = np.random.default_rng(3).standard_normal(matrix.shape)
+        matrix += 20.0 * np.eye(matrix.shape[0])
+        self._set_system(matrix, self.wake_influences)
+        self.solver._calculate_vortex_strengths()
+        self.assertEqual(self.factorizations, 2)
+        self._assert_matches_np_linalg_solve()
+
+    def test_degenerate_systems_behave_as_np_linalg_solve(self) -> None:
+        """Test that degenerate systems (an exactly singular matrix, a matrix whose
+        copied column rounding leaves barely regular, and matrices with a nan or an inf,
+        small and large) raise the error np.linalg.solve raises, with its message, or
+        return what it returns, on a fresh solve and on a refined one, and keep no
+        factorization when they go to np.linalg.solve."""
+        exactly_singular = np.zeros((4, 4))
+        exactly_singular[0, 0] = 1.0
+        copied_column = np.array(self.matrix)
+        copied_column[:, 1] = copied_column[:, 0]
+        with_nan = np.array(self.matrix)
+        with_nan[0, 0] = np.nan
+        with_inf = np.array(self.matrix)
+        with_inf[3, 5] = np.inf
+        small_nan = np.array([[np.nan, 1.0], [1.0, 1.0]])
+        for label, matrix in (
+            ("exactly singular", exactly_singular),
+            ("copied column", copied_column),
+            ("nan", with_nan),
+            ("inf", with_inf),
+            ("small nan", small_nan),
+        ):
+            size = matrix.shape[0]
+            wake_influences = self.wake_influences[:size]
+            right_hand_side = -wake_influences - self.freestream_influences[:size]
+            for refined in (False, True):
+                with self.subTest(matrix=label, refined=refined):
+                    self.solver._current_step = 7
+                    self.solver._lu_factors = None
+                    if refined and size == self.matrix.shape[0]:
+                        self._set_system(self.matrix, self.wake_influences)
+                        self.solver._calculate_vortex_strengths()
+                    self.solver._currentGridWingWingInfluences__E = matrix
+                    self.solver._currentStackWakeWingInfluences__E = wake_influences
+                    self.solver._currentStackFreestreamWingInfluences__E = (
+                        self.freestream_influences[:size]
+                    )
+
+                    def solver_solution() -> np.ndarray:
+                        self.solver._calculate_vortex_strengths()
+                        return self.solver._current_bound_vortex_strengths
+
+                    outcomes: list[tuple[str, Any]] = []
+                    for function in (
+                        lambda: np.linalg.solve(matrix, right_hand_side),
+                        solver_solution,
+                    ):
+                        try:
+                            with np.errstate(all="ignore"):
+                                outcomes.append(("value", function()))
+                        except Exception as error:
+                            outcomes.append(("error", (type(error), str(error))))
+                    (expected_kind, expected), (actual_kind, actual) = outcomes
+                    self.assertEqual(actual_kind, expected_kind)
+                    if expected_kind == "error":
+                        self.assertEqual(actual, expected)
+                    elif np.all(np.isfinite(expected)):
+                        np.testing.assert_allclose(
+                            actual,
+                            expected,
+                            rtol=0.0,
+                            atol=1e-13 * float(np.max(np.abs(expected))),
+                        )
+                    else:
+                        self.assertEqual(actual.tobytes(), expected.tobytes())
+                        self.assertIsNone(self.solver._lu_factors)
 
 
 class TestUnsteadyRingVortexLatticeMethodSolverWakeCoreRadii(unittest.TestCase):

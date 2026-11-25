@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 from collections.abc import Sequence
 from typing import NamedTuple, cast
 
 import numpy as np
+import scipy.linalg
 from tqdm import tqdm
 
 from . import (
@@ -44,6 +46,73 @@ _STEP_LOADS_AIRPLANE_FIELDS: dict[str, str] = {
 }
 
 _logger = _logging.get_logger("unsteady_ring_vortex_lattice_method")
+
+# The free flight solvers' LU reuse (see _calculate_vortex_strengths) refines a solve
+# from an earlier factorization at the same time step until a correction is at most this
+# fraction of the solution's largest magnitude, which leaves it within a few units in
+# the last place of a fresh solve (measured on the FAAV example's systems: a median of 5
+# passes, a worst difference of 3e-15 relative).
+_LU_REFINEMENT_TOLERANCE = 1e-13
+
+# The most refinement passes before the solve factors its matrix afresh instead (none of
+# the FAAV example's solves needed more than 7).
+_LU_REFINEMENT_MAX_PASSES = 8
+
+
+def _lu_factor_quietly(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Returns the LU factorization of a square matrix, without the warning
+    scipy.linalg.lu_factor gives for a singular one.
+
+    It exists for the free flight solvers' LU reuse, which handles a singular matrix
+    itself: an exactly zero pivot makes the solution infinite or nan, and a solution
+    that isn't finite goes to np.linalg.solve (see _calculate_vortex_strengths), which
+    then raises, or returns, exactly what it always did. Like np.linalg.solve, it
+    doesn't check that the matrix is finite.
+
+    :param matrix: A (N,N) ndarray of floats.
+    :return: The (lu, piv) tuple scipy.linalg.lu_factor returns.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", scipy.linalg.LinAlgWarning)
+        lu_and_pivots: tuple[np.ndarray, np.ndarray] = scipy.linalg.lu_factor(
+            matrix, check_finite=False
+        )
+    return lu_and_pivots
+
+
+def _refine_with_lu(
+    lu_and_pivots: tuple[np.ndarray, np.ndarray],
+    matrix: np.ndarray,
+    right_hand_side: np.ndarray,
+) -> np.ndarray | None:
+    """Solves a linear system with another, nearby matrix's LU factorization and
+    iterative refinement, or returns None if the refinement doesn't converge.
+
+    It exists for the free flight solvers' LU reuse: within a time step, the coupling
+    trials' matrices differ only in a few columns (the trailing edge bound ring
+    vortices'), so refining from the first trial's factors (one residual, a matrix times
+    a vector, and one triangular solve per pass) is much cheaper than factoring each
+    matrix afresh.
+
+    :param lu_and_pivots: The (lu, piv) tuple of the nearby matrix's factorization.
+    :param matrix: The (N,N) ndarray of floats of this system.
+    :param right_hand_side: The (N,) ndarray of floats of this system.
+    :return: The (N,) ndarray of floats solution, or None if it didn't converge within
+        _LU_REFINEMENT_MAX_PASSES passes or isn't finite.
+    """
+    solution = scipy.linalg.lu_solve(lu_and_pivots, right_hand_side, check_finite=False)
+    for _ in range(_LU_REFINEMENT_MAX_PASSES):
+        correction = scipy.linalg.lu_solve(
+            lu_and_pivots, right_hand_side - matrix @ solution, check_finite=False
+        )
+        solution = solution + correction
+        if not np.all(np.isfinite(solution)):
+            return None
+        if np.max(np.abs(correction)) <= _LU_REFINEMENT_TOLERANCE * np.max(
+            np.abs(solution)
+        ):
+            return solution
+    return None
 
 
 class _WingWingInfluenceCache(NamedTuple):
@@ -94,6 +163,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "_wing_mesh_cache",
         "_last_step_geometry_build",
         "_wing_wing_influence_cache",
+        "_lu_factors",
         "_layout_plan",
         "_step_geometries",
         "_current_step_loads",
@@ -170,6 +240,12 @@ class UnsteadyRingVortexLatticeMethodSolver:
         "gridStreamlinePoints_GP1_CgP1",
         "_ran",
     )
+
+    # This attribute indicates whether _calculate_vortex_strengths reuses one LU
+    # factorization across the solves of a time step. Only the free flight solvers solve
+    # a time step several times (once per coupling trial), so only they set it. Every
+    # other solver solves each time step once, with np.linalg.solve, as before.
+    _reuses_lu_within_step = False
 
     # This attribute indicates whether the solver models body angular rates (a non-zero
     # omegas_BP1__E on an OperatingPoint). The base solver and its coupled and
@@ -262,6 +338,12 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # (see _calculate_wing_wing_influences). Run scoped: None at the start and end
         # of a run, on both paths.
         self._wing_wing_influence_cache: _WingWingInfluenceCache | None = None
+
+        # Changed for speed: the free flight solvers' LU reuse, the time step and the
+        # (lu, piv) factorization of the last fresh solve, so that later solves at the
+        # same time step refine from it (see _calculate_vortex_strengths). Run scoped:
+        # None at the start and end of a run.
+        self._lu_factors: tuple[int, tuple[np.ndarray, np.ndarray]] | None = None
 
         # The array path's step geometries, keyed by time step. Only the most recent
         # three are kept (the previous, current, and next time steps'), since a time
@@ -629,6 +711,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         # geometry build on the array path, so start each run without them.
         self._wing_wing_influence_cache = None
         self._last_step_geometry_build = None
+        self._lu_factors = None
 
         # Set up the array path: reject what it doesn't support yet, then build its per
         # run plans.
@@ -801,6 +884,7 @@ class UnsteadyRingVortexLatticeMethodSolver:
         self._wing_mesh_cache = None
         self._last_step_geometry_build = None
         self._wing_wing_influence_cache = None
+        self._lu_factors = None
         self._layout_plan = None
         self._step_geometries = None
         self._current_step_loads = None
@@ -1987,11 +2071,79 @@ class UnsteadyRingVortexLatticeMethodSolver:
 
         :return: None
         """
-        self._current_bound_vortex_strengths = np.linalg.solve(
-            self._currentGridWingWingInfluences__E,
+        matrix = self._currentGridWingWingInfluences__E
+        right_hand_side = (
             -self._currentStackWakeWingInfluences__E
-            - self._currentStackFreestreamWingInfluences__E,
+            - self._currentStackFreestreamWingInfluences__E
         )
+        if not self._reuses_lu_within_step:
+            self._current_bound_vortex_strengths = np.linalg.solve(
+                matrix, right_hand_side
+            )
+            return
+
+        # Changed for speed: a free flight time step is solved several times, once per
+        # coupling trial (and once more officially, unless the final trial is reused),
+        # with matrices that differ only in the trailing edge bound ring vortices'
+        # columns. So the first solve at a time step factors its matrix and keeps the
+        # factorization, and the later ones refine from it (_refine_with_lu: a median of
+        # 5 passes on the FAAV example, each a matrix times a vector and two triangular
+        # solves), which is much cheaper than factoring again, more so at finer meshes
+        # (the factoring grows as N^3, a pass as N^2). A refinement that doesn't
+        # converge falls back to factoring afresh, so a solve is never less accurate
+        # than a fresh one. The results differ from np.linalg.solve's at round off
+        # (scipy's factorization rounds differently even for a fresh solve, about 1e-15
+        # relative, and a refined solve is within about 3e-15), which free flight's
+        # chaos can grow, as any change of one unit in the last place would. A system
+        # the factorization can't solve cleanly (a solution that isn't finite, which an
+        # exactly zero pivot or a nan in the matrix gives) goes to np.linalg.solve
+        # itself, so it raises, or returns, exactly what it always did, and no
+        # factorization is kept. The old code always called np.linalg.solve, as the
+        # solvers above still do.
+
+        # solution stays None unless a refinement from a kept factorization converges.
+        solution = None
+
+        # Try the kept factorization first, but only if it was made at this same time
+        # step. A factorization from another time step belongs to a matrix whose
+        # geometry and wake have moved on, so it is never used, even if it might
+        # converge. _refine_with_lu returns None if the refinement doesn't converge
+        # within _LU_REFINEMENT_MAX_PASSES or its solution isn't finite.
+        if self._lu_factors is not None and self._lu_factors[0] == self._current_step:
+            solution = _refine_with_lu(self._lu_factors[1], matrix, right_hand_side)
+
+        if solution is None:
+            # There is no usable factorization (this is the time step's first solve, or
+            # the refinement didn't converge), so factor this matrix afresh and solve
+            # with it. This is what np.linalg.solve does too (an LU factorization with
+            # partial pivoting, then two triangular solves), with SciPy's rounding,
+            # which differs from NumPy's by about 1e-15 relative.
+            lu_and_pivots = _lu_factor_quietly(matrix)
+            solution = scipy.linalg.lu_solve(
+                lu_and_pivots, right_hand_side, check_finite=False
+            )
+
+            # A solution that isn't finite means the system is degenerate: an exactly
+            # zero pivot (a singular matrix) divides by zero, and a nan or inf in the
+            # matrix or the right hand side spreads into the solution. np.linalg.solve
+            # handles such systems inconsistently (it raises for some and returns nans
+            # for others, depending on LAPACK's internals), so rather than imitate it,
+            # hand the system to np.linalg.solve itself, which then raises, or returns,
+            # exactly what it always did. Keep no factorization from a degenerate
+            # system, so a later solve at this time step factors afresh too.
+            if not np.all(np.isfinite(solution)):
+                self._lu_factors = None
+                self._current_bound_vortex_strengths = np.linalg.solve(
+                    matrix, right_hand_side
+                )
+                return
+
+            # Keep this factorization, labeled with its time step, for the time step's
+            # later solves to refine from. It replaces any kept from an earlier time
+            # step, or from a refinement at this time step that didn't converge.
+            self._lu_factors = (self._current_step, lu_and_pivots)
+
+        self._current_bound_vortex_strengths = solution
 
     def calculate_solution_velocity(
         self,

@@ -108,6 +108,11 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
 
     _models_body_rates = True
 
+    # Changed for speed: a free flight time step is solved once per coupling trial, so
+    # _calculate_vortex_strengths reuses one LU factorization across those solves (see
+    # UnsteadyRingVortexLatticeMethodSolver._calculate_vortex_strengths).
+    _reuses_lu_within_step = True
+
     def __init__(
         self,
         free_flight_unsteady_problem: problems.FreeFlightAeroelasticUnsteadyProblem,
@@ -328,7 +333,14 @@ class FreeFlightAeroelasticUnsteadyRingVortexLatticeMethodSolver(
             name: getattr(self, name)
             for cls in type(self).__mro__
             for name in getattr(cls, "__slots__", ())
-            if not name.startswith("_substep") and hasattr(self, name)
+            # Changed for speed: the LU factors are kept through restore_substep rather
+            # than put back, so the official solve after the trials can refine from the
+            # trials' factorization of the same time step. They are keyed by their time
+            # step, and a refinement that doesn't converge factors afresh, so keeping
+            # them can't make a solve less accurate.
+            if not name.startswith("_substep")
+            and name != "_lu_factors"
+            and hasattr(self, name)
         }
 
     def evaluate_trial_aero_loads(
